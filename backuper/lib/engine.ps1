@@ -1,0 +1,498 @@
+# ============================================================
+# FabriqBackUper - Engine (Orchestrator)
+# Drives section backup/restore in sequence, collects results,
+# writes the aggregate manifest.
+# ============================================================
+
+function Get-RegisteredSections {
+    param([Parameter(Mandatory = $true)][string]$BackuperRoot)
+    $csvPath = Join-Path $BackuperRoot 'data\sections.csv'
+    if (-not (Test-Path $csvPath)) {
+        Show-Error "sections.csv not found: $csvPath"
+        return @()
+    }
+    $sections = Import-Csv -Path $csvPath
+    return @($sections)
+}
+
+function Invoke-SectionScript {
+    param(
+        [Parameter(Mandatory = $true)][string]$SectionName,
+        [Parameter(Mandatory = $true)][string]$ScriptName,
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        [Parameter(Mandatory = $true)][string]$FabriqRoot,
+        [Parameter(Mandatory = $true)][string]$OldPcName,
+        [Parameter(Mandatory = $true)][string]$AggregateBackupDir,
+        [hashtable]$SectionParams = @{}
+    )
+
+    $scriptPath = Join-Path $BackuperRoot "lib\sections\$SectionName\$ScriptName"
+    if (-not (Test-Path $scriptPath)) {
+        Show-Error "Section script not found: $scriptPath"
+        return [PSCustomObject]@{
+            Status = 'Failed'
+            ElapsedMs = 0
+            Summary = [ordered]@{}
+            Warnings = @("Script not found: $scriptPath")
+            ExternalOutputDir = $null
+            ExternalManifestPath = $null
+        }
+    }
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host " Section: $SectionName  ($ScriptName)" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $result = $null
+    try {
+        # Set environment so the wrapped module gets the same OldPCname
+        $env:SELECTED_OLD_PCNAME = $OldPcName
+
+        $result = & $scriptPath `
+            -BackuperRoot $BackuperRoot `
+            -FabriqRoot   $FabriqRoot `
+            -OldPcName    $OldPcName `
+            -AggregateBackupDir $AggregateBackupDir `
+            -SectionParams $SectionParams
+    }
+    catch {
+        Show-Error "Section '$SectionName' threw: $($_.Exception.Message)"
+        $sw.Stop()
+        return [PSCustomObject]@{
+            Status = 'Failed'
+            ElapsedMs = [int]$sw.ElapsedMilliseconds
+            Summary = [ordered]@{}
+            Warnings = @("Exception: $($_.Exception.Message)")
+            ExternalOutputDir = $null
+            ExternalManifestPath = $null
+        }
+    }
+    $sw.Stop()
+
+    if ($null -eq $result) {
+        return [PSCustomObject]@{
+            Status = 'Failed'
+            ElapsedMs = [int]$sw.ElapsedMilliseconds
+            Summary = [ordered]@{}
+            Warnings = @("Section returned null")
+            ExternalOutputDir = $null
+            ExternalManifestPath = $null
+        }
+    }
+
+    # Normalize fields the engine expects
+    return [PSCustomObject]@{
+        Status               = if ($result.Status)               { $result.Status }               else { 'Success' }
+        ElapsedMs            = if ($result.ElapsedMs)             { [int]$result.ElapsedMs }       else { [int]$sw.ElapsedMilliseconds }
+        Summary              = if ($result.Summary)               { $result.Summary }              else { [ordered]@{} }
+        Warnings             = if ($result.Warnings)              { @($result.Warnings) }          else { @() }
+        ExternalOutputDir    = if ($result.ExternalOutputDir)     { $result.ExternalOutputDir }    else { $null }
+        ExternalManifestPath = if ($result.ExternalManifestPath)  { $result.ExternalManifestPath } else { $null }
+    }
+}
+
+# ============================================================
+# UI-agnostic core orchestrators (Phase 2.1+).
+# These take pre-selected parameters and run the backup / restore
+# without prompting the user. The GUI (or the legacy console
+# orchestrator below) is responsible for collecting selections.
+# ============================================================
+
+function Set-SelectedHostEnvVars {
+    param([Parameter(Mandatory = $true)]$SelectedHost)
+    $env:SELECTED_OLD_PCNAME = $SelectedHost.OldPCname
+    foreach ($field in @('NewPCname','EthIp','EthSubnet','EthGateway','Dns1','Dns2','KanriNo')) {
+        if ($SelectedHost.PSObject.Properties.Name -contains $field) {
+            $val = $SelectedHost.$field
+            $envName = "SELECTED_$($field.ToUpper())"
+            if ($field -eq 'NewPCname')  { $envName = 'SELECTED_NEW_PCNAME' }
+            if ($field -eq 'EthIp')      { $envName = 'SELECTED_ETH_IP' }
+            if ($field -eq 'EthSubnet')  { $envName = 'SELECTED_ETH_SUBNET' }
+            if ($field -eq 'EthGateway') { $envName = 'SELECTED_ETH_GATEWAY' }
+            if ($field -eq 'Dns1')       { $envName = 'SELECTED_DNS1' }
+            if ($field -eq 'Dns2')       { $envName = 'SELECTED_DNS2' }
+            if ($field -eq 'KanriNo')    { $envName = 'SELECTED_KANRI_NO' }
+            if (-not [string]::IsNullOrWhiteSpace($val)) {
+                Set-Item -Path "Env:$envName" -Value $val
+            }
+        }
+    }
+}
+
+function Get-BackupTimestamps {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        [Parameter(Mandatory = $true)][string]$OldPcName
+    )
+    $hostBackupRoot = Join-Path (Join-Path $BackuperRoot 'Backup') $OldPcName
+    if (-not (Test-Path $hostBackupRoot)) { return @() }
+    return @(Get-ChildItem -Path $hostBackupRoot -Directory -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending | ForEach-Object { $_.Name })
+}
+
+function Invoke-BackuperBackupCore {
+    param(
+        [Parameter(Mandatory = $true)]$SelectedHost,
+        [Parameter(Mandatory = $true)][array]$PickedSections,
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        [Parameter(Mandatory = $true)][string]$FabriqRoot,
+        [Parameter(Mandatory = $true)][string]$BackuperVersion,
+        # SectionParams: dict keyed by section name -> hashtable of section-
+        # specific parameters. Sections that don't recognize their key just
+        # receive an empty hashtable.
+        [hashtable]$SectionParamsBySection = @{},
+        # Phase 2.4: backup destination root. If empty/null, defaults to
+        # $BackuperRoot\Backup. Can be UNC (e.g. \\server\share\backups).
+        # Caller is responsible for UNC credential prep before invoking.
+        [string]$DestinationRoot = $null
+    )
+
+    Set-SelectedHostEnvVars -SelectedHost $SelectedHost
+
+    $timestamp = Get-Date -Format "yyyy_MM_dd_HHmmss"
+    $rootDir = if ([string]::IsNullOrWhiteSpace($DestinationRoot)) {
+        Join-Path $BackuperRoot 'Backup'
+    } else {
+        $DestinationRoot
+    }
+    $aggregateDir = Join-Path (Join-Path $rootDir $SelectedHost.OldPCname) $timestamp
+    try {
+        $null = New-Item -ItemType Directory -Path $aggregateDir -Force -ErrorAction Stop
+    }
+    catch {
+        return [PSCustomObject]@{
+            Status = 'Failed'
+            Message = "Failed to create aggregate dir: $($_.Exception.Message)"
+            AggregateDir = $null
+            SectionResults = @{}
+            ManifestPath = $null
+        }
+    }
+
+    $sectionResults = @{}
+    foreach ($s in $PickedSections) {
+        $params = if ($SectionParamsBySection.ContainsKey($s.SectionName)) {
+            $SectionParamsBySection[$s.SectionName]
+        } else { @{} }
+        $r = Invoke-SectionScript `
+            -SectionName $s.SectionName `
+            -ScriptName  'backup.ps1' `
+            -BackuperRoot $BackuperRoot `
+            -FabriqRoot   $FabriqRoot `
+            -OldPcName    $SelectedHost.OldPCname `
+            -AggregateBackupDir $aggregateDir `
+            -SectionParams $params
+        $sectionResults[$s.SectionName] = $r
+    }
+
+    $kernelVerFile = Join-Path $FabriqRoot 'kernel\KERNEL_VERSION'
+    $kernelVer = if (Test-Path $kernelVerFile) { (Get-Content $kernelVerFile -Raw).Trim() } else { 'unknown' }
+
+    $manifest = New-AggregateManifest `
+        -OldPcName $SelectedHost.OldPCname `
+        -BackuperVersion $BackuperVersion `
+        -FabriqKernelVersion $kernelVer `
+        -SectionResults $sectionResults `
+        -Warnings @()
+    $manifestPath = Save-AggregateManifest -OutputDir $aggregateDir -Manifest $manifest
+
+    # Execution log
+    $logPath = Join-Path $aggregateDir "_execution_log.txt"
+    $logLines = @(
+        "Fabriq BackUper Execution Log",
+        "================================",
+        "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        "OldPCname: $($SelectedHost.OldPCname)",
+        "Computer : $env:COMPUTERNAME",
+        "Mode     : Backup",
+        ""
+    )
+    foreach ($key in $sectionResults.Keys) {
+        $r = $sectionResults[$key]
+        $logLines += "[$key]"
+        $logLines += "  Status    : $($r.Status)"
+        $logLines += "  ElapsedMs : $($r.ElapsedMs)"
+        $logLines += "  External  : $($r.ExternalOutputDir)"
+        if ($r.Warnings -and @($r.Warnings).Count -gt 0) {
+            $logLines += "  Warnings  :"
+            foreach ($w in @($r.Warnings)) { $logLines += "    - $w" }
+        }
+        $logLines += ""
+    }
+    $logLines | Out-File -FilePath $logPath -Encoding UTF8 -Force
+
+    $overall = 'Success'
+    foreach ($r in $sectionResults.Values) {
+        if ($r.Status -eq 'Failed')  { $overall = 'Failed'; break }
+        if ($r.Status -eq 'Partial') { $overall = 'Partial' }
+    }
+
+    return [PSCustomObject]@{
+        Status         = $overall
+        Message        = "Backup written to $aggregateDir"
+        AggregateDir   = $aggregateDir
+        SectionResults = $sectionResults
+        ManifestPath   = $manifestPath
+    }
+}
+
+function Invoke-BackuperRestoreCore {
+    param(
+        [Parameter(Mandatory = $true)]$SelectedHost,
+        [Parameter(Mandatory = $true)][array]$PickedSections,
+        [string]$PickedTimestamp = $null,
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        [Parameter(Mandatory = $true)][string]$FabriqRoot,
+        [hashtable]$SectionParamsBySection = @{},
+        # Phase 2.4: explicit backup folder path. If specified, this exact
+        # folder is used as the aggregate directory (Browse mode).
+        # Otherwise the engine builds it from $BackuperRoot\Backup\<OldPCname>\$PickedTimestamp
+        # (hostlist-driven default). Can be UNC.
+        [string]$ExplicitAggregateDir = $null
+    )
+
+    Set-SelectedHostEnvVars -SelectedHost $SelectedHost
+
+    $aggregateDir = if (-not [string]::IsNullOrWhiteSpace($ExplicitAggregateDir)) {
+        $ExplicitAggregateDir
+    } else {
+        Join-Path (Join-Path (Join-Path $BackuperRoot 'Backup') $SelectedHost.OldPCname) $PickedTimestamp
+    }
+    if (-not (Test-Path $aggregateDir)) {
+        return [PSCustomObject]@{
+            Status = 'Failed'
+            Message = "Aggregate backup directory not found: $aggregateDir"
+            AggregateDir = $aggregateDir
+            SectionResults = @{}
+        }
+    }
+
+    $sectionResults = @{}
+    foreach ($s in $PickedSections) {
+        $params = if ($SectionParamsBySection.ContainsKey($s.SectionName)) {
+            $SectionParamsBySection[$s.SectionName]
+        } else { @{} }
+        $r = Invoke-SectionScript `
+            -SectionName $s.SectionName `
+            -ScriptName  'restore.ps1' `
+            -BackuperRoot $BackuperRoot `
+            -FabriqRoot   $FabriqRoot `
+            -OldPcName    $SelectedHost.OldPCname `
+            -AggregateBackupDir $aggregateDir `
+            -SectionParams $params
+        $sectionResults[$s.SectionName] = $r
+    }
+
+    $overall = 'Success'
+    foreach ($r in $sectionResults.Values) {
+        if ($r.Status -eq 'Failed')  { $overall = 'Failed'; break }
+        if ($r.Status -eq 'Partial') { $overall = 'Partial' }
+    }
+
+    return [PSCustomObject]@{
+        Status         = $overall
+        Message        = "Restore from $aggregateDir"
+        AggregateDir   = $aggregateDir
+        SectionResults = $sectionResults
+    }
+}
+
+# ============================================================
+# Legacy console orchestrator (kept for reference / fallback).
+# Phase 2.1 default flow is GUI via lib/ui/main_form.ps1.
+# ============================================================
+function Invoke-BackuperEngine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Backup','Restore')]
+        [string]$Mode
+    )
+
+    # ----------------------------------------
+    # 1. Load hostlist + select host
+    # ----------------------------------------
+    $hosts = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
+    if ($null -eq $hosts -or $hosts.Count -eq 0) {
+        Show-Error "No hosts available."
+        return
+    }
+
+    $selectedHost = Select-HostFromList -Hosts $hosts
+    if ($null -eq $selectedHost) {
+        Show-Info "Host selection cancelled."
+        return
+    }
+    $env:SELECTED_OLD_PCNAME = $selectedHost.OldPCname
+
+    # Also set SELECTED_NEW_PCNAME and other fields if present, so the
+    # wrapped modules pick them up (they read $env:SELECTED_NEW_PCNAME
+    # for some operations).
+    foreach ($field in @('NewPCname','EthIp','EthSubnet','EthGateway','Dns1','Dns2','KanriNo')) {
+        if ($selectedHost.PSObject.Properties.Name -contains $field) {
+            $val = $selectedHost.$field
+            $envName = "SELECTED_$($field.ToUpper())"
+            if ($field -eq 'NewPCname')   { $envName = 'SELECTED_NEW_PCNAME' }
+            if ($field -eq 'EthIp')       { $envName = 'SELECTED_ETH_IP' }
+            if ($field -eq 'EthSubnet')   { $envName = 'SELECTED_ETH_SUBNET' }
+            if ($field -eq 'EthGateway')  { $envName = 'SELECTED_ETH_GATEWAY' }
+            if ($field -eq 'Dns1')        { $envName = 'SELECTED_DNS1' }
+            if ($field -eq 'Dns2')        { $envName = 'SELECTED_DNS2' }
+            if ($field -eq 'KanriNo')     { $envName = 'SELECTED_KANRI_NO' }
+            if (-not [string]::IsNullOrWhiteSpace($val)) {
+                Set-Item -Path "Env:$envName" -Value $val
+            }
+        }
+    }
+
+    # ----------------------------------------
+    # 2. Load section registry + selection
+    # ----------------------------------------
+    $allSections = Get-RegisteredSections -BackuperRoot $script:FabriqBackuperRoot
+    if ($allSections.Count -eq 0) {
+        Show-Error "No sections registered in data/sections.csv"
+        return
+    }
+    $picked = Show-SectionSelector -AllSections $allSections
+    if ($picked.Count -eq 0) {
+        Show-Info "No sections selected."
+        return
+    }
+
+    # ----------------------------------------
+    # 3. Prepare aggregate backup directory
+    # ----------------------------------------
+    $timestamp = Get-Date -Format "yyyy_MM_dd_HHmmss"
+    $aggregateDir = Join-Path (Join-Path (Join-Path $script:FabriqBackuperRoot 'Backup') $selectedHost.OldPCname) $timestamp
+
+    if ($Mode -eq 'Backup') {
+        try {
+            $null = New-Item -ItemType Directory -Path $aggregateDir -Force -ErrorAction Stop
+        }
+        catch {
+            Show-Error "Failed to create aggregate dir: $($_.Exception.Message)"
+            return
+        }
+    } else {
+        # Restore: scan existing backups for this OldPCname
+        $hostBackupRoot = Join-Path (Join-Path $script:FabriqBackuperRoot 'Backup') $selectedHost.OldPCname
+        if (-not (Test-Path $hostBackupRoot)) {
+            Show-Error "No backups found under: $hostBackupRoot"
+            return
+        }
+        $timestamps = @(Get-ChildItem -Path $hostBackupRoot -Directory -ErrorAction SilentlyContinue |
+                        Sort-Object Name -Descending | ForEach-Object { $_.Name })
+        if ($timestamps.Count -eq 0) {
+            Show-Error "No timestamp folders under: $hostBackupRoot"
+            return
+        }
+        $picked_ts = Show-BackupTimestampSelector -Timestamps $timestamps
+        if ($null -eq $picked_ts) {
+            Show-Info "Restore cancelled."
+            return
+        }
+        $aggregateDir = Join-Path $hostBackupRoot $picked_ts
+    }
+
+    # ----------------------------------------
+    # 4. Confirm
+    # ----------------------------------------
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Yellow
+    Write-Host " $Mode Plan" -ForegroundColor Yellow
+    Write-Host "========================================" -ForegroundColor Yellow
+    Write-Host "  Mode             : $Mode" -ForegroundColor White
+    Write-Host "  OldPCname        : $($selectedHost.OldPCname)" -ForegroundColor White
+    Write-Host "  Aggregate dir    : $aggregateDir" -ForegroundColor White
+    Write-Host "  Sections         : $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')" -ForegroundColor White
+    Write-Host "========================================" -ForegroundColor Yellow
+
+    if (-not (Show-ConfirmPrompt -Message "Proceed with $Mode")) {
+        Show-Info "Cancelled."
+        return
+    }
+
+    # ----------------------------------------
+    # 5. Execute sections
+    # ----------------------------------------
+    $sectionResults = @{}
+    $aggregateWarnings = @()
+    $scriptName = if ($Mode -eq 'Backup') { 'backup.ps1' } else { 'restore.ps1' }
+
+    foreach ($s in $picked) {
+        $r = Invoke-SectionScript `
+            -SectionName $s.SectionName `
+            -ScriptName  $scriptName `
+            -BackuperRoot $script:FabriqBackuperRoot `
+            -FabriqRoot   $script:FabriqRoot `
+            -OldPcName    $selectedHost.OldPCname `
+            -AggregateBackupDir $aggregateDir
+        $sectionResults[$s.SectionName] = $r
+    }
+
+    # ----------------------------------------
+    # 6. Aggregate manifest + execution log (Backup only)
+    # ----------------------------------------
+    if ($Mode -eq 'Backup') {
+        $kernelVerFile = Join-Path $script:FabriqRoot 'kernel\KERNEL_VERSION'
+        $kernelVer = if (Test-Path $kernelVerFile) { (Get-Content $kernelVerFile -Raw).Trim() } else { 'unknown' }
+
+        $manifest = New-AggregateManifest `
+            -OldPcName $selectedHost.OldPCname `
+            -BackuperVersion $script:BackuperVersion `
+            -FabriqKernelVersion $kernelVer `
+            -SectionResults $sectionResults `
+            -Warnings $aggregateWarnings
+        $manifestPath = Save-AggregateManifest -OutputDir $aggregateDir -Manifest $manifest
+        Show-Success "Aggregate manifest written: $manifestPath"
+
+        # Execution log
+        $logPath = Join-Path $aggregateDir "_execution_log.txt"
+        $logLines = @()
+        $logLines += "Fabriq BackUper Execution Log"
+        $logLines += "================================"
+        $logLines += "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        $logLines += "OldPCname: $($selectedHost.OldPCname)"
+        $logLines += "Computer : $env:COMPUTERNAME"
+        $logLines += "Mode     : $Mode"
+        $logLines += ""
+        foreach ($key in $sectionResults.Keys) {
+            $r = $sectionResults[$key]
+            $logLines += "[$key]"
+            $logLines += "  Status    : $($r.Status)"
+            $logLines += "  ElapsedMs : $($r.ElapsedMs)"
+            $logLines += "  External  : $($r.ExternalOutputDir)"
+            if ($r.Warnings -and @($r.Warnings).Count -gt 0) {
+                $logLines += "  Warnings  :"
+                foreach ($w in @($r.Warnings)) {
+                    $logLines += "    - $w"
+                }
+            }
+            $logLines += ""
+        }
+        $logLines | Out-File -FilePath $logPath -Encoding UTF8 -Force
+    }
+
+    # ----------------------------------------
+    # 7. Result summary
+    # ----------------------------------------
+    Write-Host ""
+    Show-Separator
+    Write-Host " $Mode Results" -ForegroundColor Cyan
+    Show-Separator
+    foreach ($key in $sectionResults.Keys) {
+        $r = $sectionResults[$key]
+        $color = switch ($r.Status) {
+            'Success' { 'Green' }
+            'Partial' { 'Yellow' }
+            'Failed'  { 'Red' }
+            'Skipped' { 'DarkGray' }
+            default   { 'White' }
+        }
+        Write-Host ("  {0,-12} {1,-8}  ({2} ms)" -f $key, $r.Status, $r.ElapsedMs) -ForegroundColor $color
+    }
+    Show-Separator
+    Write-Host ""
+    Read-Host "Press Enter to return to main menu"
+}

@@ -1,0 +1,6 @@
+Enabled,SourcePath,Recurse,ExcludePattern,OnConflict,IncludeAcl,Description
+1,%USERPROFILE%\Documents,1,*.tmp;~$*,overwrite,0,User documents (merge: target unique files preserved)
+1,%USERPROFILE%\Desktop,1,*.tmp;~$*,overwrite,0,Desktop files (merge: target unique files preserved)
+1,%APPDATA%\Microsoft\Signatures,1,,overwrite,0,Outlook signatures (merge)
+0,%APPDATA%\Microsoft\Outlook,1,*.lock;~*,overwrite,0,Outlook profile (disabled by default - PST files are large)
+0,%LOCALAPPDATA%\Google\Chrome\User Data\Default,1,Cache/;Code Cache/;GPUCache/,overwrite,0,Chrome profile (disabled)

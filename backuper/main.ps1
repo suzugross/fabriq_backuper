@@ -1,0 +1,240 @@
+﻿# ============================================================
+# Fabriq BackUper - Main Body
+# Adapted from apps/fabriq_backuper/fabriq_backuper.ps1
+# (commit 7376805, 2026-05-19, v0.13.0) minus the self-spawn
+# guard and the kernel/common.ps1 dot-source; both are replaced
+# by the entry script + auto-discovery in this satellite-detached
+# repo layout. All other behaviour is preserved verbatim.
+# ============================================================
+
+$ErrorActionPreference = 'Stop'
+
+# Resolve repo paths.
+#   $script:FabriqBackuperRoot - the backuper/ subdir containing this file
+#   $script:RepoRoot           - the parent repo root (E:\fabriq_backuper)
+$script:FabriqBackuperRoot = $PSScriptRoot
+$script:RepoRoot           = Split-Path -Parent $PSScriptRoot
+
+# Pre-load .NET assemblies needed by the WinForms UI BEFORE dot-sourcing
+# any UI library (theme.ps1 also self-loads these defensively).
+try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+}
+catch {
+    Write-Host "[FATAL] Failed to load WinForms / Drawing assemblies: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "        .NET Framework 4.x is required." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    return
+}
+
+# Load vendored common library (replaces fabriq main's kernel/common.ps1).
+try {
+    . (Join-Path $script:FabriqBackuperRoot 'common.ps1')
+}
+catch {
+    Write-Host "[FATAL] Failed to dot-source backuper/common.ps1: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "        FabriqBackuperRoot resolved as: $script:FabriqBackuperRoot" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    return
+}
+
+# Defensive log-output suppression. Preserved from the original entry
+# script as defence-in-depth: in the standalone repo none of the wrapped
+# modules call these, but if a stale reference appears we want a silent
+# no-op rather than a runtime "term not recognized" error.
+foreach ($_logFn in @(
+    'Initialize-ExecutionHistory',
+    'Restore-ExecutionHistory',
+    'Write-ExecutionHistory',
+    'Add-ExecutionResult',
+    'Export-ExecutionHistory',
+    'Export-HtmlChecklist',
+    'Initialize-EvidenceBasePath',
+    'Capture-ScreenEvidence'
+)) {
+    if (-not (Get-Command $_logFn -ErrorAction SilentlyContinue)) {
+        Set-Item "Function:Global:$_logFn" -Value { } -Force
+    }
+}
+
+# Read VERSION (now at repo root, not next to this script).
+$script:BackuperVersion = '0.0.0'
+$_verFile = Join-Path $script:RepoRoot 'VERSION'
+if (Test-Path $_verFile) {
+    $script:BackuperVersion = (Get-Content -Path $_verFile -Raw).Trim()
+}
+
+# Suppress per-module Confirm-ModuleExecution prompts: the FabriqBackUper
+# UI is the canonical confirmation surface; wrapped modules should run
+# without their own Y/N prompts.
+$global:AutoPilotMode    = $true
+$global:AutoPilotWaitSec = 0
+
+# Load FabriqBackUper libraries.
+$libsToLoad = @(
+    'lib\hostlist_reader.ps1',
+    'lib\manifest_aggregator.ps1',
+    'lib\ui\console_menu.ps1',         # legacy console UI, kept as fallback
+    'lib\engine.ps1',
+    'lib\ui\theme.ps1',
+    'lib\ui\fabriq_select_form.ps1',   # Phase 3B: multi-candidate fabriq root picker
+    'lib\ui\session_form.ps1',         # Phase 3C: unified passphrase + host + action
+    'lib\ui\csv_io.ps1',               # Phase 2.7
+    'lib\ui\user_selector.ps1',        # Phase 2.7
+    'lib\ui\userdata_edit_dialog.ps1', # Phase 2.7
+    'lib\ui\unc_helper.ps1',
+    'lib\ui\unc_connect_dialog.ps1',
+    'lib\ui\backup_view.ps1',
+    'lib\ui\restore_view.ps1',
+    'lib\ui\progress_view.ps1',
+    'lib\ui\main_form.ps1'
+)
+foreach ($rel in $libsToLoad) {
+    $abs = Join-Path $script:FabriqBackuperRoot $rel
+    try {
+        . $abs
+    }
+    catch {
+        Write-Host "[FATAL] Failed to dot-source: $rel" -ForegroundColor Red
+        Write-Host "        $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "        $($_.ScriptStackTrace)" -ForegroundColor DarkGray
+        Read-Host "Press Enter to exit"
+        return
+    }
+}
+
+# ============================================================
+# Auto-discover fabriq main (sibling directory containing
+# kernel/csv/hostlist.csv). Replaces the original "../.." path
+# math that assumed apps/fabriq_backuper layout.
+# ============================================================
+# Set cwd to repo root so Find-FabriqRoot's Resolve-Path "." correctly
+# excludes our own directory (prevents picking ourself when our repo
+# name also matches *fabriq*).
+Set-Location -Path $script:RepoRoot
+$parentDir = Split-Path -Parent $script:RepoRoot
+$candidates = @(Find-FabriqRoot -ParentDir $parentDir)
+
+if ($candidates.Count -eq 0) {
+    Show-Error "Fabriq main directory not found under: $parentDir"
+    Show-Error "Expected a sibling directory containing kernel\csv\hostlist.csv"
+    Show-Error "(e.g. E:\fabriq\) so fabriq_backuper can read its hostlist + passphrase token."
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    return
+}
+elseif ($candidates.Count -eq 1) {
+    $script:FabriqRoot = $candidates[0].FullName
+    Show-Info "Fabriq main detected: $($candidates[0].Name)"
+}
+else {
+    # Phase 3B: lavender-styled WinForms picker for multiple candidates.
+    Show-Info "Multiple fabriq candidates found ($($candidates.Count)). Opening picker."
+    foreach ($c in $candidates) {
+        Show-Info "  candidate: $($c.FullName)"
+    }
+    $picked = Show-FabriqSelectForm -Candidates $candidates
+    if ([string]::IsNullOrWhiteSpace($picked)) {
+        Show-Error "No fabriq root selected. Exiting."
+        Read-Host "Press Enter to exit"
+        return
+    }
+    $script:FabriqRoot = $picked
+    Show-Info "Fabriq main selected: $script:FabriqRoot"
+}
+
+# ============================================================
+# Welcome banner
+# ============================================================
+Clear-Host
+Write-Host ""
+Show-Separator
+Write-Host "  Fabriq BackUper  v$($script:BackuperVersion)" -ForegroundColor Cyan
+$kernelVerFile = Join-Path $script:FabriqRoot 'kernel\KERNEL_VERSION'
+$kernelVer = if (Test-Path $kernelVerFile) { (Get-Content $kernelVerFile -Raw).Trim() } else { 'unknown' }
+Write-Host "  Backup/Restore satellite over Fabriq kernel $kernelVer" -ForegroundColor DarkGray
+Show-Separator
+Write-Host ""
+
+# ============================================================
+# Step 1: Admin check (robocopy /B, registry HKLM write require admin)
+# ============================================================
+if (-not (Test-AdminPrivilege)) {
+    Show-Error "Administrator privileges are required."
+    Show-Info  "Please re-launch Fabriq_BackUper.exe with admin rights."
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    return
+}
+
+# ============================================================
+# Step 2 (Phase 3C): Unified session setup dialog.
+# Combines passphrase entry + host selection + Backup/Restore
+# action choice into one form (family pattern matching
+# fabriq_operator's session_form.ps1).
+#
+# Hostlist load happens TWICE intentionally:
+#   1. Pre-load (cold): $global:FabriqMasterPassphrase is unset,
+#      so ENC: values stay as-is. Used for the session form's host
+#      grid display (operator picks by row).
+#   2. Post-form: $global:FabriqMasterPassphrase is now set from
+#      the verified entry; Start-FabriqBackuperGui re-loads the
+#      hostlist (now decrypted) and resolves the selection via
+#      $InitialHostIndex.
+# ============================================================
+$verifyPath = Join-Path $script:FabriqRoot 'kernel\txt\passphrase_verify.txt'
+if (-not (Test-Path $verifyPath)) {
+    Show-Error "Passphrase verify token not found: $verifyPath"
+    Show-Error "FabriqBackUper requires fabriq to be initialized first."
+    Read-Host "Press Enter to exit"
+    return
+}
+
+# Cold hostlist load (passphrase still unset -> ENC: values visible).
+$coldHostlist = @(Get-FabriqHostlist -FabriqRoot $script:FabriqRoot)
+if ($null -eq $coldHostlist -or $coldHostlist.Count -eq 0) {
+    Show-Error "Hostlist is empty or unreadable: $script:FabriqRoot\kernel\csv\hostlist.csv"
+    Read-Host "Press Enter to exit"
+    return
+}
+
+$sess = Show-BackuperSessionForm `
+    -HostList         $coldHostlist `
+    -VerifyTokenPath  $verifyPath `
+    -CurrentPCName    $env:COMPUTERNAME
+
+if ($sess.Cancelled) {
+    Show-Info "Session cancelled. Exiting."
+    return
+}
+
+$global:FabriqMasterPassphrase = $sess.MasterPassphrase
+Show-Success ("Session ready: mode={0}, host-index={1}" -f $sess.Mode, $sess.SelectedHostIndex)
+
+Write-Host ""
+
+# ============================================================
+# Step 3: Launch WinForms GUI (Phase 2.1)
+# Pre-selected Mode + HostIndex from the session form are passed
+# in; Start-FabriqBackuperGui no longer shows ModeSelectView.
+# Legacy console menu (Show-MainMenu / Invoke-BackuperEngine)
+# is still loaded above for fallback paths.
+# ============================================================
+try {
+    Start-FabriqBackuperGui `
+        -BackuperVersion   $script:BackuperVersion `
+        -BackuperRoot      $script:FabriqBackuperRoot `
+        -FabriqRoot        $script:FabriqRoot `
+        -InitialMode       $sess.Mode `
+        -InitialHostIndex  $sess.SelectedHostIndex
+}
+catch {
+    Show-Error "GUI launch failed: $($_.Exception.Message)"
+    Show-Error $_.ScriptStackTrace
+    Read-Host "Press Enter to exit"
+}
+
+Write-Host ""
+Show-Info "Fabriq BackUper session ended."
+Write-Host ""
