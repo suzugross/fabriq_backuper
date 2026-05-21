@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - Backup View
 # Phase 2.7.1: Compact layout to fit 780-tall form (smaller
 #              printer grid, tighter Y positions). Start button
@@ -47,8 +47,11 @@ function New-BackupView {
     $panel.BackColor = $script:bgForm
 
     # ---- Top row: Back + title ----------------------------
+    # Phase 3C: "Back" now closes the MainForm (= ends the .exe session).
+    # ModeSelectView was removed; to choose a different mode/host, the
+    # operator re-launches Fabriq_BackUper.exe and uses the session form.
     $btnBack = New-StyledButton -Text "< Back" -X 16 -Y 10 -Width 80 -Height 28
-    $btnBack.Add_Click({ Switch-View 'ModeSelect' })
+    $btnBack.Add_Click({ $script:MainForm.Close() })
     $panel.Controls.Add($btnBack)
 
     $title = New-StyledLabel -Text "Backup" -X 110 -Y 12 -Width 200 -Height 24 -Font $script:fontLarge

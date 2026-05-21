@@ -189,22 +189,24 @@ function global:Show-BackuperSessionForm {
     $yPos += 26
 
     # ========================================
-    # Action buttons: Backup (lavender) / Restore (green) / Quit
+    # Action buttons (left -> right): Quit / Backup (lavender) / Restore (green)
+    # Backup precedes Restore in left-to-right reading order — backup is the
+    # natural first step of the kitting workflow, restore comes later.
     # ========================================
     $btnQuit = New-StyledButton -Text '終了' `
-        -X 220 -Y $yPos -Width 100 -Height 34
+        -X 210 -Y $yPos -Width 100 -Height 34
     $form.Controls.Add($btnQuit)
 
+    $btnBackup = New-StyledButton -Text 'バックアップ' `
+        -X 325 -Y $yPos -Width 130 -Height 34 -BgColor $script:bgAccent
+    $btnBackup.Font = $script:fontBold
+    $form.Controls.Add($btnBackup)
+
     $btnRestore = New-StyledButton -Text 'リストア' `
-        -X 335 -Y $yPos -Width 120 -Height 34 -BgColor $script:bgAdd
+        -X 470 -Y $yPos -Width 120 -Height 34 -BgColor $script:bgAdd
     $btnRestore.ForeColor = $script:fgWhite
     $btnRestore.Font = $script:fontBold
     $form.Controls.Add($btnRestore)
-
-    $btnBackup = New-StyledButton -Text 'バックアップ' `
-        -X 465 -Y $yPos -Width 130 -Height 34 -BgColor $script:bgAccent
-    $btnBackup.Font = $script:fontBold
-    $form.Controls.Add($btnBackup)
 
     # ========================================
     # Common submit scriptblock (parametrised by Mode)

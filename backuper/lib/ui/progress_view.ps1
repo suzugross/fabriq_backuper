@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - Progress View
 # Shows live (in Phase 2.1: completion-only) log + Done button.
 # Note: Phase 2.1 runs ops synchronously on UI thread so the
@@ -74,12 +74,15 @@ function New-ProgressView {
     $panel.Controls.Add($log)
     $global:Fbp_ProgressLogBox = $log
 
-    # Done button
+    # Done button. Phase 3C: ModeSelectView is gone; pressing Done now
+    # closes the MainForm (= ends the .exe session). The operator re-
+    # launches Fabriq_BackUper.exe to start a new session with a fresh
+    # passphrase / host / mode choice.
     $btnDone = New-StyledButton -Text "Done" `
         -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAccent
     $btnDone.Font = $script:fontLarge
     $btnDone.Enabled = $false
-    $btnDone.Add_Click({ Switch-View 'ModeSelect' })
+    $btnDone.Add_Click({ $script:MainForm.Close() })
     $panel.Controls.Add($btnDone)
     $script:ProgressDoneBtn = $btnDone
 

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - Restore View
 # Phase 2.7.1: Compact layout for 780-tall form.
 # Phase 2.7  : Target-user dropdown (resolves %USERPROFILE% etc.
@@ -21,8 +21,9 @@ function New-RestoreView {
     $panel = New-Object System.Windows.Forms.Panel
     $panel.BackColor = $script:bgForm
 
+    # Phase 3C: same "close MainForm" semantics as backup_view.
     $btnBack = New-StyledButton -Text "< Back" -X 16 -Y 10 -Width 80 -Height 28
-    $btnBack.Add_Click({ Switch-View 'ModeSelect' })
+    $btnBack.Add_Click({ $script:MainForm.Close() })
     $panel.Controls.Add($btnBack)
 
     $title = New-StyledLabel -Text "Restore" -X 110 -Y 12 -Width 200 -Height 24 -Font $script:fontLarge
@@ -137,10 +138,13 @@ function Set-AllRestorePrinterChecks {
 
 function Show-RestoreView {
     if ($null -eq $script:CurrentHost) {
+        # Defensive: Phase 3C pre-selects host via session_form, so this
+        # branch should not trigger in normal flow. If it does, close the
+        # MainForm rather than navigating to the deleted ModeSelectView.
         [System.Windows.Forms.MessageBox]::Show("No host selected.", "Fabriq BackUper",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-        Switch-View 'ModeSelect'
+        $script:MainForm.Close()
         return
     }
 
