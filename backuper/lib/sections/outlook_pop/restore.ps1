@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper Section: outlook_pop / restore (Phase 2.10.2)
 #
 # Two-strategy restore with automatic fallback:
@@ -530,7 +530,8 @@ function New-OutlookAccountInfoText {
     # Content: source/target metadata, per-account email + PST file +
     # POP3/SMTP server settings, and a manual setup procedure that an
     # operator can follow if automatic restore ever has to be redone
-    # by hand. All English (feedback_scripts_english_only).
+    # by hand. Body is in Japanese because the file is read by on-site
+    # operators (UI policy applies to operator-facing artifacts).
     param(
         [Parameter(Mandatory = $true)]$Manifest,
         [Parameter(Mandatory = $true)][string]$TargetUserProfilePath,
@@ -554,37 +555,36 @@ function New-OutlookAccountInfoText {
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('========================================') | Out-Null
     if ($StrategyBSucceeded) {
-        $lines.Add(' Outlook POP Account Settings (auto-restored)') | Out-Null
+        $lines.Add(' Outlook POP アカウント設定 (自動復元済み)') | Out-Null
     } else {
-        $lines.Add(' Outlook POP Account Restore - Manual Setup Required') | Out-Null
+        $lines.Add(' Outlook POP アカウント復元 - 手動セットアップが必要') | Out-Null
     }
     $lines.Add('========================================') | Out-Null
     $lines.Add('') | Out-Null
 
     if ($StrategyBAttempted -and -not $StrategyBSucceeded) {
-        $lines.Add('NOTE: Strategy B (automatic registry import) was attempted but') | Out-Null
-        $lines.Add('did not fully verify. Falling back to manual wizard setup.') | Out-Null
-        $lines.Add('See section warnings in the run summary for details.') | Out-Null
+        $lines.Add('注意: Strategy B (レジストリ自動インポート) を試行しましたが') | Out-Null
+        $lines.Add('完全な検証ができませんでした。手動ウィザードによるセットアップにフォールバックします。') | Out-Null
+        $lines.Add('詳細は実行サマリのセクション警告を参照してください。') | Out-Null
         $lines.Add('') | Out-Null
     }
     if ($StrategyBSucceeded) {
-        $lines.Add('This file is a reference copy of the account-to-PST mapping and') | Out-Null
-        $lines.Add('the full server settings. Automatic restore succeeded; you only') | Out-Null
-        $lines.Add('need these settings if you ever have to manually reconfigure') | Out-Null
-        $lines.Add('the Outlook account from scratch.') | Out-Null
+        $lines.Add('本ファイルはアカウントと PST のマッピング、および全サーバ設定の参照コピーです。') | Out-Null
+        $lines.Add('自動復元は成功しており、Outlook アカウントを最初から手動で再構成する場合に') | Out-Null
+        $lines.Add('のみ本設定が必要となります。') | Out-Null
         $lines.Add('') | Out-Null
     }
 
-    $lines.Add("Source PC      : $($Manifest.computerName)") | Out-Null
+    $lines.Add("移行元 PC     : $($Manifest.computerName)") | Out-Null
     if ($Manifest.sourceUser -and $Manifest.sourceUser.userName) {
-        $lines.Add("Source user    : $($Manifest.sourceUser.userName)") | Out-Null
+        $lines.Add("移行元ユーザ  : $($Manifest.sourceUser.userName)") | Out-Null
     }
     $tgtUserName = Split-Path $TargetUserProfilePath -Leaf
-    $lines.Add("Target user    : $tgtUserName  ($TargetUserProfilePath)") | Out-Null
-    $lines.Add("Restore time   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") | Out-Null
-    $lines.Add("Outlook version: $($Manifest.outlookVersion)") | Out-Null
+    $lines.Add("対象ユーザ    : $tgtUserName  ($TargetUserProfilePath)") | Out-Null
+    $lines.Add("復元日時      : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") | Out-Null
+    $lines.Add("Outlook バージョン: $($Manifest.outlookVersion)") | Out-Null
     if (-not [string]::IsNullOrWhiteSpace($ProfileFilter)) {
-        $lines.Add("Profile        : $ProfileFilter") | Out-Null
+        $lines.Add("プロファイル  : $ProfileFilter") | Out-Null
     }
     $lines.Add('') | Out-Null
 
@@ -596,12 +596,14 @@ function New-OutlookAccountInfoText {
         } | Select-Object -First 1).Account
 
         $lines.Add('----------------------------------------') | Out-Null
-        $lines.Add(" Account $accountIndex : $($r.email)   [$($r.status)]") | Out-Null
+        # Status enum stays English to match the manifest/section result
+        # contract; only surrounding labels are translated.
+        $lines.Add(" アカウント $accountIndex : $($r.email)   [$($r.status)]") | Out-Null
         $lines.Add('----------------------------------------') | Out-Null
 
         if ($r.status -ne 'Success') {
-            $lines.Add('  ** NOT READY for manual setup **') | Out-Null
-            $lines.Add("  Reason: $($r.reason)") | Out-Null
+            $lines.Add('  ** 手動セットアップに必要な情報が揃っていません **') | Out-Null
+            $lines.Add("  理由: $($r.reason)") | Out-Null
             $lines.Add('') | Out-Null
             continue
         }
@@ -609,131 +611,127 @@ function New-OutlookAccountInfoText {
         $isImap = ("$($acct.type)" -eq 'imap')
 
         $lines.Add('') | Out-Null
-        $lines.Add('  Wizard input (Display Name / Email / Server settings):') | Out-Null
-        $lines.Add("    Display name      : $($acct.displayName)") | Out-Null
-        $lines.Add("    Email address     : $($acct.email)") | Out-Null
-        $lines.Add("    Account type      : $(if ($isImap) { 'IMAP' } else { 'POP' })") | Out-Null
+        $lines.Add('  ウィザード入力項目 (表示名 / メール / サーバ設定):') | Out-Null
+        $lines.Add("    表示名            : $($acct.displayName)") | Out-Null
+        $lines.Add("    メールアドレス    : $($acct.email)") | Out-Null
+        $lines.Add("    アカウント種別    : $(if ($isImap) { 'IMAP' } else { 'POP' })") | Out-Null
         $lines.Add('') | Out-Null
 
         if ($isImap) {
-            $lines.Add('  Incoming server (IMAP):') | Out-Null
-            $lines.Add("    Server            : $($acct.imap.server)") | Out-Null
-            $lines.Add("    Port              : $($acct.imap.port)") | Out-Null
-            $imapSsl = if ($acct.imap.useSSL -eq 1) { 'YES (required)' } else { 'No' }
+            $lines.Add('  受信サーバ (IMAP):') | Out-Null
+            $lines.Add("    サーバ            : $($acct.imap.server)") | Out-Null
+            $lines.Add("    ポート            : $($acct.imap.port)") | Out-Null
+            $imapSsl = if ($acct.imap.useSSL -eq 1) { 'はい (必須)' } else { 'いいえ' }
             $lines.Add("    SSL/TLS           : $imapSsl") | Out-Null
-            $lines.Add("    Username          : $($acct.imap.userName)") | Out-Null
+            $lines.Add("    ユーザ名          : $($acct.imap.userName)") | Out-Null
             if (-not [string]::IsNullOrWhiteSpace("$($acct.imap.folderPath)")) {
-                $lines.Add("    Root folder path  : $($acct.imap.folderPath)") | Out-Null
+                $lines.Add("    ルートフォルダパス: $($acct.imap.folderPath)") | Out-Null
             }
         } else {
-            $lines.Add('  Incoming server (POP3):') | Out-Null
-            $lines.Add("    Server            : $($acct.pop3.server)") | Out-Null
-            $lines.Add("    Port              : $($acct.pop3.port)") | Out-Null
-            $popSsl = if ($acct.pop3.useSSL -eq 1) { 'YES (required)' } else { 'No' }
+            $lines.Add('  受信サーバ (POP3):') | Out-Null
+            $lines.Add("    サーバ            : $($acct.pop3.server)") | Out-Null
+            $lines.Add("    ポート            : $($acct.pop3.port)") | Out-Null
+            $popSsl = if ($acct.pop3.useSSL -eq 1) { 'はい (必須)' } else { 'いいえ' }
             $lines.Add("    SSL/TLS           : $popSsl") | Out-Null
-            $lines.Add("    Username          : $($acct.pop3.userName)") | Out-Null
+            $lines.Add("    ユーザ名          : $($acct.pop3.userName)") | Out-Null
         }
         $lines.Add('') | Out-Null
 
-        $lines.Add('  Outgoing server (SMTP):') | Out-Null
-        $lines.Add("    Server            : $($acct.smtp.server)") | Out-Null
-        $lines.Add("    Port              : $($acct.smtp.port)") | Out-Null
-        $smtpSsl = if ($acct.smtp.useSSL -eq 1) { 'YES (required)' } else { 'No' }
+        $lines.Add('  送信サーバ (SMTP):') | Out-Null
+        $lines.Add("    サーバ            : $($acct.smtp.server)") | Out-Null
+        $lines.Add("    ポート            : $($acct.smtp.port)") | Out-Null
+        $smtpSsl = if ($acct.smtp.useSSL -eq 1) { 'はい (必須)' } else { 'いいえ' }
         $lines.Add("    SSL/TLS           : $smtpSsl") | Out-Null
-        $smtpAuth = if ($acct.smtp.useAuth -eq 1) { 'YES (required)' } else { 'No' }
-        $lines.Add("    Authentication    : $smtpAuth") | Out-Null
-        $sameAsLabel = if ($isImap) { '(same as IMAP)' } else { '(same as POP3)' }
+        $smtpAuth = if ($acct.smtp.useAuth -eq 1) { 'はい (必須)' } else { 'いいえ' }
+        $lines.Add("    認証              : $smtpAuth") | Out-Null
+        $sameAsLabel = if ($isImap) { '(IMAP と同じ)' } else { '(POP3 と同じ)' }
         $smtpUser = if ($acct.smtp.userName) { $acct.smtp.userName } else { $sameAsLabel }
-        $lines.Add("    SMTP username     : $smtpUser") | Out-Null
+        $lines.Add("    SMTP ユーザ名     : $smtpUser") | Out-Null
         $lines.Add('') | Out-Null
 
         if ($isImap) {
-            $lines.Add('  Local data file (OST):') | Out-Null
-            $lines.Add('    NOT migrated. OST is per-machine DPAPI-encrypted and') | Out-Null
-            $lines.Add('    cannot be transferred across PCs. On first IMAP sync,') | Out-Null
-            $lines.Add('    Outlook will create a fresh OST at the default location') | Out-Null
-            $lines.Add('    and re-download all folders from the IMAP server.') | Out-Null
+            $lines.Add('  ローカルデータファイル (OST):') | Out-Null
+            $lines.Add('    移行されません。OST はマシン単位の DPAPI で暗号化されており') | Out-Null
+            $lines.Add('    PC 間で持ち運べません。初回 IMAP 同期時に Outlook が既定の') | Out-Null
+            $lines.Add('    場所に新しい OST を作成し、IMAP サーバから全フォルダを') | Out-Null
+            $lines.Add('    再ダウンロードします。') | Out-Null
         } else {
-            $lines.Add('  Existing data file (PST):') | Out-Null
+            $lines.Add('  既存データファイル (PST):') | Out-Null
             $lines.Add("    $($r.targetPstPath)") | Out-Null
         }
         $lines.Add('') | Out-Null
     }
 
     $lines.Add('----------------------------------------') | Out-Null
-    $lines.Add(' Manual setup procedure (only if needed):') | Out-Null
+    $lines.Add(' 手動セットアップ手順 (必要な場合のみ):') | Out-Null
     $lines.Add('----------------------------------------') | Out-Null
-    $lines.Add('  1. Open Outlook') | Out-Null
-    $lines.Add('  2. File > Add Account') | Out-Null
-    $lines.Add('  3. Expand "Advanced options" and CHECK "Let me set up my') | Out-Null
-    $lines.Add('     account manually" (REQUIRED for POP accounts; Outlook') | Out-Null
-    $lines.Add('     will otherwise auto-pick IMAP. For an IMAP account this') | Out-Null
-    $lines.Add('     step is still recommended for explicit control.)') | Out-Null
-    $lines.Add('  4. Enter the email address from above, click "Connect"') | Out-Null
-    $lines.Add('  5. Choose the account type matching the "Account type"') | Out-Null
-    $lines.Add('     printed for that account in the section above') | Out-Null
-    $lines.Add('     (POP or IMAP)') | Out-Null
-    $lines.Add('  6. Enter the server settings exactly as printed above.') | Out-Null
-    $lines.Add('     For IMAP, set the Root folder path as well if listed.') | Out-Null
-    $lines.Add('  7. POP only: when asked about data file, choose "Existing') | Out-Null
-    $lines.Add('     Outlook Data File" and browse to the PST path printed.') | Out-Null
-    $lines.Add('     IMAP: no data file step (OST auto-created).') | Out-Null
-    $lines.Add('  8. Complete the wizard') | Out-Null
-    $lines.Add('  9. Enter the password when Outlook prompts on first') | Out-Null
-    $lines.Add('     send/receive (DPAPI restriction: passwords are never') | Out-Null
-    $lines.Add('     deployable across machines)') | Out-Null
+    $lines.Add('  1. Outlook を起動') | Out-Null
+    $lines.Add('  2. ファイル > アカウント追加') | Out-Null
+    $lines.Add('  3. "詳細オプション" を展開し "自分で自分のアカウントを手動で設定"') | Out-Null
+    $lines.Add('     にチェックを入れる (POP アカウントの場合は必須。チェックしないと') | Out-Null
+    $lines.Add('     Outlook が IMAP に自動判定してしまう。IMAP の場合も明示的な制御の') | Out-Null
+    $lines.Add('     ため推奨。)') | Out-Null
+    $lines.Add('  4. 上記のメールアドレスを入力し "接続" をクリック') | Out-Null
+    $lines.Add('  5. 上のアカウントセクションに記載された "アカウント種別"') | Out-Null
+    $lines.Add('     (POP または IMAP) と一致する種別を選択') | Out-Null
+    $lines.Add('  6. 上記のサーバ設定をそのまま入力。IMAP の場合は') | Out-Null
+    $lines.Add('     ルートフォルダパスも記載があれば設定。') | Out-Null
+    $lines.Add('  7. POP のみ: データファイルを尋ねられたら "既存の Outlook データ') | Out-Null
+    $lines.Add('     ファイル" を選択し、記載された PST パスを参照。') | Out-Null
+    $lines.Add('     IMAP: データファイル選択ステップなし (OST は自動作成)。') | Out-Null
+    $lines.Add('  8. ウィザードを完了') | Out-Null
+    $lines.Add('  9. 初回送受信時に Outlook がパスワードを尋ねたら入力') | Out-Null
+    $lines.Add('     (DPAPI 制約によりパスワードは PC を跨いで配信不能)') | Out-Null
     $lines.Add('') | Out-Null
-    $lines.Add(' POP only: if the email matches the PST filename (it should,') | Out-Null
-    $lines.Add(' since we renamed it to <email>.pst), Outlook attaches the') | Out-Null
-    $lines.Add(' existing PST automatically and all old emails / folders /') | Out-Null
-    $lines.Add(' contacts will be visible.') | Out-Null
+    $lines.Add(' POP のみ: メールアドレスが PST のファイル名と一致していれば') | Out-Null
+    $lines.Add(' (本ツールでは <email>.pst にリネーム済みなので一致するはず)、') | Out-Null
+    $lines.Add(' Outlook が既存 PST を自動でアタッチし、過去のメール/フォルダ/') | Out-Null
+    $lines.Add(' 連絡先がすべて表示されます。') | Out-Null
     $lines.Add('') | Out-Null
-    $lines.Add(' IMAP only: Outlook will create a new OST under') | Out-Null
-    $lines.Add(' AppData\Local\Microsoft\Outlook\ and re-download all folders') | Out-Null
-    $lines.Add(' from the server on first sync (this can take a while for') | Out-Null
-    $lines.Add(' large mailboxes).') | Out-Null
+    $lines.Add(' IMAP のみ: Outlook が AppData\Local\Microsoft\Outlook\ 配下に') | Out-Null
+    $lines.Add(' 新しい OST を作成し、初回同期時にサーバから全フォルダを') | Out-Null
+    $lines.Add(' 再ダウンロードします (大きなメールボックスでは時間がかかります)。') | Out-Null
     $lines.Add('') | Out-Null
 
     if ($IsCrossVersion) {
+        # CrossVersionDirection is an internal enum string (e.g. "2013->2016+",
+        # "365->2019") used as-is in the section label for cross-reference
+        # against the run log.
         $dirLabel = if ($CrossVersionDirection) { " ($CrossVersionDirection)" } else { '' }
         $lines.Add('========================================') | Out-Null
-        $lines.Add(" Cross-version restore cleanup steps$dirLabel") | Out-Null
+        $lines.Add(" 異バージョン復元時のクリーンアップ手順$dirLabel") | Out-Null
         $lines.Add('========================================') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' The source and target Outlook are different major versions') | Out-Null
-        $lines.Add(' (e.g. 2013 -> 2016/2019/365). Outlook on first launch will') | Out-Null
-        $lines.Add(' show some prompts that need operator action. These are') | Out-Null
-        $lines.Add(' Microsoft behaviours that cannot be suppressed via registry.') | Out-Null
+        $lines.Add(' 移行元と移行先の Outlook がメジャーバージョン違いです') | Out-Null
+        $lines.Add(' (例: 2013 -> 2016/2019/365)。Outlook の初回起動時に') | Out-Null
+        $lines.Add(' 操作者の対応が必要なプロンプトがいくつか表示されます。') | Out-Null
+        $lines.Add(' これらは Microsoft の挙動でレジストリでは抑制できません。') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' A. "IMAP Search Folder" warning popup (one-time)') | Out-Null
-        $lines.Add('    Outlook tells you old IMAP search folders no longer') | Out-Null
-        $lines.Add('    apply to the new OST. Press OK to dismiss; it will') | Out-Null
-        $lines.Add('    not appear again.') | Out-Null
+        $lines.Add(' A. "IMAP 検索フォルダ" の警告ポップアップ (1回限り)') | Out-Null
+        $lines.Add('    旧 IMAP 検索フォルダが新 OST に適用できない旨が表示されます。') | Out-Null
+        $lines.Add('    OK で閉じれば再表示されません。') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' B. An empty "Outlook.pst" gets auto-created') | Out-Null
-        $lines.Add('    With cross-version reg-import, the imported profile') | Out-Null
-        $lines.Add('    has no "default delivery store" pointer, so Outlook') | Out-Null
-        $lines.Add('    creates a fresh empty Outlook.pst and uses it as the') | Out-Null
-        $lines.Add('    default. To rebind to the migrated PST:') | Out-Null
-        $lines.Add('      1. File > Account Settings > Account Settings') | Out-Null
-        $lines.Add('         > Data Files tab') | Out-Null
-        $lines.Add('      2. Select the migrated PST') | Out-Null
-        $lines.Add('         (<email>.pst under Outlook Files folder)') | Out-Null
-        $lines.Add('         and click "Set as Default"') | Out-Null
-        $lines.Add('      3. Close Outlook completely, then relaunch') | Out-Null
-        $lines.Add('      4. Same Data Files tab: select Outlook.pst and') | Out-Null
-        $lines.Add('         click "Remove"') | Out-Null
-        $lines.Add('      5. Email tab: select the POP account, click') | Out-Null
-        $lines.Add('         "Change Folder", select the Inbox of the') | Out-Null
-        $lines.Add('         migrated PST, click OK') | Out-Null
+        $lines.Add(' B. 空の "Outlook.pst" が自動作成される') | Out-Null
+        $lines.Add('    異バージョン reg-import ではプロファイルに "既定の配信ストア"') | Out-Null
+        $lines.Add('    ポインタが含まれないため、Outlook が空の Outlook.pst を新規作成し') | Out-Null
+        $lines.Add('    既定として利用します。移行した PST に再バインドする手順:') | Out-Null
+        $lines.Add('      1. ファイル > アカウント設定 > アカウント設定') | Out-Null
+        $lines.Add('         > データファイル タブ') | Out-Null
+        $lines.Add('      2. 移行した PST') | Out-Null
+        $lines.Add('         (Outlook ファイル フォルダ配下の <email>.pst) を選択し') | Out-Null
+        $lines.Add('         "既定に設定" をクリック') | Out-Null
+        $lines.Add('      3. Outlook を完全に終了し、再起動') | Out-Null
+        $lines.Add('      4. 同じデータファイル タブで Outlook.pst を選択し') | Out-Null
+        $lines.Add('         "削除" をクリック') | Out-Null
+        $lines.Add('      5. メール タブで POP アカウントを選択し') | Out-Null
+        $lines.Add('         "フォルダの変更" をクリック、移行した PST の受信トレイを') | Out-Null
+        $lines.Add('         選択して OK') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' C. Password input') | Out-Null
-        $lines.Add('    On first send/receive, enter the POP and IMAP') | Out-Null
-        $lines.Add('    passwords (DPAPI restriction: passwords are never') | Out-Null
-        $lines.Add('    portable across machines, this is unavoidable).') | Out-Null
+        $lines.Add(' C. パスワード入力') | Out-Null
+        $lines.Add('    初回送受信時に POP / IMAP のパスワードを入力 (DPAPI 制約により') | Out-Null
+        $lines.Add('    パスワードは PC を跨いで持ち運べないため、必ず手入力が必要)。') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' After these steps, all subsequent launches and send/receive') | Out-Null
-        $lines.Add(' will work normally.') | Out-Null
+        $lines.Add(' 上記手順の完了後は、以降の起動と送受信が通常通り動作します。') | Out-Null
         $lines.Add('') | Out-Null
     }
 
@@ -744,31 +742,28 @@ function New-OutlookAccountInfoText {
     # section is suppressed when IsCrossVersion is true to avoid redundancy.
     if ($ImapPresent -and -not $IsCrossVersion) {
         $lines.Add('========================================') | Out-Null
-        $lines.Add(' POP delivery target check (IMAP-present profile)') | Out-Null
+        $lines.Add(' POP の配信先確認 (IMAP 共存プロファイル)') | Out-Null
         $lines.Add('========================================') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' The source profile contained an IMAP account in addition to') | Out-Null
-        $lines.Add(' the POP account(s) above. After Strategy B-light strips the') | Out-Null
-        $lines.Add(' explicit POP delivery binding (Delivery Store EntryID), Outlook') | Out-Null
-        $lines.Add(' on the target PC auto-picks a delivery store from all available') | Out-Null
-        $lines.Add(' message stores in the profile. When both the migrated PST and') | Out-Null
-        $lines.Add(' the freshly-recreated IMAP OST are present, Outlook sometimes') | Out-Null
-        $lines.Add(' picks the OST instead of the PST, so new POP mail gets dropped') | Out-Null
-        $lines.Add(' into the IMAP folder set.') | Out-Null
+        $lines.Add(' 移行元プロファイルには上記の POP アカウントに加えて') | Out-Null
+        $lines.Add(' IMAP アカウントが含まれていました。Strategy B-light が') | Out-Null
+        $lines.Add(' 明示的な POP 配信バインド (Delivery Store EntryID) を除去するため、') | Out-Null
+        $lines.Add(' 移行先 PC の Outlook はプロファイル内の利用可能なメッセージストアから') | Out-Null
+        $lines.Add(' 配信先を自動選択します。移行した PST と再作成された IMAP OST が') | Out-Null
+        $lines.Add(' 共存している場合、Outlook が PST ではなく OST を選んでしまい、') | Out-Null
+        $lines.Add(' 新着 POP メールが IMAP フォルダに落ちることがあります。') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' To verify and fix:') | Out-Null
-        $lines.Add('   1. File > Account Settings > Account Settings > Email tab') | Out-Null
-        $lines.Add('   2. Select each POP account') | Out-Null
-        $lines.Add('   3. Look at the bottom: "Selected account delivers new') | Out-Null
-        $lines.Add('      messages to the following location:" (or the Japanese') | Out-Null
-        $lines.Add('      equivalent)') | Out-Null
-        $lines.Add('   4. If the target is the IMAP OST (or any wrong location),') | Out-Null
-        $lines.Add('      click "Change Folder", select the migrated PST') | Out-Null
-        $lines.Add('      (<email>.pst under Outlook Files folder) and pick its') | Out-Null
-        $lines.Add('      Inbox, then OK') | Out-Null
+        $lines.Add(' 確認と修正手順:') | Out-Null
+        $lines.Add('   1. ファイル > アカウント設定 > アカウント設定 > メール タブ') | Out-Null
+        $lines.Add('   2. 各 POP アカウントを選択') | Out-Null
+        $lines.Add('   3. 下部の "選択したアカウントは新しいメッセージを次の場所に') | Out-Null
+        $lines.Add('      配信します:" の表記を確認') | Out-Null
+        $lines.Add('   4. 配信先が IMAP OST (またはその他誤った場所) であれば') | Out-Null
+        $lines.Add('      "フォルダの変更" をクリックし、移行した PST') | Out-Null
+        $lines.Add('      (Outlook ファイル フォルダ配下の <email>.pst) の受信トレイを') | Out-Null
+        $lines.Add('      選択して OK') | Out-Null
         $lines.Add('') | Out-Null
-        $lines.Add(' This is a one-time correction; the binding persists across') | Out-Null
-        $lines.Add(' subsequent launches.') | Out-Null
+        $lines.Add(' これは 1 回限りの修正で、以降の起動でもバインドが維持されます。') | Out-Null
         $lines.Add('') | Out-Null
     }
 
@@ -1257,37 +1252,36 @@ if ($strategyBSucceeded) {
                ForEach-Object { $_.email }) -join ', '
     $popCount  = @($plannedAccounts | Where-Object { "$($_.Account.type)" -ne 'imap' }).Count
     $imapCount = @($plannedAccounts | Where-Object { "$($_.Account.type)" -eq 'imap' }).Count
-    $countLabel = if ($imapCount -gt 0) { "POP=$popCount  IMAP=$imapCount" } else { "$popCount POP3" }
-    $popupTitle = 'Outlook POP/IMAP - Restore Complete'
-    $popupBody  = "$countLabel account(s) restored automatically:`r`n  $emails`r`n`r`n" +
-                  "Operator action required (2 Outlook launches):`r`n" +
-                  "  1. Launch Outlook. A 'restart required to link PST' notice will appear`r`n" +
-                  "     and Outlook will close itself. This is expected behaviour - just close.`r`n" +
-                  "  2. Launch Outlook again. Enter the password when prompted for each account.`r`n" +
-                  "     Send/receive will work after password entry.`r`n" +
-                  "     (DPAPI restriction: passwords cannot be migrated across machines)`r`n`r`n" +
-                  "PST files and mail history are preserved. Contacts are visible from launch.`r`n`r`n" +
-                  "Account settings (server / port / username / PST path) are saved`r`n" +
-                  "as _account_settings.txt in the same folder as the PST file, in case`r`n" +
-                  "manual re-setup is ever needed."
+    $countLabel = if ($imapCount -gt 0) { "POP=$popCount  IMAP=$imapCount" } else { "POP3 $popCount 件" }
+    $popupTitle = 'Outlook POP/IMAP - 復元完了'
+    $popupBody  = "$countLabel のアカウントを自動復元しました:`r`n  $emails`r`n`r`n" +
+                  "操作者の対応が必要 (Outlook を 2 回起動):`r`n" +
+                  "  1. Outlook を起動。'PST のリンクのため再起動が必要' という通知が出て`r`n" +
+                  "     Outlook が自動終了します。想定動作なのでそのまま閉じてください。`r`n" +
+                  "  2. もう一度 Outlook を起動。各アカウントでパスワードを尋ねられたら入力。`r`n" +
+                  "     パスワード入力後に送受信が動作します。`r`n" +
+                  "     (DPAPI 制約: パスワードは PC を跨いで移行できません)`r`n`r`n" +
+                  "PST ファイルとメール履歴は保持されます。連絡先は起動直後から表示されます。`r`n`r`n" +
+                  "アカウント設定 (サーバ / ポート / ユーザ名 / PST パス) は手動再設定が必要な場合に備え`r`n" +
+                  "PST ファイルと同じフォルダに _account_settings.txt として保存されています。"
     if ($isCrossVersion) {
-        $popupBody += "`r`n`r`n*** Cross-version restore ($crossVersionDirection) ***`r`n" +
-                      "Additional manual cleanup steps are required on first launch:`r`n" +
-                      "  - 'IMAP Search Folder' warning popup -> press OK`r`n" +
-                      "  - Auto-created empty Outlook.pst -> set the migrated PST as default,`r`n" +
-                      "    remove Outlook.pst, and use 'Change Folder' on the POP account`r`n" +
-                      "  - Enter POP/IMAP passwords on first send/receive`r`n" +
-                      "See _account_settings.txt 'Cross-version restore cleanup steps'`r`n" +
-                      "section for the full step-by-step procedure."
+        $popupBody += "`r`n`r`n*** 異バージョン復元 ($crossVersionDirection) ***`r`n" +
+                      "初回起動時に追加の手動クリーンアップ手順が必要です:`r`n" +
+                      "  - 'IMAP 検索フォルダ' 警告ポップアップ -> OK を押す`r`n" +
+                      "  - 自動作成された空の Outlook.pst -> 移行した PST を既定に設定し、`r`n" +
+                      "    Outlook.pst を削除、POP アカウントの 'フォルダの変更' を実施`r`n" +
+                      "  - 初回送受信時に POP / IMAP のパスワードを入力`r`n" +
+                      "詳細な手順は _account_settings.txt の '異バージョン復元時のクリーンアップ手順'`r`n" +
+                      "セクションを参照してください。"
     } elseif ($imapPresent) {
-        $popupBody += "`r`n`r`n*** IMAP account present in source profile ***`r`n" +
-                      "After first launch, verify each POP account's delivery target:`r`n" +
-                      "  File > Account Settings > Email tab > select POP account`r`n" +
-                      "  -> bottom shows 'delivers new messages to ...'`r`n" +
-                      "  If it points to the IMAP OST instead of the migrated PST,`r`n" +
-                      "  click 'Change Folder' and pick the PST Inbox.`r`n" +
-                      "See _account_settings.txt 'POP delivery target check' section`r`n" +
-                      "for the full procedure."
+        $popupBody += "`r`n`r`n*** 移行元プロファイルに IMAP アカウントが存在 ***`r`n" +
+                      "初回起動後、各 POP アカウントの配信先を確認してください:`r`n" +
+                      "  ファイル > アカウント設定 > メール タブ > POP アカウントを選択`r`n" +
+                      "  -> 下部に '新しいメッセージを次の場所に配信します' と表示`r`n" +
+                      "  配信先が移行した PST ではなく IMAP OST を指していた場合、`r`n" +
+                      "  'フォルダの変更' をクリックして PST の受信トレイを選択してください。`r`n" +
+                      "詳細な手順は _account_settings.txt の 'POP の配信先確認' セクションを`r`n" +
+                      "参照してください。"
     }
     try {
         Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status 'Success'
@@ -1314,11 +1308,11 @@ if ($strategyBSucceeded) {
     }
 
     try {
-        $popupBody = "Manual setup is required for $($plannedAccounts.Count) Outlook account(s) (POP / IMAP).`r`n`r`n" +
-                     "PST file(s) have been placed at the target paths so that Outlook's wizard " +
-                     "will attach them automatically when the operator adds the matching email account.`r`n`r`n" +
-                     "Please open the instruction file and follow the steps:`r`n$instructionsPath"
-        Show-CompletionPopup -Title 'Outlook POP - Manual Setup Required' -Body $popupBody -Status 'Partial'
+        $popupBody = "$($plannedAccounts.Count) 件の Outlook アカウント (POP / IMAP) で手動セットアップが必要です。`r`n`r`n" +
+                     "PST ファイルは移行先パスに配置済みです。操作者が一致するメールアドレスでアカウントを" +
+                     "追加すると、Outlook のウィザードが自動で PST をアタッチします。`r`n`r`n" +
+                     "手順書を開いて手順に従ってください:`r`n$instructionsPath"
+        Show-CompletionPopup -Title 'Outlook POP - 手動セットアップが必要' -Body $popupBody -Status 'Partial'
     } catch { }
 
     try {

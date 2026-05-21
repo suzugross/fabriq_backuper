@@ -50,15 +50,15 @@ function New-BackupView {
     # Phase 3C: "Back" now closes the MainForm (= ends the .exe session).
     # ModeSelectView was removed; to choose a different mode/host, the
     # operator re-launches Fabriq_BackUper.exe and uses the session form.
-    $btnBack = New-StyledButton -Text "< Back" -X 16 -Y 10 -Width 80 -Height 28
+    $btnBack = New-StyledButton -Text "< 戻る" -X 16 -Y 10 -Width 80 -Height 28
     $btnBack.Add_Click({ $script:MainForm.Close() })
     $panel.Controls.Add($btnBack)
 
-    $title = New-StyledLabel -Text "Backup" -X 110 -Y 12 -Width 200 -Height 24 -Font $script:fontLarge
+    $title = New-StyledLabel -Text "バックアップ" -X 110 -Y 12 -Width 200 -Height 24 -Font $script:fontLarge
     $panel.Controls.Add($title)
 
     # ---- Destination row ----------------------------------
-    $destLbl = New-StyledLabel -Text "Destination root (local path or UNC):" `
+    $destLbl = New-StyledLabel -Text "保存先ルート (ローカルパスまたは UNC):" `
         -X 24 -Y 44 -Width 320 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($destLbl)
 
@@ -70,10 +70,10 @@ function New-BackupView {
     $panel.Controls.Add($destBox)
     $script:BackupDestinationBox = $destBox
 
-    $btnDestBrowse = New-StyledButton -Text "Browse..." -X 654 -Y 64 -Width 100 -Height 28
+    $btnDestBrowse = New-StyledButton -Text "参照..." -X 654 -Y 64 -Width 100 -Height 28
     $btnDestBrowse.Add_Click({
         $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-        $dlg.Description = "Select backup destination root (local folder)"
+        $dlg.Description = "バックアップ保存先ルートを選択 (ローカルフォルダ)"
         $dlg.ShowNewFolderButton = $true
         if (-not [string]::IsNullOrWhiteSpace($script:BackupDestinationBox.Text) -and `
             (Test-Path $script:BackupDestinationBox.Text)) {
@@ -85,7 +85,7 @@ function New-BackupView {
     })
     $panel.Controls.Add($btnDestBrowse)
 
-    $btnUncConnect = New-StyledButton -Text "Connect UNC..." -X 762 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
+    $btnUncConnect = New-StyledButton -Text "UNC 接続..." -X 762 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
     $btnUncConnect.Add_Click({
         $initial = if ($script:BackupDestinationBox.Text -like '\\*') { $script:BackupDestinationBox.Text } else { '' }
         $unc = Show-UncConnectDialog -InitialPath $initial
@@ -96,7 +96,7 @@ function New-BackupView {
     $panel.Controls.Add($btnUncConnect)
 
     # ---- Sections row -------------------------------------
-    $sectionGroupLbl = New-StyledLabel -Text "Sections" `
+    $sectionGroupLbl = New-StyledLabel -Text "セクション" `
         -X 24 -Y 100 -Width 200 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($sectionGroupLbl)
     $script:BackupSectionContainer = New-Object System.Windows.Forms.Panel
@@ -106,19 +106,19 @@ function New-BackupView {
     $panel.Controls.Add($script:BackupSectionContainer)
 
     # ---- Printer list row ---------------------------------
-    $pLbl = New-StyledLabel -Text "Printers on this PC (uncheck to exclude)" `
+    $pLbl = New-StyledLabel -Text "この PC のプリンタ (除外するチェックを外す)" `
         -X 24 -Y 156 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($pLbl)
 
-    $btnSelectAll = New-StyledButton -Text "Select All" -X 620 -Y 152 -Width 96 -Height 24
+    $btnSelectAll = New-StyledButton -Text "全選択" -X 620 -Y 152 -Width 96 -Height 24
     $btnSelectAll.Add_Click({ Set-AllPrinterChecks $true })
     $panel.Controls.Add($btnSelectAll)
 
-    $btnNone = New-StyledButton -Text "None" -X 722 -Y 152 -Width 80 -Height 24
+    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 152 -Width 80 -Height 24
     $btnNone.Add_Click({ Set-AllPrinterChecks $false })
     $panel.Controls.Add($btnNone)
 
-    $btnRefresh = New-StyledButton -Text "Refresh" -X 808 -Y 152 -Width 96 -Height 24
+    $btnRefresh = New-StyledButton -Text "更新" -X 808 -Y 152 -Width 96 -Height 24
     $btnRefresh.Add_Click({ Update-BackupPrinterGrid })
     $panel.Controls.Add($btnRefresh)
 
@@ -133,15 +133,15 @@ function New-BackupView {
     [void]$grid.Columns.Add($colCk)
 
     $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colName.HeaderText = "Printer Name"; $colName.Width = 320; $colName.Name = "Name"; $colName.ReadOnly = $true
+    $colName.HeaderText = "プリンタ名"; $colName.Width = 320; $colName.Name = "Name"; $colName.ReadOnly = $true
     [void]$grid.Columns.Add($colName)
 
     $colDriver = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colDriver.HeaderText = "Driver"; $colDriver.Width = 280; $colDriver.Name = "Driver"; $colDriver.ReadOnly = $true
+    $colDriver.HeaderText = "ドライバ"; $colDriver.Width = 280; $colDriver.Name = "Driver"; $colDriver.ReadOnly = $true
     [void]$grid.Columns.Add($colDriver)
 
     $colPort = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colPort.HeaderText = "Port"
+    $colPort.HeaderText = "ポート"
     $colPort.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     $colPort.Name = "Port"; $colPort.ReadOnly = $true
     [void]$grid.Columns.Add($colPort)
@@ -150,11 +150,11 @@ function New-BackupView {
     $script:BackupPrinterGrid = $grid
 
     # ---- User Data row: title + source user combo ---------
-    $entryLbl = New-StyledLabel -Text "User Data (toggle = per-session, Add/Edit/Delete/Save persist)" `
+    $entryLbl = New-StyledLabel -Text "ユーザデータ (チェック切替=今回のみ、追加/編集/削除/保存で永続化)" `
         -X 24 -Y 336 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($entryLbl)
 
-    $userLbl = New-StyledLabel -Text "Source user:" `
+    $userLbl = New-StyledLabel -Text "取得元ユーザ:" `
         -X 568 -Y 336 -Width 80 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($userLbl)
     $userCombo = New-StyledComboBox -X 650 -Y 332 -Width 254 -Height 24
@@ -162,16 +162,16 @@ function New-BackupView {
     $panel.Controls.Add($userCombo)
 
     # ---- User Data row: editor buttons --------------------
-    $btnEntryAdd = New-StyledButton -Text "Add" -X 24 -Y 362 -Width 80 -Height 26 -BgColor $script:bgAdd
+    $btnEntryAdd = New-StyledButton -Text "追加" -X 24 -Y 362 -Width 80 -Height 26 -BgColor $script:bgAdd
     $btnEntryAdd.ForeColor = $script:fgWhite
     $btnEntryAdd.Add_Click({ Invoke-EntryAdd })
     $panel.Controls.Add($btnEntryAdd)
 
-    $btnEntryEdit = New-StyledButton -Text "Edit" -X 108 -Y 362 -Width 80 -Height 26
+    $btnEntryEdit = New-StyledButton -Text "編集" -X 108 -Y 362 -Width 80 -Height 26
     $btnEntryEdit.Add_Click({ Invoke-EntryEdit })
     $panel.Controls.Add($btnEntryEdit)
 
-    $btnEntryDel = New-StyledButton -Text "Delete" -X 192 -Y 362 -Width 80 -Height 26 -BgColor $script:bgDelete
+    $btnEntryDel = New-StyledButton -Text "削除" -X 192 -Y 362 -Width 80 -Height 26 -BgColor $script:bgDelete
     $btnEntryDel.ForeColor = $script:fgWhite
     $btnEntryDel.Add_Click({ Invoke-EntryDelete })
     $panel.Controls.Add($btnEntryDel)
@@ -180,15 +180,15 @@ function New-BackupView {
     # neighbor and persist to CSV immediately (same .bak rotation as
     # Add/Edit/Delete). The new order propagates to future backups'
     # manifest.items.entries[] which determines restore execution order.
-    $btnEntryUp = New-StyledButton -Text "Up" -X 280 -Y 362 -Width 50 -Height 26
+    $btnEntryUp = New-StyledButton -Text "上へ" -X 280 -Y 362 -Width 50 -Height 26
     $btnEntryUp.Add_Click({ Invoke-EntryMoveUp })
     $panel.Controls.Add($btnEntryUp)
 
-    $btnEntryDown = New-StyledButton -Text "Down" -X 336 -Y 362 -Width 50 -Height 26
+    $btnEntryDown = New-StyledButton -Text "下へ" -X 336 -Y 362 -Width 50 -Height 26
     $btnEntryDown.Add_Click({ Invoke-EntryMoveDown })
     $panel.Controls.Add($btnEntryDown)
 
-    $btnEntrySave = New-StyledButton -Text "Save changes" -X 400 -Y 362 -Width 124 -Height 26 -BgColor $script:bgAccent
+    $btnEntrySave = New-StyledButton -Text "変更を保存" -X 400 -Y 362 -Width 124 -Height 26 -BgColor $script:bgAccent
     $btnEntrySave.Font = $script:fontBold
     $btnEntrySave.Add_Click({ Invoke-EntrySaveAll })
     $panel.Controls.Add($btnEntrySave)
@@ -201,23 +201,23 @@ function New-BackupView {
     $eGrid.ReadOnly = $false
 
     $ec0 = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
-    $ec0.HeaderText = "On"; $ec0.Width = 40; $ec0.Name = "Enabled"
+    $ec0.HeaderText = "有効"; $ec0.Width = 40; $ec0.Name = "Enabled"
     [void]$eGrid.Columns.Add($ec0)
 
     $ec2 = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $ec2.HeaderText = "Description"; $ec2.Width = 220; $ec2.Name = "Description"; $ec2.ReadOnly = $true
+    $ec2.HeaderText = "説明"; $ec2.Width = 220; $ec2.Name = "Description"; $ec2.ReadOnly = $true
     [void]$eGrid.Columns.Add($ec2)
 
     $ec3 = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $ec3.HeaderText = "SourcePath"; $ec3.Width = 320; $ec3.Name = "SourcePath"; $ec3.ReadOnly = $true
+    $ec3.HeaderText = "取得元パス"; $ec3.Width = 320; $ec3.Name = "SourcePath"; $ec3.ReadOnly = $true
     [void]$eGrid.Columns.Add($ec3)
 
     $ec4 = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $ec4.HeaderText = "Conflict"; $ec4.Width = 80; $ec4.Name = "OnConflict"; $ec4.ReadOnly = $true
+    $ec4.HeaderText = "競合時"; $ec4.Width = 80; $ec4.Name = "OnConflict"; $ec4.ReadOnly = $true
     [void]$eGrid.Columns.Add($ec4)
 
     $ec5 = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $ec5.HeaderText = "Exclude"; $ec5.Name = "ExcludePattern"; $ec5.ReadOnly = $true
+    $ec5.HeaderText = "除外"; $ec5.Name = "ExcludePattern"; $ec5.ReadOnly = $true
     $ec5.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     [void]$eGrid.Columns.Add($ec5)
 
@@ -232,7 +232,7 @@ function New-BackupView {
     $script:BackupEntryGrid = $eGrid
 
     # ---- Start button -------------------------------------
-    $btnStart = New-StyledButton -Text "Start Backup" -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAccent
+    $btnStart = New-StyledButton -Text "バックアップ開始" -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAccent
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-BackupStart })
     $panel.Controls.Add($btnStart)
@@ -321,7 +321,7 @@ function Invoke-EntryAdd {
 function Invoke-EntryEdit {
     $grid = $script:BackupEntryGrid
     if ($null -eq $grid -or $null -eq $grid.CurrentRow) {
-        [System.Windows.Forms.MessageBox]::Show("Select a row first.", "Edit entry",
+        [System.Windows.Forms.MessageBox]::Show("先に行を選択してください。", "項目の編集",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
@@ -341,7 +341,7 @@ function Invoke-EntryEdit {
 function Invoke-EntryDelete {
     $grid = $script:BackupEntryGrid
     if ($null -eq $grid -or $null -eq $grid.CurrentRow) {
-        [System.Windows.Forms.MessageBox]::Show("Select a row first.", "Delete entry",
+        [System.Windows.Forms.MessageBox]::Show("先に行を選択してください。", "項目の削除",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
@@ -350,8 +350,8 @@ function Invoke-EntryDelete {
     if ($idx -lt 0 -or $idx -ge $script:BackupEntries.Count) { return }
     $target = $script:BackupEntries[$idx]
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Delete this entry?`n`n$($target.SourcePath)`n($($target.Description))",
-        "Delete entry",
+        "この項目を削除しますか?`n`n$($target.SourcePath)`n($($target.Description))",
+        "項目の削除",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
@@ -371,8 +371,8 @@ function Invoke-EntrySaveAll {
     $csvPath = Join-Path $script:BackuperRoot 'data\userdata_list.csv'
     Save-UserdataCsv -Path $csvPath -Entries $script:BackupEntries
     [System.Windows.Forms.MessageBox]::Show(
-        "Saved $($script:BackupEntries.Count) entry(ies) to:`n$csvPath`n`nPrevious version preserved as .bak.",
-        "Save changes",
+        "$($script:BackupEntries.Count) 件を保存しました:`n$csvPath`n`n直前のバージョンは .bak として保持されています。",
+        "変更を保存",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 }
@@ -385,7 +385,7 @@ function Move-BackupEntry {
     param([Parameter(Mandatory = $true)][int]$Delta)
     $grid = $script:BackupEntryGrid
     if ($null -eq $grid -or $null -eq $grid.CurrentRow) {
-        [System.Windows.Forms.MessageBox]::Show("Select a row first.", "Reorder entry",
+        [System.Windows.Forms.MessageBox]::Show("先に行を選択してください。", "項目の並び替え",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
@@ -436,7 +436,7 @@ function Show-BackupView {
 
 function Invoke-BackupStart {
     if ($null -eq $script:CurrentHost) {
-        [System.Windows.Forms.MessageBox]::Show("No host selected.", "Fabriq BackUper",
+        [System.Windows.Forms.MessageBox]::Show("ホストが選択されていません。", "Fabriq BackUper",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -448,7 +448,7 @@ function Invoke-BackupStart {
         if ($null -ne $cb -and $cb.Checked) { $picked += $s }
     }
     if ($picked.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("No sections selected.", "Fabriq BackUper",
+        [System.Windows.Forms.MessageBox]::Show("セクションが選択されていません。", "Fabriq BackUper",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -495,42 +495,42 @@ function Invoke-BackupStart {
     }
     if (-not (Resolve-UncAccess -Path $destRoot)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Cannot reach destination: $destRoot`n`nUse [Connect UNC...] if credentials are needed.",
+            "保存先に接続できません: $destRoot`n`n認証情報が必要な場合は [UNC 接続...] を使用してください。",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         return
     }
 
     $printerSummary = if ($selectedPrinters.Count -gt 0) {
-        "Printers: $($selectedPrinters.Count) selected"
+        "プリンタ: $($selectedPrinters.Count) 件選択"
     } else {
-        "Printers: 0 (printer section will be skipped)"
+        "プリンタ: 0 件 (printer セクションはスキップ)"
     }
-    $userdataSummary = "User data: $($selectedEntries.Count) entry(ies) enabled"
+    $userdataSummary = "ユーザデータ: $($selectedEntries.Count) 件が有効"
     $userSummary = if ([string]::IsNullOrWhiteSpace($sourceUserProfilePath)) {
-        "Source user: (current process)"
+        "取得元ユーザ: (現在のプロセス)"
     } else {
-        "Source user: $sourceUserProfilePath"
+        "取得元ユーザ: $sourceUserProfilePath"
     }
 
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Start backup for $($script:CurrentHost.OldPCname)?`n`nDestination: $destRoot`nSections: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`n$printerSummary`n$userdataSummary`n$userSummary",
-        "Fabriq BackUper - Confirm",
+        "$($script:CurrentHost.OldPCname) のバックアップを開始しますか?`n`n保存先: $destRoot`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`n$printerSummary`n$userdataSummary`n$userSummary",
+        "Fabriq BackUper - 確認",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question
     )
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
     Switch-View 'Progress'
-    Initialize-ProgressView -Title "Backup in progress..."
-    Add-ProgressLog "Starting backup for $($script:CurrentHost.OldPCname)"
-    Add-ProgressLog "Destination: $destRoot"
+    Initialize-ProgressView -Title "バックアップ実行中..."
+    Add-ProgressLog "$($script:CurrentHost.OldPCname) のバックアップを開始します"
+    Add-ProgressLog "保存先: $destRoot"
     Add-ProgressLog $userSummary
     if ($selectedPrinters.Count -gt 0) {
-        Add-ProgressLog "Selected printers: $($selectedPrinters -join ', ')"
+        Add-ProgressLog "選択プリンタ: $($selectedPrinters -join ', ')"
     }
     if ($selectedEntries.Count -gt 0) {
-        Add-ProgressLog "Selected user-data entries:"
+        Add-ProgressLog "選択されたユーザデータ項目:"
         foreach ($sp in $selectedEntries) { Add-ProgressLog "  - $sp" }
     }
     $script:MainForm.Refresh()
@@ -551,11 +551,13 @@ function Invoke-BackupStart {
 
     Add-ProgressLog ""
     Add-ProgressLog "=========================================="
-    Add-ProgressLog "Backup complete: $($result.Status)"
+    Add-ProgressLog "バックアップ完了: $(Get-LocalizedStatusLabel $result.Status)"
     Add-ProgressLog "$($result.Message)"
     foreach ($key in $result.SectionResults.Keys) {
         $r = $result.SectionResults[$key]
-        Add-ProgressLog ("  [{0,-10}] {1,-8} ({2} ms)" -f $key, $r.Status, $r.ElapsedMs)
+        # Per-section status uses the same Get-LocalizedStatusLabel so the
+        # overall and per-section labels stay consistent in the UI log.
+        Add-ProgressLog ("  [{0,-10}] {1,-8} ({2} ms)" -f $key, (Get-LocalizedStatusLabel $r.Status), $r.ElapsedMs)
         if ($r.InternalSectionDir) {
             Add-ProgressLog "             -> $($r.InternalSectionDir)"
         } elseif ($r.ExternalOutputDir) {
@@ -583,14 +585,14 @@ function Invoke-BackupStart {
     $bytesStr   = Format-Bytes    -Bytes $aggBytes
 
     Add-ProgressLog ""
-    Add-ProgressLog "Run summary:"
-    Add-ProgressLog ("  Elapsed   : {0}" -f $elapsedStr)
-    Add-ProgressLog ("  Data size : {0}" -f $bytesStr)
+    Add-ProgressLog "実行サマリ:"
+    Add-ProgressLog ("  経過時間 : {0}" -f $elapsedStr)
+    Add-ProgressLog ("  データ量 : {0}" -f $bytesStr)
     if ($aggFiles -gt 0 -or $aggDirs -gt 0) {
-        Add-ProgressLog ("  Files     : {0:N0} files, {1:N0} dirs" -f $aggFiles, $aggDirs)
+        Add-ProgressLog ("  ファイル : {0:N0} 件, ディレクトリ {1:N0} 件" -f $aggFiles, $aggDirs)
     }
     if ($aggEntries -gt 0) {
-        Add-ProgressLog ("  Entries   : {0}" -f $aggEntries)
+        Add-ProgressLog ("  項目数   : {0}" -f $aggEntries)
     }
 
     Set-ProgressFinished
@@ -599,24 +601,24 @@ function Invoke-BackupStart {
     # without staring at the Progress View. Modal MessageBox + form
     # Activate(); icon reflects Status (Success / Partial / Failed).
     $popupLines = @(
-        "Backup $($result.Status)"
+        "バックアップ $(Get-LocalizedStatusLabel $result.Status)"
         ""
-        "Elapsed   : $elapsedStr"
-        "Data size : $bytesStr"
+        "経過時間 : $elapsedStr"
+        "データ量 : $bytesStr"
     )
     if ($aggFiles -gt 0 -or $aggDirs -gt 0) {
-        $popupLines += "Files     : {0:N0} files, {1:N0} dirs" -f $aggFiles, $aggDirs
+        $popupLines += "ファイル : {0:N0} 件, ディレクトリ {1:N0} 件" -f $aggFiles, $aggDirs
     }
     if ($aggEntries -gt 0) {
-        $popupLines += "Entries   : $aggEntries"
+        $popupLines += "項目数   : $aggEntries"
     }
     if (-not [string]::IsNullOrWhiteSpace($result.AggregateDir)) {
         $popupLines += ""
-        $popupLines += "Written to:"
+        $popupLines += "保存先:"
         $popupLines += $result.AggregateDir
     }
     Show-CompletionPopup `
-        -Title  "Fabriq BackUper - Backup complete ($($result.Status))" `
+        -Title  "Fabriq BackUper - バックアップ完了 ($(Get-LocalizedStatusLabel $result.Status))" `
         -Body   ($popupLines -join "`n") `
         -Status $result.Status
 }

@@ -22,15 +22,15 @@ function New-RestoreView {
     $panel.BackColor = $script:bgForm
 
     # Phase 3C: same "close MainForm" semantics as backup_view.
-    $btnBack = New-StyledButton -Text "< Back" -X 16 -Y 10 -Width 80 -Height 28
+    $btnBack = New-StyledButton -Text "< 戻る" -X 16 -Y 10 -Width 80 -Height 28
     $btnBack.Add_Click({ $script:MainForm.Close() })
     $panel.Controls.Add($btnBack)
 
-    $title = New-StyledLabel -Text "Restore" -X 110 -Y 12 -Width 200 -Height 24 -Font $script:fontLarge
+    $title = New-StyledLabel -Text "リストア" -X 110 -Y 12 -Width 200 -Height 24 -Font $script:fontLarge
     $panel.Controls.Add($title)
 
     # ---- Source row ---------------------------------------
-    $tsLbl = New-StyledLabel -Text "Backup Timestamp (hostlist-driven) or Browse for arbitrary backup folder" `
+    $tsLbl = New-StyledLabel -Text "バックアップ日時 (hostlist 連携) または任意フォルダを参照" `
         -X 24 -Y 44 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($tsLbl)
 
@@ -43,17 +43,17 @@ function New-RestoreView {
     $script:RestoreTimestampCombo = $combo
     $panel.Controls.Add($combo)
 
-    $btnBrowse = New-StyledButton -Text "Browse for backup..." -X 494 -Y 64 -Width 170 -Height 28
+    $btnBrowse = New-StyledButton -Text "バックアップを参照..." -X 494 -Y 64 -Width 170 -Height 28
     $btnBrowse.Add_Click({ Invoke-RestoreBrowse })
     $panel.Controls.Add($btnBrowse)
 
-    $btnUncConnect = New-StyledButton -Text "Connect UNC..." -X 670 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
+    $btnUncConnect = New-StyledButton -Text "UNC 接続..." -X 670 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
     $btnUncConnect.Add_Click({
         $unc = Show-UncConnectDialog
         if (-not [string]::IsNullOrWhiteSpace($unc)) {
             [System.Windows.Forms.MessageBox]::Show(
-                "Connected to:`n$unc`n`nNow click [Browse for backup...] and navigate to the actual backup folder under this share.",
-                "UNC Connected",
+                "接続成功:`n$unc`n`n続けて [バックアップを参照...] をクリックし、この共有内の実際のバックアップフォルダを選択してください。",
+                "UNC 接続成功",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         }
@@ -67,7 +67,7 @@ function New-RestoreView {
     $panel.Controls.Add($script:RestoreManifestLabel)
 
     # ---- Sections row -------------------------------------
-    $sectionLbl = New-StyledLabel -Text "Sections" `
+    $sectionLbl = New-StyledLabel -Text "セクション" `
         -X 24 -Y 150 -Width 240 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($sectionLbl)
     $script:RestoreSectionContainer = New-Object System.Windows.Forms.Panel
@@ -77,7 +77,7 @@ function New-RestoreView {
     $panel.Controls.Add($script:RestoreSectionContainer)
 
     # ---- Target user row ----------------------------------
-    $userLbl = New-StyledLabel -Text "Target user (resolves %USERPROFILE% etc. on restore):" `
+    $userLbl = New-StyledLabel -Text "対象ユーザ (リストア時の %USERPROFILE% 等を解決):" `
         -X 24 -Y 206 -Width 360 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($userLbl)
     $userCombo = New-StyledComboBox -X 386 -Y 202 -Width 260 -Height 24
@@ -85,14 +85,14 @@ function New-RestoreView {
     $panel.Controls.Add($userCombo)
 
     # ---- Printer list row ---------------------------------
-    $pLbl = New-StyledLabel -Text "Printers in this backup (uncheck to exclude)" `
+    $pLbl = New-StyledLabel -Text "このバックアップ内のプリンタ (除外するチェックを外す)" `
         -X 24 -Y 238 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($pLbl)
 
-    $btnSelAll = New-StyledButton -Text "Select All" -X 620 -Y 234 -Width 96 -Height 24
+    $btnSelAll = New-StyledButton -Text "全選択" -X 620 -Y 234 -Width 96 -Height 24
     $btnSelAll.Add_Click({ Set-AllRestorePrinterChecks $true })
     $panel.Controls.Add($btnSelAll)
-    $btnNone = New-StyledButton -Text "None" -X 722 -Y 234 -Width 80 -Height 24
+    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 234 -Width 80 -Height 24
     $btnNone.Add_Click({ Set-AllRestorePrinterChecks $false })
     $panel.Controls.Add($btnNone)
 
@@ -106,20 +106,20 @@ function New-RestoreView {
     $colCk.HeaderText = ""; $colCk.Width = 36; $colCk.Name = "Check"
     [void]$grid.Columns.Add($colCk)
     $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colName.HeaderText = "Printer Name"; $colName.Width = 320; $colName.Name = "Name"; $colName.ReadOnly = $true
+    $colName.HeaderText = "プリンタ名"; $colName.Width = 320; $colName.Name = "Name"; $colName.ReadOnly = $true
     [void]$grid.Columns.Add($colName)
     $colDriver = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colDriver.HeaderText = "Driver"; $colDriver.Width = 280; $colDriver.Name = "Driver"; $colDriver.ReadOnly = $true
+    $colDriver.HeaderText = "ドライバ"; $colDriver.Width = 280; $colDriver.Name = "Driver"; $colDriver.ReadOnly = $true
     [void]$grid.Columns.Add($colDriver)
     $colPort = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colPort.HeaderText = "Port"; $colPort.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
+    $colPort.HeaderText = "ポート"; $colPort.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     $colPort.Name = "Port"; $colPort.ReadOnly = $true
     [void]$grid.Columns.Add($colPort)
     $panel.Controls.Add($grid)
     $script:RestorePrinterGrid = $grid
 
     # ---- Start button -------------------------------------
-    $btnStart = New-StyledButton -Text "Start Restore" -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAdd
+    $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAdd
     $btnStart.ForeColor = $script:fgWhite
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-RestoreStart })
@@ -141,7 +141,7 @@ function Show-RestoreView {
         # Defensive: Phase 3C pre-selects host via session_form, so this
         # branch should not trigger in normal flow. If it does, close the
         # MainForm rather than navigating to the deleted ModeSelectView.
-        [System.Windows.Forms.MessageBox]::Show("No host selected.", "Fabriq BackUper",
+        [System.Windows.Forms.MessageBox]::Show("ホストが選択されていません。", "Fabriq BackUper",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         $script:MainForm.Close()
@@ -153,7 +153,7 @@ function Show-RestoreView {
     $timestamps = Get-BackupTimestamps -BackuperRoot $script:BackuperRoot -OldPcName $script:CurrentHost.OldPCname
     foreach ($ts in $timestamps) { [void]$combo.Items.Add($ts) }
     if ($timestamps.Count -gt 0) { $combo.SelectedIndex = 0 }
-    else { $script:RestoreManifestLabel.Text = "(no local backups found for $($script:CurrentHost.OldPCname); use Browse for backup if your backup is elsewhere)" }
+    else { $script:RestoreManifestLabel.Text = "($($script:CurrentHost.OldPCname) のローカルバックアップが見つかりません。別の場所にある場合は [バックアップを参照] を使用してください)" }
 
     $cont = $script:RestoreSectionContainer
     $cont.Controls.Clear()
@@ -190,13 +190,13 @@ function Get-SelectedRestoreUserProfilePath {
 
 function Invoke-RestoreBrowse {
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "Select backup folder (must contain manifest.json). For UNC use [Connect UNC...] first to authenticate."
+    $dlg.Description = "バックアップフォルダを選択 (manifest.json を含むこと)。UNC の場合は先に [UNC 接続...] で認証してください。"
     if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
     $chosen = $dlg.SelectedPath
 
     if (-not (Resolve-UncAccess -Path $chosen)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Cannot reach folder: $chosen`n`nIf this is a UNC share, click [Connect UNC...] first.",
+            "フォルダに接続できません: $chosen`n`nUNC 共有の場合は先に [UNC 接続...] をクリックしてください。",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         return
@@ -205,7 +205,7 @@ function Invoke-RestoreBrowse {
     $mfPath = Join-Path $chosen 'manifest.json'
     if (-not (Test-Path $mfPath)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "manifest.json not found in:`n$chosen",
+            "manifest.json が見つかりません:`n$chosen",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -214,14 +214,14 @@ function Invoke-RestoreBrowse {
     try { $agg = Get-Content -Path $mfPath -Raw | ConvertFrom-Json }
     catch {
         [System.Windows.Forms.MessageBox]::Show(
-            "Failed to parse manifest.json: $($_.Exception.Message)",
+            "manifest.json の解析に失敗しました: $($_.Exception.Message)",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         return
     }
     if ($agg.manifestType -ne 'fabriq-backuper-snapshot') {
         [System.Windows.Forms.MessageBox]::Show(
-            "Unexpected manifestType: $($agg.manifestType)",
+            "想定外の manifestType: $($agg.manifestType)",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -322,7 +322,7 @@ function Update-RestoreSelection {
     $aggregatePath = Join-Path $aggregateDir 'manifest.json'
 
     if (-not (Test-Path $aggregatePath)) {
-        $script:RestoreManifestLabel.Text = "(manifest.json not found in $ts)"
+        $script:RestoreManifestLabel.Text = "($ts に manifest.json が見つかりません)"
         return
     }
     try {
@@ -343,7 +343,7 @@ function Invoke-RestoreStart {
     if (-not $useExplicit) {
         if ($null -eq $script:CurrentHost) { return }
         if ($null -eq $script:RestoreTimestampCombo -or $script:RestoreTimestampCombo.SelectedIndex -lt 0) {
-            [System.Windows.Forms.MessageBox]::Show("Select a backup timestamp or use [Browse for backup...].", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBox]::Show("バックアップ日時を選択するか [バックアップを参照...] を使用してください。", "Fabriq BackUper",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
@@ -356,7 +356,7 @@ function Invoke-RestoreStart {
         if ($null -ne $cb -and $cb.Checked) { $picked += $s }
     }
     if ($picked.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("No sections selected.", "Fabriq BackUper",
+        [System.Windows.Forms.MessageBox]::Show("セクションが選択されていません。", "Fabriq BackUper",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -397,24 +397,24 @@ function Invoke-RestoreStart {
     }
 
     $userSummary = if ([string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
-        "Target user: (current process)"
+        "対象ユーザ: (現在のプロセス)"
     } else {
-        "Target user: $targetUserProfilePath"
+        "対象ユーザ: $targetUserProfilePath"
     }
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Restore from:`n  $sourceLabel`n`nSections: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nPrinters: $($selectedPrinters.Count) selected`n$userSummary",
-        "Fabriq BackUper - Confirm",
+        "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary",
+        "Fabriq BackUper - 確認",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question
     )
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
     Switch-View 'Progress'
-    Initialize-ProgressView -Title "Restore in progress..."
-    Add-ProgressLog "Restoring from: $sourceLabel"
+    Initialize-ProgressView -Title "リストア実行中..."
+    Add-ProgressLog "リストア元: $sourceLabel"
     Add-ProgressLog $userSummary
     if ($selectedPrinters.Count -gt 0) {
-        Add-ProgressLog "Selected printers: $($selectedPrinters -join ', ')"
+        Add-ProgressLog "選択プリンタ: $($selectedPrinters -join ', ')"
     }
     $script:MainForm.Refresh()
 
@@ -439,11 +439,11 @@ function Invoke-RestoreStart {
 
     Add-ProgressLog ""
     Add-ProgressLog "=========================================="
-    Add-ProgressLog "Restore complete: $($result.Status)"
+    Add-ProgressLog "リストア完了: $(Get-LocalizedStatusLabel $result.Status)"
     Add-ProgressLog "$($result.Message)"
     foreach ($key in $result.SectionResults.Keys) {
         $r = $result.SectionResults[$key]
-        Add-ProgressLog ("  [{0,-10}] {1,-8} ({2} ms)" -f $key, $r.Status, $r.ElapsedMs)
+        Add-ProgressLog ("  [{0,-10}] {1,-8} ({2} ms)" -f $key, (Get-LocalizedStatusLabel $r.Status), $r.ElapsedMs)
     }
 
     # ---- Run summary (Phase 2.7.4) --------------------------
@@ -463,30 +463,30 @@ function Invoke-RestoreStart {
     $elapsedStr = Format-Duration -Span $overallSw.Elapsed
 
     Add-ProgressLog ""
-    Add-ProgressLog "Run summary:"
-    Add-ProgressLog ("  Elapsed : {0}" -f $elapsedStr)
+    Add-ProgressLog "実行サマリ:"
+    Add-ProgressLog ("  経過時間 : {0}" -f $elapsedStr)
     if (($aggSuccess + $aggSkip + $aggFail) -gt 0) {
-        Add-ProgressLog ("  Entries : {0} success / {1} skip / {2} fail" -f $aggSuccess, $aggSkip, $aggFail)
+        Add-ProgressLog ("  項目     : 成功 {0} / スキップ {1} / 失敗 {2}" -f $aggSuccess, $aggSkip, $aggFail)
     }
 
     Set-ProgressFinished
 
     # Phase 2.7.5: completion popup (same pattern as Backup).
     $popupLines = @(
-        "Restore $($result.Status)"
+        "リストア $(Get-LocalizedStatusLabel $result.Status)"
         ""
-        "Elapsed : $elapsedStr"
+        "経過時間 : $elapsedStr"
     )
     if (($aggSuccess + $aggSkip + $aggFail) -gt 0) {
-        $popupLines += "Entries : $aggSuccess success / $aggSkip skip / $aggFail fail"
+        $popupLines += "項目 : 成功 $aggSuccess / スキップ $aggSkip / 失敗 $aggFail"
     }
     if (-not [string]::IsNullOrWhiteSpace($result.AggregateDir)) {
         $popupLines += ""
-        $popupLines += "Restored from:"
+        $popupLines += "リストア元:"
         $popupLines += $result.AggregateDir
     }
     Show-CompletionPopup `
-        -Title  "Fabriq BackUper - Restore complete ($($result.Status))" `
+        -Title  "Fabriq BackUper - リストア完了 ($(Get-LocalizedStatusLabel $result.Status))" `
         -Body   ($popupLines -join "`n") `
         -Status $result.Status
 }

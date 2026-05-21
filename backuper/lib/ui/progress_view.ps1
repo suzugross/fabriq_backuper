@@ -25,7 +25,7 @@ function New-ProgressView {
     $panel = New-Object System.Windows.Forms.Panel
     $panel.BackColor = $script:bgForm
 
-    $script:ProgressTitle = New-StyledLabel -Text "In progress..." `
+    $script:ProgressTitle = New-StyledLabel -Text "実行中..." `
         -X 24 -Y 14 -Width 800 -Height 28 -Font $script:fontLarge
     $panel.Controls.Add($script:ProgressTitle)
 
@@ -33,7 +33,7 @@ function New-ProgressView {
     # log so an operator can see "Documents done, Chrome in progress,
     # Desktop pending" at a glance and start verifying restored apps
     # the moment their entry flips to Done.
-    $entryLbl = New-StyledLabel -Text "Entry status" `
+    $entryLbl = New-StyledLabel -Text "項目別の状態" `
         -X 24 -Y 46 -Width 400 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($entryLbl)
 
@@ -45,13 +45,13 @@ function New-ProgressView {
     $entries.ColumnHeadersHeight = 24
 
     $colStatus = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colStatus.HeaderText = "Status"; $colStatus.Width = 130; $colStatus.Name = "Status"
+    $colStatus.HeaderText = "状態"; $colStatus.Width = 130; $colStatus.Name = "Status"
     $colStatus.ReadOnly = $true
     $colStatus.DefaultCellStyle.Font = $script:fontSemiBold
     [void]$entries.Columns.Add($colStatus)
 
     $colLabel = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colLabel.HeaderText = "Entry"; $colLabel.Name = "Label"; $colLabel.ReadOnly = $true
+    $colLabel.HeaderText = "項目"; $colLabel.Name = "Label"; $colLabel.ReadOnly = $true
     $colLabel.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     [void]$entries.Columns.Add($colLabel)
 
@@ -59,7 +59,7 @@ function New-ProgressView {
     $global:Fbp_ProgressEntriesGrid = $entries
 
     # Streaming log (Phase 2.7.4) — shrunk to make room for the checklist.
-    $logLbl = New-StyledLabel -Text "Detail log" `
+    $logLbl = New-StyledLabel -Text "詳細ログ" `
         -X 24 -Y 226 -Width 400 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($logLbl)
 
@@ -78,7 +78,7 @@ function New-ProgressView {
     # closes the MainForm (= ends the .exe session). The operator re-
     # launches Fabriq_BackUper.exe to start a new session with a fresh
     # passphrase / host / mode choice.
-    $btnDone = New-StyledButton -Text "Done" `
+    $btnDone = New-StyledButton -Text "完了" `
         -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAccent
     $btnDone.Font = $script:fontLarge
     $btnDone.Enabled = $false
@@ -90,7 +90,7 @@ function New-ProgressView {
 }
 
 function Initialize-ProgressView {
-    param([string]$Title = "In progress...")
+    param([string]$Title = "実行中...")
     if ($null -ne $script:ProgressTitle)        { $script:ProgressTitle.Text = $Title }
     if ($null -ne $global:Fbp_ProgressLogBox)   { $global:Fbp_ProgressLogBox.Text = "" }
     if ($null -ne $script:ProgressDoneBtn)      { $script:ProgressDoneBtn.Enabled = $false }
@@ -114,7 +114,7 @@ function Initialize-ProgressEntries {
     foreach ($e in $Entries) {
         if ($null -eq $e) { continue }
         $label = if ($e.Label) { "$($e.Label)" } else { '' }
-        $idx = $global:Fbp_ProgressEntriesGrid.Rows.Add('[ ] Pending', $label)
+        $idx = $global:Fbp_ProgressEntriesGrid.Rows.Add('[ ] 待機中', $label)
         $global:Fbp_ProgressEntriesGrid.Rows[$idx].Tag = "$($e.Id)"
     }
     if (([System.Windows.Forms.Application] -as [type])) {
@@ -131,12 +131,12 @@ function Set-EntryStatus {
     )
     if ($null -eq $global:Fbp_ProgressEntriesGrid) { return }
     $marker = switch ($Status) {
-        'Pending'    { '[ ] Pending' }
-        'InProgress' { '[*] In progress...' }
-        'Done'       { '[v] Done' }
-        'Partial'    { '[!] Partial' }
-        'Failed'     { '[x] Failed' }
-        'Skipped'    { '[-] Skipped' }
+        'Pending'    { '[ ] 待機中' }
+        'InProgress' { '[*] 実行中...' }
+        'Done'       { '[v] 完了' }
+        'Partial'    { '[!] 部分成功' }
+        'Failed'     { '[x] 失敗' }
+        'Skipped'    { '[-] スキップ' }
     }
     $color = switch ($Status) {
         'Done'       { [System.Drawing.Color]::FromArgb(28, 128, 28) }
@@ -171,7 +171,7 @@ function Add-ProgressLog {
 }
 
 function Set-ProgressFinished {
-    if ($null -ne $script:ProgressTitle)   { $script:ProgressTitle.Text = "Finished" }
+    if ($null -ne $script:ProgressTitle)   { $script:ProgressTitle.Text = "完了しました" }
     if ($null -ne $script:ProgressDoneBtn) { $script:ProgressDoneBtn.Enabled = $true }
 }
 
@@ -228,3 +228,21 @@ function Show-CompletionPopup {
 # Hook called by Switch-View when entering this view (no-op,
 # caller is expected to initialize via Initialize-ProgressView).
 function Show-ProgressView { }
+
+# Map internal Status enum (kept in English for manifest schema
+# compatibility / ValidateSet contracts) to a Japanese display label.
+# Used by Set-EntryStatus markers, Show-CompletionPopup titles, and
+# Add-ProgressLog wrappers in backup_view / restore_view.
+function Get-LocalizedStatusLabel {
+    param([Parameter(Mandatory)][string]$Status)
+    switch ($Status) {
+        'Success'    { '成功' }
+        'Partial'    { '部分成功' }
+        'Failed'     { '失敗' }
+        'Skipped'    { 'スキップ' }
+        'Done'       { '完了' }
+        'Pending'    { '待機中' }
+        'InProgress' { '実行中' }
+        default      { $Status }
+    }
+}

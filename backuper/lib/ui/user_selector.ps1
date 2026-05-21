@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - User Profile Selector Helpers (Phase 2.7)
 # Enumerate Win32_UserProfile (non-Special), detect the
 # logged-on interactive user (which may differ from the
@@ -40,8 +40,8 @@ function Get-UserProfileList {
             $isLoggedOn = (-not [string]::IsNullOrWhiteSpace($loggedOnPath)) -and `
                           ($p.LocalPath -ieq $loggedOnPath)
             $tag = @()
-            if ($isLoggedOn) { $tag += 'logged on' }
-            if ($isCurrent)  { $tag += 'current process' }
+            if ($isLoggedOn) { $tag += 'ログオン中' }
+            if ($isCurrent)  { $tag += '現在のプロセス' }
             $label = if ($tag.Count -gt 0) { "$userName  ($($tag -join ', '))" } else { $userName }
             $rows += [PSCustomObject]@{
                 UserName    = $userName

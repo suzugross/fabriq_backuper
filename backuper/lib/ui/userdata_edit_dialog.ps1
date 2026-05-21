@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - Userdata Edit Dialog (Phase 2.7)
 # Modal dialog for Add / Edit of a userdata_list.csv entry.
 # Returns a [PSCustomObject] mirroring the CSV row schema
@@ -19,7 +19,7 @@ function Show-UserdataEditDialog {
     $script:_userdataEditResult = $null
 
     $isEdit = $null -ne $Entry
-    $title  = if ($isEdit) { 'Edit userdata entry' } else { 'Add userdata entry' }
+    $title  = if ($isEdit) { 'ユーザデータ項目の編集' } else { 'ユーザデータ項目の追加' }
 
     # Dialog width 720 (Phase 2.7.1: previous 640 clipped the
     # IncludeAcl checkbox and the env-var hint text on the right).
@@ -31,7 +31,7 @@ function Show-UserdataEditDialog {
     if ($null -ne $script:MainForm) { $dialog.Owner = $script:MainForm }
 
     # --- SourcePath -------------------------------------------------
-    $lblPath = New-StyledLabel -Text 'Source Path:' -X 20 -Y 22 -Width 110 -Height 20 -Font $script:fontBold
+    $lblPath = New-StyledLabel -Text '取得元パス:' -X 20 -Y 22 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblPath)
     $txtPath = New-Object System.Windows.Forms.TextBox
     $txtPath.Location = New-Object System.Drawing.Point(140, 20)
@@ -39,18 +39,20 @@ function Show-UserdataEditDialog {
     Set-TextBoxStyle -TextBox $txtPath
     $dialog.Controls.Add($txtPath)
 
-    $btnBrowseDir = New-StyledButton -Text 'Folder...' -X 548 -Y 19 -Width 72 -Height 26
+    $btnBrowseDir = New-StyledButton -Text 'フォルダ...' -X 548 -Y 19 -Width 72 -Height 26
     $dialog.Controls.Add($btnBrowseDir)
-    $btnBrowseFile = New-StyledButton -Text 'File...' -X 624 -Y 19 -Width 60 -Height 26
+    # ファイル... is wider than File... (4 全角 chars ≈ 8 char widths > 60 px),
+    # widened from 60 to 70 px and shifted left edge to keep right margin.
+    $btnBrowseFile = New-StyledButton -Text 'ファイル...' -X 624 -Y 19 -Width 70 -Height 26
     $dialog.Controls.Add($btnBrowseFile)
 
     $hintLbl = New-StyledLabel `
-        -Text 'Env vars: %USERPROFILE% / %APPDATA% / %LOCALAPPDATA% / %USERNAME%' `
+        -Text '環境変数: %USERPROFILE% / %APPDATA% / %LOCALAPPDATA% / %USERNAME%' `
         -X 140 -Y 48 -Width 544 -Height 16 -FgColor $script:fgDim
     $dialog.Controls.Add($hintLbl)
 
     # --- ExcludePattern --------------------------------------------
-    $lblExcl = New-StyledLabel -Text 'Exclude Pattern:' -X 20 -Y 80 -Width 110 -Height 20 -Font $script:fontBold
+    $lblExcl = New-StyledLabel -Text '除外パターン:' -X 20 -Y 80 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblExcl)
     $txtExcl = New-Object System.Windows.Forms.TextBox
     $txtExcl.Location = New-Object System.Drawing.Point(140, 78)
@@ -59,25 +61,28 @@ function Show-UserdataEditDialog {
     $dialog.Controls.Add($txtExcl)
 
     $exclHint = New-StyledLabel `
-        -Text 'Semicolon-separated globs (e.g. *.tmp;~$*;Cache/). Suffix `/` to match directories.' `
+        -Text 'セミコロン区切りの glob (例: *.tmp;~$*;Cache/)。末尾 `/` でディレクトリ指定。' `
         -X 140 -Y 106 -Width 544 -Height 16 -FgColor $script:fgDim
     $dialog.Controls.Add($exclHint)
 
     # --- OnConflict + Recurse + IncludeAcl -------------------------
-    $lblConflict = New-StyledLabel -Text 'On Conflict:' -X 20 -Y 138 -Width 110 -Height 20 -Font $script:fontBold
+    $lblConflict = New-StyledLabel -Text '競合時:' -X 20 -Y 138 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblConflict)
+    # ComboBox items stay as 'skip' / 'overwrite' / 'rename' — these are CSV
+    # serialization values written to userdata_list.csv's OnConflict column,
+    # not display-only strings. Changing them would break the CSV round-trip.
     $cmbConflict = New-StyledComboBox -X 140 -Y 136 -Width 160 -Height 24
     $cmbConflict.Items.AddRange(@('skip', 'overwrite', 'rename'))
     $dialog.Controls.Add($cmbConflict)
 
-    $cbRecurse = New-StyledCheckBox -Text 'Recurse subdirectories' -X 320 -Y 138 -Width 170 -Height 22
+    $cbRecurse = New-StyledCheckBox -Text 'サブディレクトリも再帰' -X 320 -Y 138 -Width 170 -Height 22
     $dialog.Controls.Add($cbRecurse)
 
-    $cbAcl = New-StyledCheckBox -Text 'Include ACL (/COPYALL)' -X 500 -Y 138 -Width 184 -Height 22
+    $cbAcl = New-StyledCheckBox -Text 'ACL を含める (/COPYALL)' -X 500 -Y 138 -Width 184 -Height 22
     $dialog.Controls.Add($cbAcl)
 
     # --- Description -----------------------------------------------
-    $lblDesc = New-StyledLabel -Text 'Description:' -X 20 -Y 178 -Width 110 -Height 20 -Font $script:fontBold
+    $lblDesc = New-StyledLabel -Text '説明:' -X 20 -Y 178 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblDesc)
     $txtDesc = New-Object System.Windows.Forms.TextBox
     $txtDesc.Location = New-Object System.Drawing.Point(140, 176)
@@ -86,7 +91,7 @@ function Show-UserdataEditDialog {
     $dialog.Controls.Add($txtDesc)
 
     # --- Enabled flag ----------------------------------------------
-    $cbEnabled = New-StyledCheckBox -Text 'Enabled (selected for backup/restore)' -X 140 -Y 212 -Width 320 -Height 22
+    $cbEnabled = New-StyledCheckBox -Text '有効 (バックアップ/リストア対象)' -X 140 -Y 212 -Width 320 -Height 22
     $dialog.Controls.Add($cbEnabled)
 
     # --- Pre-populate ----------------------------------------------
@@ -112,13 +117,13 @@ function Show-UserdataEditDialog {
     $btnOk = New-StyledButton -Text 'OK' -X 470 -Y 270 -Width 100 -Height 32 -BgColor $script:bgAccent
     $btnOk.Font = $script:fontBold
     $dialog.Controls.Add($btnOk)
-    $btnCancel = New-StyledButton -Text 'Cancel' -X 580 -Y 270 -Width 104 -Height 32
+    $btnCancel = New-StyledButton -Text 'キャンセル' -X 580 -Y 270 -Width 104 -Height 32
     $dialog.Controls.Add($btnCancel)
 
     # --- Browse handlers -------------------------------------------
     $btnBrowseDir.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
-        $fbd.Description = 'Select source folder'
+        $fbd.Description = '取得元フォルダを選択'
         # Seed initial folder from the current text if it resolves locally.
         try {
             $seed = $txtPath.Text
@@ -145,7 +150,7 @@ function Show-UserdataEditDialog {
 
     $btnBrowseFile.Add_Click({
         $ofd = New-Object System.Windows.Forms.OpenFileDialog
-        $ofd.Title = 'Select source file'
+        $ofd.Title = '取得元ファイルを選択'
         $ofd.CheckFileExists = $true
         $ofd.Multiselect = $false
         try {
@@ -175,7 +180,7 @@ function Show-UserdataEditDialog {
     $btnOk.Add_Click({
         $sp = $txtPath.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($sp)) {
-            [System.Windows.Forms.MessageBox]::Show('Source Path is required.', 'Validation',
+            [System.Windows.Forms.MessageBox]::Show('取得元パスは必須です。', '入力チェック',
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - UNC Path Helper (Phase 2.4)
 # Test reachability of a UNC path, prompt for credentials via
 # Get-Credential (Windows-standard) and map via New-PSDrive when
@@ -24,7 +24,7 @@ function Connect-UncWithCredentials {
     # Extract \\server\share for the credential target
     $shareRoot = if ($UncPath -match '^(\\\\[^\\]+\\[^\\]+)') { $Matches[1] } else { $UncPath }
 
-    $cred = Get-Credential -Message "Enter credentials for $shareRoot"
+    $cred = Get-Credential -Message "$shareRoot への認証情報を入力してください"
     if ($null -eq $cred) { return $false }
 
     # Unique PSDrive name (avoid collision with prior mappings)
@@ -39,7 +39,7 @@ function Connect-UncWithCredentials {
         return $true
     } catch {
         [System.Windows.Forms.MessageBox]::Show(
-            "Failed to map ${shareRoot}: $($_.Exception.Message)",
+            "${shareRoot} のマウントに失敗しました: $($_.Exception.Message)",
             "Fabriq BackUper",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error

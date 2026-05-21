@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper - UNC Connect Dialog (Phase 2.6)
 # Modal dialog: UNC path + Username + Password.
 # On Connect, attempts New-PSDrive with credentials and probes
@@ -12,14 +12,14 @@ function Show-UncConnectDialog {
     $script:_uncConnectResult = $null
 
     $dialog = New-Object System.Windows.Forms.Form
-    Set-FormStyle -Form $dialog -Title "Connect to UNC share" -Width 540 -Height 270
+    Set-FormStyle -Form $dialog -Title "UNC 共有へ接続" -Width 540 -Height 270
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
     $dialog.StartPosition = "CenterParent"
     if ($null -ne $script:MainForm) { $dialog.Owner = $script:MainForm }
 
     # UNC Path
-    $lblPath = New-StyledLabel -Text "UNC Path:" -X 20 -Y 24 -Width 110 -Height 20 -Font $script:fontBold
+    $lblPath = New-StyledLabel -Text "UNC パス:" -X 20 -Y 24 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblPath)
     $txtPath = New-Object System.Windows.Forms.TextBox
     $txtPath.Location = New-Object System.Drawing.Point(140, 22)
@@ -28,12 +28,12 @@ function Show-UncConnectDialog {
     $txtPath.Text = $InitialPath
     $dialog.Controls.Add($txtPath)
 
-    $hintLbl = New-StyledLabel -Text "Example: \\nas01\migrate\backups" `
+    $hintLbl = New-StyledLabel -Text "例: \\nas01\migrate\backups" `
         -X 140 -Y 50 -Width 370 -Height 16 -FgColor $script:fgDim
     $dialog.Controls.Add($hintLbl)
 
     # Username
-    $lblUser = New-StyledLabel -Text "Username:" -X 20 -Y 84 -Width 110 -Height 20 -Font $script:fontBold
+    $lblUser = New-StyledLabel -Text "ユーザ名:" -X 20 -Y 84 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblUser)
     $txtUser = New-Object System.Windows.Forms.TextBox
     $txtUser.Location = New-Object System.Drawing.Point(140, 82)
@@ -41,12 +41,12 @@ function Show-UncConnectDialog {
     Set-TextBoxStyle -TextBox $txtUser
     $dialog.Controls.Add($txtUser)
 
-    $userHint = New-StyledLabel -Text "Format: DOMAIN\user  or  user@domain" `
+    $userHint = New-StyledLabel -Text "書式: DOMAIN\user  または  user@domain" `
         -X 140 -Y 110 -Width 370 -Height 16 -FgColor $script:fgDim
     $dialog.Controls.Add($userHint)
 
     # Password
-    $lblPwd = New-StyledLabel -Text "Password:" -X 20 -Y 142 -Width 110 -Height 20 -Font $script:fontBold
+    $lblPwd = New-StyledLabel -Text "パスワード:" -X 20 -Y 142 -Width 110 -Height 20 -Font $script:fontBold
     $dialog.Controls.Add($lblPwd)
     $txtPwd = New-Object System.Windows.Forms.TextBox
     $txtPwd.Location = New-Object System.Drawing.Point(140, 140)
@@ -56,11 +56,11 @@ function Show-UncConnectDialog {
     $dialog.Controls.Add($txtPwd)
 
     # Buttons
-    $btnConnect = New-StyledButton -Text "Connect" -X 280 -Y 190 -Width 110 -Height 32 -BgColor $script:bgAccent
+    $btnConnect = New-StyledButton -Text "接続" -X 280 -Y 190 -Width 110 -Height 32 -BgColor $script:bgAccent
     $btnConnect.Font = $script:fontBold
     $dialog.Controls.Add($btnConnect)
 
-    $btnCancel = New-StyledButton -Text "Cancel" -X 400 -Y 190 -Width 110 -Height 32
+    $btnCancel = New-StyledButton -Text "キャンセル" -X 400 -Y 190 -Width 110 -Height 32
     $dialog.Controls.Add($btnCancel)
 
     $btnConnect.Add_Click({
@@ -69,19 +69,19 @@ function Show-UncConnectDialog {
         $pwdRaw = $txtPwd.Text
 
         if ([string]::IsNullOrWhiteSpace($uncPath)) {
-            [System.Windows.Forms.MessageBox]::Show("Please enter a UNC path.", "Connect",
+            [System.Windows.Forms.MessageBox]::Show("UNC パスを入力してください。", "接続",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
         }
         if (-not $uncPath.StartsWith('\\')) {
-            [System.Windows.Forms.MessageBox]::Show("Not a UNC path (must start with `\\`).", "Connect",
+            [System.Windows.Forms.MessageBox]::Show("UNC パスではありません (`\\` で始まる必要があります)。", "接続",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
         }
         if ([string]::IsNullOrWhiteSpace($userName) -or [string]::IsNullOrWhiteSpace($pwdRaw)) {
-            [System.Windows.Forms.MessageBox]::Show("Please enter username and password.", "Connect",
+            [System.Windows.Forms.MessageBox]::Show("ユーザ名とパスワードを入力してください。", "接続",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
@@ -109,15 +109,15 @@ function Show-UncConnectDialog {
             }
             else {
                 [System.Windows.Forms.MessageBox]::Show(
-                    "Authenticated successfully but the path is not reachable:`n$uncPath",
-                    "Connect", [System.Windows.Forms.MessageBoxButtons]::OK,
+                    "認証は成功しましたがパスに接続できません:`n$uncPath",
+                    "接続", [System.Windows.Forms.MessageBoxButtons]::OK,
                     [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             }
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show(
-                "Connection failed:`n$($_.Exception.Message)",
-                "Connect", [System.Windows.Forms.MessageBoxButtons]::OK,
+                "接続失敗:`n$($_.Exception.Message)",
+                "接続", [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     })

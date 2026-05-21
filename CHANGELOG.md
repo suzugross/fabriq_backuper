@@ -15,6 +15,32 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.14.0: WinForms UI 文言の全面的な日本語化。Status enum 日本語
+  マッピング関数 `Get-LocalizedStatusLabel` を `backuper/lib/ui/progress_view.ps1`
+  に新規追加。Set-EntryStatus のマーカー文字列、Show-CompletionPopup のタイトル、
+  backup_view / restore_view の Add-ProgressLog ラッパー部分などから利用。
+
+### Changed
+- backuper v0.14.0: UI 文言を日本語化。対象は WinForms UI 全体 (main_form,
+  backup_view, restore_view, progress_view, userdata_edit_dialog,
+  unc_connect_dialog, unc_helper, user_selector) と outlook_pop restore が
+  生成する `RESTORE_INSTRUCTIONS.txt` / `_account_settings.txt` 本文 + 完了ポップアップ。
+  - manifest schema / section interface / DataGridView `.Name` / ValidateSet /
+    CSV column 名 / hostlist.csv の `OldPCname` / `NewPCname` ヘッダ表示
+    / aggregate manifest 診断ラベル ("aggregate manifest | collectedAt=...")
+    / section script の console output (Show-Info 等) は変更なし
+  - userdata_edit_dialog の `OnConflict` ComboBox items (`skip`/`overwrite`
+    /`rename`) は CSV シリアライズ値のため英語維持
+  - section script (printer/userdata/outlook_pop の backup.ps1) の
+    Add-ProgressLog 引数は英語維持、engine 側 (backup_view / restore_view) で
+    operator 向けの主要メッセージのみ翻訳
+  - 日本語追加に伴い unc_helper / unc_connect_dialog / userdata_edit_dialog /
+    user_selector / outlook_pop\restore.ps1 に UTF-8 BOM を付与 (PS5.1 が
+    BOM なし UTF-8 の日本語を ANSI として誤解釈するため)
+  - `ファイル...` ボタンを `File...` (60px) から日本語化のため幅 70px に拡張
+    ([userdata_edit_dialog.ps1](backuper/lib/ui/userdata_edit_dialog.ps1))
+
 ### Changed
 - backuper v0.13.0: fabriq main (`e:\fabriq\apps\fabriq_backuper\`) から本 repo
   (`E:\fabriq_backuper\`) に分離独立。fabriq_checksheet と同形の code-detached +

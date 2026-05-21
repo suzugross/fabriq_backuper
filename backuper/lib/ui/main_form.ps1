@@ -36,13 +36,13 @@ function Switch-View {
 function Update-HostHeader {
     if ($null -ne $script:HostLabel) {
         if ($null -eq $script:CurrentHost) {
-            $script:HostLabel.Text = "Host: (not selected)"
+            $script:HostLabel.Text = "対象ホスト: (未選択)"
         } else {
             $newName = if ($script:CurrentHost.PSObject.Properties.Name -contains 'NewPCname') {
                 $script:CurrentHost.NewPCname
             } else { '' }
             $suffix = if (-not [string]::IsNullOrWhiteSpace($newName)) { " -> $newName" } else { '' }
-            $script:HostLabel.Text = "Host: $($script:CurrentHost.OldPCname)$suffix"
+            $script:HostLabel.Text = "対象ホスト: $($script:CurrentHost.OldPCname)$suffix"
         }
     }
 }
@@ -69,8 +69,8 @@ function Start-FabriqBackuperGui {
     $script:Hostlist = @(Get-FabriqHostlist -FabriqRoot $FabriqRoot)
     if ($null -eq $script:Hostlist -or $script:Hostlist.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Failed to load hostlist or it is empty. Please check $FabriqRoot\kernel\csv\hostlist.csv",
-            "Fabriq BackUper - Error",
+            "hostlist の読み込みに失敗、または空です。$FabriqRoot\kernel\csv\hostlist.csv を確認してください。",
+            "Fabriq BackUper - エラー",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
@@ -78,8 +78,8 @@ function Start-FabriqBackuperGui {
     }
     if ($InitialHostIndex -lt 0 -or $InitialHostIndex -ge $script:Hostlist.Count) {
         [System.Windows.Forms.MessageBox]::Show(
-            "InitialHostIndex out of range: $InitialHostIndex (hostlist count: $($script:Hostlist.Count))",
-            "Fabriq BackUper - Error",
+            "InitialHostIndex が範囲外です: $InitialHostIndex (hostlist 件数: $($script:Hostlist.Count))",
+            "Fabriq BackUper - エラー",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
