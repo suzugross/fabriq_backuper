@@ -519,6 +519,62 @@ function Convert-RegFileToStrategyBLight {
     return $tempReg
 }
 
+function New-OutlookRuleClearShortcut {
+    # Phase 0.15.0: generate a Desktop shortcut on the TARGET user that
+    # launches Outlook with the documented /cleanclientrules switch. The
+    # operator clicks this on first launch to purge any stale rules that
+    # the migrated PST carries over from the source PC -- those rules
+    # often hold MAPI Entry IDs that the new profile cannot resolve, which
+    # is what causes the "rule exists but errors on incoming mail" symptom.
+    #
+    # /cleanclientrules is scoped to client-side rules only; server-side
+    # rules (IMAP / Exchange) live on the mail server and are not touched.
+    # Outlook re-syncs them on first IMAP/Exchange sync.
+    #
+    # Returns hashtable: @{ Success; ShortcutPath; Reason }
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetUserProfilePath,
+        [Parameter(Mandatory = $true)][string]$OutlookExePath
+    )
+
+    $result = @{ Success = $false; ShortcutPath = $null; Reason = $null }
+
+    if (-not (Test-Path -LiteralPath $OutlookExePath)) {
+        $result.Reason = "OUTLOOK.EXE が見つかりません: $OutlookExePath"
+        return $result
+    }
+
+    $desktopPath = Join-Path $TargetUserProfilePath 'Desktop'
+    if (-not (Test-Path -LiteralPath $desktopPath)) {
+        $result.Reason = "対象ユーザの Desktop が見つかりません: $desktopPath"
+        return $result
+    }
+
+    $shortcutPath = Join-Path $desktopPath 'Outlook を初回起動 (仕分けルールをクリア).lnk'
+    $shell = $null
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath        = $OutlookExePath
+        $shortcut.Arguments         = '/cleanclientrules'
+        $shortcut.IconLocation      = "$OutlookExePath,0"
+        $shortcut.WorkingDirectory  = Split-Path -Path $OutlookExePath -Parent
+        $shortcut.Description       = "移行後の初回起動用。クライアントサイドの仕分けルールをクリアして Outlook を起動します。初回起動後は通常の Outlook アイコンから起動してください。"
+        $shortcut.Save()
+    } catch {
+        $result.Reason = "ショートカット生成に失敗: $($_.Exception.Message)"
+        return $result
+    } finally {
+        if ($null -ne $shell) {
+            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        }
+    }
+
+    $result.Success = $true
+    $result.ShortcutPath = $shortcutPath
+    return $result
+}
+
 function New-OutlookAccountInfoText {
     # Build a human-readable account-info text used by:
     #   (a) Strategy A fallback -> aggregate/sections/outlook_pop/
@@ -542,7 +598,11 @@ function New-OutlookAccountInfoText {
         [string]$ProfileFilter = $null,
         [bool]$IsCrossVersion = $false,
         [string]$CrossVersionDirection = $null,
-        [bool]$ImapPresent = $false
+        [bool]$ImapPresent = $false,
+        # Phase 0.15.0: when set, the function appends an "初回起動について"
+        # section explaining the /cleanclientrules launcher shortcut. $null
+        # means no shortcut was generated and the section is omitted.
+        [string]$RuleClearShortcutPath = $null
     )
 
     # Optional per-profile filter: when writing the target-folder copy
@@ -617,36 +677,78 @@ function New-OutlookAccountInfoText {
         $lines.Add("    アカウント種別    : $(if ($isImap) { 'IMAP' } else { 'POP' })") | Out-Null
         $lines.Add('') | Out-Null
 
+        # v0.16: helper closures for "(autodiscover に依存)" hint when
+        # a value is null (Outlook 365 often omits POP3 Port / Use SSL
+        # entirely, relying on autodiscover / industry defaults).
+        $fmtPort = {
+            param($v, $sslDefault, $nonSslDefault)
+            if ($null -eq $v) {
+                "(値なし - autodiscover に依存、SSL なら $sslDefault, 非 SSL なら $nonSslDefault が業界標準)"
+            } else { "$v" }
+        }
+        $fmtSsl = {
+            param($v)
+            if ($null -eq $v) {
+                '(値なし - autodiscover に依存)'
+            } elseif ($v -eq 1) { 'はい (必須)' }
+            else { 'いいえ' }
+        }
+        # SMTP Secure Connection (0=なし / 1=STARTTLS / 2=SSL/TLS direct)
+        # is the 365-era authoritative flag; capture both legacy useSSL and
+        # this modern value when present.
+        $fmtSecCon = {
+            param($v)
+            if ($null -eq $v) { return '(値なし)' }
+            switch ([int]$v) {
+                0       { '0 (暗号化なし)' }
+                1       { '1 (STARTTLS)' }
+                2       { '2 (SSL/TLS direct)' }
+                default { "$v (不明)" }
+            }
+        }
+
         if ($isImap) {
             $lines.Add('  受信サーバ (IMAP):') | Out-Null
-            $lines.Add("    サーバ            : $($acct.imap.server)") | Out-Null
-            $lines.Add("    ポート            : $($acct.imap.port)") | Out-Null
-            $imapSsl = if ($acct.imap.useSSL -eq 1) { 'はい (必須)' } else { 'いいえ' }
-            $lines.Add("    SSL/TLS           : $imapSsl") | Out-Null
-            $lines.Add("    ユーザ名          : $($acct.imap.userName)") | Out-Null
+            $lines.Add("    サーバ              : $($acct.imap.server)") | Out-Null
+            $lines.Add("    ポート              : $(& $fmtPort $acct.imap.port 993 143)") | Out-Null
+            $lines.Add("    SSL/TLS (legacy)    : $(& $fmtSsl $acct.imap.useSSL)") | Out-Null
+            if ($null -ne $acct.imap.PSObject.Properties['secureConnection']) {
+                $lines.Add("    Secure Connection   : $(& $fmtSecCon $acct.imap.secureConnection)") | Out-Null
+            }
+            $lines.Add("    ユーザ名            : $($acct.imap.userName)") | Out-Null
             if (-not [string]::IsNullOrWhiteSpace("$($acct.imap.folderPath)")) {
-                $lines.Add("    ルートフォルダパス: $($acct.imap.folderPath)") | Out-Null
+                $lines.Add("    ルートフォルダパス  : $($acct.imap.folderPath)") | Out-Null
             }
         } else {
             $lines.Add('  受信サーバ (POP3):') | Out-Null
-            $lines.Add("    サーバ            : $($acct.pop3.server)") | Out-Null
-            $lines.Add("    ポート            : $($acct.pop3.port)") | Out-Null
-            $popSsl = if ($acct.pop3.useSSL -eq 1) { 'はい (必須)' } else { 'いいえ' }
-            $lines.Add("    SSL/TLS           : $popSsl") | Out-Null
-            $lines.Add("    ユーザ名          : $($acct.pop3.userName)") | Out-Null
+            $lines.Add("    サーバ              : $($acct.pop3.server)") | Out-Null
+            $lines.Add("    ポート              : $(& $fmtPort $acct.pop3.port 995 110)") | Out-Null
+            $lines.Add("    SSL/TLS (legacy)    : $(& $fmtSsl $acct.pop3.useSSL)") | Out-Null
+            if ($null -ne $acct.pop3.PSObject.Properties['secureConnection']) {
+                $lines.Add("    Secure Connection   : $(& $fmtSecCon $acct.pop3.secureConnection)") | Out-Null
+            }
+            $lines.Add("    SPA (Sicily)        : $(& $fmtSsl $acct.pop3.useSPA)") | Out-Null
+            $lines.Add("    ユーザ名            : $($acct.pop3.userName)") | Out-Null
+            # v0.16: POP3 specific "Leave on Server" bit field.
+            if ($null -ne $acct.PSObject.Properties['options'] -and `
+                $null -ne $acct.options.leaveOnServer) {
+                $lines.Add(("    Leave on Server     : 0x{0:X8} (raw DWORD)" `
+                    -f [long]$acct.options.leaveOnServer)) | Out-Null
+            }
         }
         $lines.Add('') | Out-Null
 
         $lines.Add('  送信サーバ (SMTP):') | Out-Null
-        $lines.Add("    サーバ            : $($acct.smtp.server)") | Out-Null
-        $lines.Add("    ポート            : $($acct.smtp.port)") | Out-Null
-        $smtpSsl = if ($acct.smtp.useSSL -eq 1) { 'はい (必須)' } else { 'いいえ' }
-        $lines.Add("    SSL/TLS           : $smtpSsl") | Out-Null
-        $smtpAuth = if ($acct.smtp.useAuth -eq 1) { 'はい (必須)' } else { 'いいえ' }
-        $lines.Add("    認証              : $smtpAuth") | Out-Null
+        $lines.Add("    サーバ              : $($acct.smtp.server)") | Out-Null
+        $lines.Add("    ポート              : $(& $fmtPort $acct.smtp.port 587 25)") | Out-Null
+        $lines.Add("    SSL/TLS (legacy)    : $(& $fmtSsl $acct.smtp.useSSL)") | Out-Null
+        if ($null -ne $acct.smtp.PSObject.Properties['secureConnection']) {
+            $lines.Add("    Secure Connection   : $(& $fmtSecCon $acct.smtp.secureConnection)") | Out-Null
+        }
+        $lines.Add("    認証                : $(& $fmtSsl $acct.smtp.useAuth)") | Out-Null
         $sameAsLabel = if ($isImap) { '(IMAP と同じ)' } else { '(POP3 と同じ)' }
         $smtpUser = if ($acct.smtp.userName) { $acct.smtp.userName } else { $sameAsLabel }
-        $lines.Add("    SMTP ユーザ名     : $smtpUser") | Out-Null
+        $lines.Add("    SMTP ユーザ名       : $smtpUser") | Out-Null
         $lines.Add('') | Out-Null
 
         if ($isImap) {
@@ -767,6 +869,27 @@ function New-OutlookAccountInfoText {
         $lines.Add('') | Out-Null
     }
 
+    # Phase 0.15.0: rule-clear shortcut callout. Inserted only when the
+    # launcher shortcut was actually generated.
+    if (-not [string]::IsNullOrWhiteSpace($RuleClearShortcutPath)) {
+        $lines.Add('========================================') | Out-Null
+        $lines.Add(' 初回起動について') | Out-Null
+        $lines.Add('========================================') | Out-Null
+        $lines.Add('') | Out-Null
+        $lines.Add(' Desktop に生成された次のショートカットから Outlook を起動してください:') | Out-Null
+        $lines.Add("   $(Split-Path $RuleClearShortcutPath -Leaf)") | Out-Null
+        $lines.Add('') | Out-Null
+        $lines.Add(' これは "outlook.exe /cleanclientrules" を実行するショートカットで、') | Out-Null
+        $lines.Add(' 移行されたクライアントサイドの仕分けルールをクリアします。') | Out-Null
+        $lines.Add('') | Out-Null
+        $lines.Add(' - 移行先 PC では PST 内のルールが正しく動作しない場合があるため、') | Out-Null
+        $lines.Add('   初回起動時にクリアすることで受信時のエラーを回避します。') | Out-Null
+        $lines.Add(' - サーバサイドのルール (IMAP / Exchange) は影響を受けません。') | Out-Null
+        $lines.Add(' - 必要なルールは Outlook 上で手動で再設定してください。') | Out-Null
+        $lines.Add(' - 初回起動後は通常の Outlook アイコンから起動して問題ありません。') | Out-Null
+        $lines.Add('') | Out-Null
+    }
+
     $lines.Add('========================================') | Out-Null
 
     return ($lines -join "`r`n")
@@ -782,6 +905,13 @@ if ($SectionParams.ContainsKey('TargetUserProfilePath') -and `
 }
 if ([string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
     $targetUserProfilePath = $env:USERPROFILE
+}
+
+# Phase 0.15.0: defaults to $false here -- callers that want the rule-clear
+# launcher shortcut must opt in via the UI checkbox in restore_view.ps1.
+$createRuleClearShortcut = $false
+if ($SectionParams.ContainsKey('CreateRuleClearShortcut')) {
+    $createRuleClearShortcut = [bool]$SectionParams['CreateRuleClearShortcut']
 }
 
 # ----------------------------------------------------------
@@ -1242,6 +1372,36 @@ if ($regExports.Count -gt 0 -and $successCount -gt 0) {
 }
 
 # ----------------------------------------------------------
+# Stage 4.5 (Phase 0.15.0): rule-clear launcher shortcut
+#
+# Generated before Stage 5 so the popup / instruction text below can
+# reference $shortcutResult. Runs regardless of Strategy B success /
+# Strategy A fallback because either path can carry over stale PST
+# rules; the operator should always have the option to start clean.
+#
+# Failure here does NOT block the section's return status -- the
+# shortcut is a convenience artifact, not a restore prerequisite.
+# ----------------------------------------------------------
+$shortcutResult = $null
+if ($createRuleClearShortcut) {
+    if ($targetInstall.Installed -and `
+        -not [string]::IsNullOrWhiteSpace($targetInstall.OutlookExePath)) {
+        $shortcutResult = New-OutlookRuleClearShortcut `
+            -TargetUserProfilePath $targetUserProfilePath `
+            -OutlookExePath        $targetInstall.OutlookExePath
+        if ($shortcutResult.Success) {
+            Show-Success "Rule-clear shortcut written: $($shortcutResult.ShortcutPath)"
+        } else {
+            $warnings += "Rule-clear shortcut creation skipped: $($shortcutResult.Reason)"
+            Show-Warning "Rule-clear shortcut creation skipped: $($shortcutResult.Reason)"
+        }
+    } else {
+        $warnings += "Rule-clear shortcut skipped: OUTLOOK.EXE not detected via HKLM probe"
+        Show-Warning "Rule-clear shortcut skipped: OUTLOOK.EXE not detected via HKLM probe"
+    }
+}
+
+# ----------------------------------------------------------
 # Stage 5: operator communication
 # ----------------------------------------------------------
 $instructionsPath = $null
@@ -1283,6 +1443,17 @@ if ($strategyBSucceeded) {
                       "詳細な手順は _account_settings.txt の 'POP の配信先確認' セクションを`r`n" +
                       "参照してください。"
     }
+    # Phase 0.15.0: rule-clear shortcut callout. Inserted last so it sits
+    # visually adjacent to the operator's next action ("launch Outlook").
+    if ($null -ne $shortcutResult -and $shortcutResult.Success) {
+        $popupBody += "`r`n`r`n*** 重要: Outlook の初回起動 ***`r`n" +
+                      "Desktop の [Outlook を初回起動 (仕分けルールをクリア).lnk] から`r`n" +
+                      "起動してください。`r`n" +
+                      "移行された仕分けルールは移行先 PC で正しく動作しない可能性があるため、`r`n" +
+                      "初回起動時にクライアントサイドのルールをクリアします。`r`n" +
+                      "必要なルールは Outlook 上で手動で再設定してください。`r`n" +
+                      "初回起動後は通常の Outlook アイコンから起動して問題ありません。"
+    }
     try {
         Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status 'Success'
     } catch { }
@@ -1290,6 +1461,9 @@ if ($strategyBSucceeded) {
     # ---- Stage 5b: Strategy A fallback - RESTORE_INSTRUCTIONS.txt ----
     $instructionsPath = Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
     try {
+        $shortcutPathForText = if ($null -ne $shortcutResult -and $shortcutResult.Success) {
+            $shortcutResult.ShortcutPath
+        } else { $null }
         $instructionsText = New-OutlookAccountInfoText `
             -Manifest $manifest `
             -TargetUserProfilePath $targetUserProfilePath `
@@ -1299,7 +1473,8 @@ if ($strategyBSucceeded) {
             -StrategyBSucceeded $false `
             -IsCrossVersion $isCrossVersion `
             -CrossVersionDirection $crossVersionDirection `
-            -ImapPresent $imapPresent
+            -ImapPresent $imapPresent `
+            -RuleClearShortcutPath $shortcutPathForText
         $instructionsText | Out-File -FilePath $instructionsPath -Encoding UTF8 -Force
         Show-Info "Wrote instruction file: $instructionsPath"
     } catch {
@@ -1312,6 +1487,12 @@ if ($strategyBSucceeded) {
                      "PST ファイルは移行先パスに配置済みです。操作者が一致するメールアドレスでアカウントを" +
                      "追加すると、Outlook のウィザードが自動で PST をアタッチします。`r`n`r`n" +
                      "手順書を開いて手順に従ってください:`r`n$instructionsPath"
+        if ($null -ne $shortcutResult -and $shortcutResult.Success) {
+            $popupBody += "`r`n`r`n*** 重要: Outlook の初回起動 ***`r`n" +
+                          "アカウント追加が済んだら、Desktop の`r`n" +
+                          "[Outlook を初回起動 (仕分けルールをクリア).lnk] から起動してください。`r`n" +
+                          "移行された仕分けルールが PST に残っている場合のクリーンアップとして機能します。"
+        }
         Show-CompletionPopup -Title 'Outlook POP - 手動セットアップが必要' -Body $popupBody -Status 'Partial'
     } catch { }
 
@@ -1347,6 +1528,9 @@ try {
             continue
         }
         $settingsPath = Join-Path $dir '_account_settings.txt'
+        $shortcutPathForText = if ($null -ne $shortcutResult -and $shortcutResult.Success) {
+            $shortcutResult.ShortcutPath
+        } else { $null }
         $settingsText = New-OutlookAccountInfoText `
             -Manifest $manifest `
             -TargetUserProfilePath $targetUserProfilePath `
@@ -1357,7 +1541,8 @@ try {
             -ProfileFilter $profName `
             -IsCrossVersion $isCrossVersion `
             -CrossVersionDirection $crossVersionDirection `
-            -ImapPresent $imapPresent
+            -ImapPresent $imapPresent `
+            -RuleClearShortcutPath $shortcutPathForText
         $settingsText | Out-File -FilePath $settingsPath -Encoding UTF8 -Force
         $targetSettingsWritten += $settingsPath
         Show-Info "Wrote target settings file: $settingsPath"
@@ -1398,6 +1583,11 @@ return [PSCustomObject]@{
         targetOutlookExeVer    = $targetInstall.OutlookExeVersion
         crossVersionTransform  = [bool]$isCrossVersion
         crossVersionDirection  = $crossVersionDirection
+        # Phase 0.15.0: rule-clear launcher shortcut. $null when caller
+        # opted out (UI checkbox unchecked) or generation failed.
+        ruleClearShortcut      = if ($null -ne $shortcutResult -and $shortcutResult.Success) {
+                                     $shortcutResult.ShortcutPath
+                                 } else { $null }
     }
     Warnings             = $warnings
     ExternalOutputDir    = $null

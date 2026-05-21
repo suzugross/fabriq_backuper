@@ -323,52 +323,144 @@ function Get-PstPathsFromProfile {
 }
 
 function Get-PstPathFromDeliveryStoreEntryId {
-    # Phase 2.9.2a: parse a POP3 account's "Delivery Store EntryID"
-    # REG_BINARY value to extract the bound PST file path.
+    # Extract the PST file path embedded in a Delivery Store EntryID.
     #
-    # Format per Microsoft Learn (wrapped PST store provider):
-    #   EIDMS  (ASCII)   = [4 flags][16 MAPIUID][1 reserved][N CHAR  szPath\0]
-    #   EIDMSW (Unicode) = [4 flags][16 MAPIUID][1 reserved][1 NUL    szPath]
-    #                                                       [N WCHAR wzPath\0\0]
-    # Detection: if byte at offset 21 is 0x00 -> EIDMSW (Unicode follows),
-    # otherwise EIDMS (ASCII path starts here).
-    # Returns the extracted path string on success, or $null if the value
-    # is absent / too short / fails validation (.pst extension + drive letter).
+    # Background:
+    #   Original Phase 2.9.2a implementation assumed the documented
+    #   wrapped PST sample provider format (EIDMS/EIDMSW). On production
+    #   Outlook 365 / 2016+ the actual format is the "mspst.dll" wrapped
+    #   variant, which has additional service-identifier bytes before
+    #   the path, so the fixed offset 21 assumption was wrong and PST
+    #   mapping silently failed on multi-PST profiles (confirmed v0.15
+    #   PoC: 0/4 accounts resolved on K_iuchi 365 environment).
+    #
+    # New strategy (v0.16):
+    #   Format-agnostic binary scan. Walk through the EntryID bytes
+    #   looking for a UTF-16LE drive letter pattern [A-Za-z] 00 3A 00
+    #   5C 00 (i.e. "X:\"), then read until UTF-16LE null terminator
+    #   and validate the resulting string ends in .pst.
+    #
+    #   The scan is restricted to even byte offsets (UTF-16LE
+    #   alignment). Surrounding MAPI binary structures contain
+    #   random data, but the probability of a 6-byte aligned drive
+    #   letter pattern appearing by accident is astronomically low.
+    #
+    # Handles both:
+    #   - mspst.dll wrapped format (production Outlook 2010+/365)
+    #   - EIDMSW sample format (legacy wrapped PST sample provider)
     param([byte[]]$EntryIdBytes)
 
-    if ($null -eq $EntryIdBytes -or $EntryIdBytes.Length -lt 22) { return $null }
+    if ($null -eq $EntryIdBytes -or $EntryIdBytes.Length -lt 12) { return $null }
 
-    $headerLen = 4 + 16 + 1   # flags + MAPIUID + reserved = 21
-    $offset = $headerLen
-    $path = $null
+    for ($i = 0; $i -le $EntryIdBytes.Length - 6; $i += 2) {
+        $b0 = $EntryIdBytes[$i]
+        if (-not ((($b0 -ge 0x41) -and ($b0 -le 0x5A)) -or `
+                  (($b0 -ge 0x61) -and ($b0 -le 0x7A)))) { continue }
+        if ($EntryIdBytes[$i + 1] -ne 0x00) { continue }
+        if ($EntryIdBytes[$i + 2] -ne 0x3A) { continue }
+        if ($EntryIdBytes[$i + 3] -ne 0x00) { continue }
+        if ($EntryIdBytes[$i + 4] -ne 0x5C) { continue }
+        if ($EntryIdBytes[$i + 5] -ne 0x00) { continue }
 
-    if ($EntryIdBytes[$offset] -eq 0x00) {
-        # EIDMSW: skip the empty ASCII NULL byte, then read UTF-16LE
-        $unicodeStart = $offset + 1
-        $end = $unicodeStart
+        $end = $i
         while (($end + 1) -lt $EntryIdBytes.Length) {
-            if ($EntryIdBytes[$end] -eq 0x00 -and $EntryIdBytes[$end + 1] -eq 0x00) { break }
+            if ($EntryIdBytes[$end] -eq 0x00 -and $EntryIdBytes[$end + 1] -eq 0x00) {
+                break
+            }
             $end += 2
         }
-        if ($end -gt $unicodeStart) {
-            $path = [System.Text.Encoding]::Unicode.GetString($EntryIdBytes, $unicodeStart, $end - $unicodeStart)
+        if ($end -le $i) { continue }
+
+        $path = [System.Text.Encoding]::Unicode.GetString(
+                    $EntryIdBytes, $i, $end - $i)
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        if ($path -match '\.pst$') {
+            return $path
         }
-    } else {
-        # EIDMS: ASCII path starting at offset
-        $end = $offset
-        while ($end -lt $EntryIdBytes.Length -and $EntryIdBytes[$end] -ne 0x00) { $end++ }
-        if ($end -gt $offset) {
-            $path = [System.Text.Encoding]::ASCII.GetString($EntryIdBytes, $offset, $end - $offset)
+        # not .pst (could be .ost embedded earlier) - keep scanning
+    }
+    return $null
+}
+
+function Resolve-AccountPst {
+    # 3-stage PST resolution chain (v0.16, refactored from v0.15 inline
+    # logic to consolidate behaviour and apply filename-match-first).
+    #
+    # Stage 1 (highest confidence): filename match against email.
+    #   Outlook 2010+ default naming convention is "<email>.pst" for
+    #   POP3 accounts. When this matches deterministically, no further
+    #   lookup is needed and the result is unambiguous even when the
+    #   profile contains multiple PSTs.
+    #
+    # Stage 2 (medium confidence): EntryID binary scan.
+    #   Falls through when filename match fails (e.g. PST manually
+    #   renamed). Uses Get-PstPathFromDeliveryStoreEntryId, which is
+    #   format-agnostic for production mspst.dll EntryIDs.
+    #
+    # Stage 3 (medium confidence): single-candidate fallback.
+    #   When the profile has exactly one PST and no other resolution
+    #   succeeded, attribute it to this account. Avoids "unavailable"
+    #   for trivially obvious cases.
+    #
+    # Returns: hashtable @{ Path; Method; Reason }
+    #   Path   : full PST file path, or $null when no match
+    #   Method : 'filename-match' | 'entryid-scan' | 'single-candidate' | 'unresolved'
+    #   Reason : human-readable diagnostic
+    param(
+        [Parameter(Mandatory)][string]$Email,
+        [byte[]]$EntryIdBytes,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$PstCandidates
+    )
+
+    # --- Stage 1: filename match (case-insensitive on basename) ---
+    if (-not [string]::IsNullOrWhiteSpace($Email)) {
+        foreach ($p in $PstCandidates) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($p)
+            if ($base -ieq $Email) {
+                return @{
+                    Path   = $p
+                    Method = 'filename-match'
+                    Reason = 'PST filename matches account email'
+                }
+            }
         }
     }
 
-    # Validation: must look like a .pst file path with a drive letter.
-    # Anything else (e.g. Exchange or OST) is not what we're after; return
-    # null so the caller can record a "PST mapping unavailable" warning.
-    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
-    if ($path -notmatch '^[A-Za-z]:\\') { return $null }
-    if ($path -notmatch '\.pst$') { return $null }
-    return $path
+    # --- Stage 2: EntryID binary scan ---
+    if ($null -ne $EntryIdBytes -and $EntryIdBytes.Length -gt 0) {
+        $parsed = Get-PstPathFromDeliveryStoreEntryId -EntryIdBytes $EntryIdBytes
+        if (-not [string]::IsNullOrWhiteSpace($parsed)) {
+            # Prefer a candidate that matches the parsed path; otherwise
+            # use the parsed path as-is (the file may be in a non-default
+            # location that the registry walk did not find).
+            $matched = $PstCandidates | Where-Object { $_ -ieq $parsed } | Select-Object -First 1
+            return @{
+                Path   = if ($matched) { $matched } else { $parsed }
+                Method = if ($matched) { 'entryid-scan-confirmed' } else { 'entryid-scan' }
+                Reason = 'Path extracted from Delivery Store EntryID'
+            }
+        }
+    }
+
+    # --- Stage 3: single-candidate fallback ---
+    if ($PstCandidates.Count -eq 1) {
+        return @{
+            Path   = $PstCandidates[0]
+            Method = 'single-candidate'
+            Reason = 'Only one PST in profile, no ambiguity'
+        }
+    }
+
+    # --- Failure ---
+    return @{
+        Path   = $null
+        Method = 'unresolved'
+        Reason = if ($PstCandidates.Count -eq 0) {
+                     'No PST found in profile'
+                 } else {
+                     "$($PstCandidates.Count) PST candidates but none matched filename or EntryID"
+                 }
+    }
 }
 
 # ----------------------------------------------------------
@@ -482,19 +574,24 @@ foreach ($profKey in $profileKeys) {
                 replyEmail   = (Get-RegValueString -RegKey $rk -Name 'Reply E-mail')
                 organization = (Get-RegValueString -RegKey $rk -Name 'Organization')
                 imap         = [ordered]@{
-                    server     = $imapServer
-                    userName   = (Get-RegValueString -RegKey $rk -Name 'IMAP User')
-                    port       = (Get-RegValueDword  -RegKey $rk -Name 'IMAP Port')
-                    useSSL     = (Get-RegValueDword  -RegKey $rk -Name 'IMAP Use SSL')
-                    folderPath = (Get-RegValueString -RegKey $rk -Name 'IMAP Folder Path')
+                    server           = $imapServer
+                    userName         = (Get-RegValueString -RegKey $rk -Name 'IMAP User')
+                    port             = (Get-RegValueDword  -RegKey $rk -Name 'IMAP Port')
+                    useSSL           = (Get-RegValueDword  -RegKey $rk -Name 'IMAP Use SSL')
+                    folderPath       = (Get-RegValueString -RegKey $rk -Name 'IMAP Folder Path')
+                    # v0.16: 365 / modern Outlook uses Secure Connection (0=none,
+                    # 1=STARTTLS, 2=SSL/TLS direct) in addition to or instead of
+                    # the legacy Use SSL flag. Capture both.
+                    secureConnection = (Get-RegValueDword  -RegKey $rk -Name 'IMAP Secure Connection')
                 }
                 smtp         = [ordered]@{
-                    server     = (Get-RegValueString -RegKey $rk -Name 'SMTP Server')
-                    userName   = (Get-RegValueString -RegKey $rk -Name 'SMTP User')
-                    port       = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Port')
-                    useSSL     = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use SSL')
-                    useAuth    = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use Auth')
-                    authMethod = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Auth Method')
+                    server           = (Get-RegValueString -RegKey $rk -Name 'SMTP Server')
+                    userName         = (Get-RegValueString -RegKey $rk -Name 'SMTP User')
+                    port             = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Port')
+                    useSSL           = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use SSL')
+                    useAuth          = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use Auth')
+                    authMethod       = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Auth Method')
+                    secureConnection = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Secure Connection')
                 }
                 passwordStored = [ordered]@{
                     imap = ($null -ne (Get-RegValueRaw -RegKey $rk -Name 'IMAP Password'))
@@ -518,25 +615,37 @@ foreach ($profKey in $profileKeys) {
             replyEmail   = (Get-RegValueString -RegKey $rk -Name 'Reply E-mail')
             organization = (Get-RegValueString -RegKey $rk -Name 'Organization')
             pop3         = [ordered]@{
-                server   = $pop3Server
+                server           = $pop3Server
                 # Phase 2.9.0a: corrected value names verified against an
                 # actual registry dump. Outlook stores these without the
                 # "Name" suffix and uses "SMTP Use Auth" (not "Use Sicily")
                 # for the outgoing-server-auth flag. "POP3 Use Sicily" is
                 # correct as the SPA flag, even though SMTP doesn't use
                 # the "Sicily" name for auth.
-                userName = (Get-RegValueString -RegKey $rk -Name 'POP3 User')
-                port     = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Port')
-                useSSL   = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Use SSL')
-                useSPA   = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Use Sicily')
+                userName         = (Get-RegValueString -RegKey $rk -Name 'POP3 User')
+                port             = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Port')
+                useSSL           = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Use SSL')
+                useSPA           = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Use Sicily')
+                # v0.16: 365 environments often omit POP3 Port / Use SSL
+                # entirely (relies on Outlook defaults or autodiscover).
+                # POP3 Secure Connection (0/1/2) is the modern flag when
+                # present.
+                secureConnection = (Get-RegValueDword  -RegKey $rk -Name 'POP3 Secure Connection')
             }
             smtp         = [ordered]@{
-                server     = (Get-RegValueString -RegKey $rk -Name 'SMTP Server')
-                userName   = (Get-RegValueString -RegKey $rk -Name 'SMTP User')
-                port       = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Port')
-                useSSL     = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use SSL')
-                useAuth    = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use Auth')
-                authMethod = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Auth Method')
+                server           = (Get-RegValueString -RegKey $rk -Name 'SMTP Server')
+                userName         = (Get-RegValueString -RegKey $rk -Name 'SMTP User')
+                port             = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Port')
+                useSSL           = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use SSL')
+                useAuth          = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Use Auth')
+                authMethod       = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Auth Method')
+                secureConnection = (Get-RegValueDword  -RegKey $rk -Name 'SMTP Secure Connection')
+            }
+            options      = [ordered]@{
+                # POP3-specific bit field: "Leave on Server" + days-to-keep
+                # + delete-from-server-on-removal flags packed into one DWORD.
+                # We record the raw value for the operator to interpret.
+                leaveOnServer = (Get-RegValueDword -RegKey $rk -Name 'Leave on Server')
             }
             # Diagnostic: whether a password blob is stored for this
             # account. We never read the actual encrypted bytes (DPAPI,
@@ -548,59 +657,32 @@ foreach ($profKey in $profileKeys) {
             }
         }
 
-        # Phase 2.9.2a-v2: PST detection. Two-pronged strategy:
-        #   1. Primary: profile subkey walk (enumerate '001f6700' values).
-        #      If exactly 1 PST in this profile, map it to this account.
-        #   2. Secondary fallback: parse the 'Delivery Store EntryID'
-        #      REG_BINARY via the documented EIDMSW format. Only the
-        #      sample wrapped PST provider uses that format, so this
-        #      typically returns $null on production Outlook — but kept
-        #      as a defense-in-depth path.
+        # v0.16: 3-stage PST resolution chain via Resolve-AccountPst.
+        # Stage 1 (filename match against email, highest confidence) is
+        # tried first, which deterministically resolves the common case
+        # of Outlook 2010+ default naming (<email>.pst) — including the
+        # multi-PST profiles that v0.15 mis-mapped.
         $entryIdBytes = Get-RegValueRaw -RegKey $rk -Name 'Delivery Store EntryID'
-        $pstPath = $null
-        $pstStatus = 'unavailable'
-        $pstReason = $null
-        $detectionMethod = $null
         $pstCandidates = @($profilePstPaths)
+        $resolution = Resolve-AccountPst `
+            -Email          $entry.email `
+            -EntryIdBytes   $entryIdBytes `
+            -PstCandidates  $pstCandidates
 
-        if ($pstCandidates.Count -eq 1) {
-            $pstPath = $pstCandidates[0]
-            $detectionMethod = 'profile-subkey-walk'
-            $pstStatus = if (Test-Path -LiteralPath $pstPath) { 'present' } else { 'path-only' }
-        }
-        elseif ($pstCandidates.Count -gt 1) {
-            # Multiple PSTs in profile — try the EntryID parser as a
-            # disambiguator (may still fail on production Outlook).
-            $parsed = if ($null -ne $entryIdBytes) {
-                Get-PstPathFromDeliveryStoreEntryId -EntryIdBytes ([byte[]]$entryIdBytes)
-            } else { $null }
-            if ($null -ne $parsed -and $pstCandidates -contains $parsed) {
-                $pstPath = $parsed
-                $detectionMethod = 'entryid-parse-confirmed-by-walk'
-                $pstStatus = if (Test-Path -LiteralPath $pstPath) { 'present' } else { 'path-only' }
-            } else {
-                $pstReason = "$($pstCandidates.Count) PST stores in profile, EntryID parse could not disambiguate"
-                $detectionMethod = 'profile-subkey-walk'
-            }
-        }
-        else {
-            # No PST stores found via walk — last try with EntryID parse.
-            $parsed = if ($null -ne $entryIdBytes) {
-                Get-PstPathFromDeliveryStoreEntryId -EntryIdBytes ([byte[]]$entryIdBytes)
-            } else { $null }
-            if ($null -ne $parsed) {
-                $pstPath = $parsed
-                $detectionMethod = 'entryid-parse-only'
-                $pstStatus = if (Test-Path -LiteralPath $pstPath) { 'present' } else { 'path-only' }
-            } else {
-                $pstReason = 'no PST store subkey in profile, EntryID parse also failed'
-                $detectionMethod = 'profile-subkey-walk'
-            }
-        }
+        $pstPath   = $resolution.Path
+        $pstReason = if ($null -eq $pstPath) { $resolution.Reason } else { $null }
+        $pstStatus = if ($null -eq $pstPath) {
+                         'unavailable'
+                     } elseif (Test-Path -LiteralPath $pstPath) {
+                         'present'
+                     } else {
+                         'path-only'
+                     }
 
         if ($null -eq $pstPath -and $null -ne $entryIdBytes) {
             # Diagnostic: dump up to 128 bytes of the EntryID for future
-            # offline analysis of the production Outlook EntryID format.
+            # offline analysis when neither filename match nor EntryID
+            # scan succeeded.
             $maxIdx = [Math]::Min(127, $entryIdBytes.Length - 1)
             $hex = ($entryIdBytes[0..$maxIdx] |
                     ForEach-Object { '{0:X2}' -f $_ }) -join ' '
@@ -610,17 +692,17 @@ foreach ($profKey in $profileKeys) {
         }
 
         $entry.pst = [ordered]@{
-            sourcePath       = $pstPath
-            sourceFileName   = if ($pstPath) { Split-Path $pstPath -Leaf } else { $null }
-            detectionMethod  = $detectionMethod
-            detectionStatus  = $pstStatus
-            detectionReason  = $pstReason
+            sourcePath        = $pstPath
+            sourceFileName    = if ($pstPath) { Split-Path $pstPath -Leaf } else { $null }
+            detectionMethod   = $resolution.Method
+            detectionStatus   = $pstStatus
+            detectionReason   = $pstReason
             profileCandidates = @($pstCandidates)
         }
 
         Show-Success "  [$subKeyName] $($entry.accountName)  <$($entry.email)>  pop=$($entry.pop3.server):$($entry.pop3.port)"
         if ($pstPath) {
-            Show-Info "             pst=$pstPath  ($pstStatus)"
+            Show-Info "             pst=$pstPath  ($pstStatus, $($resolution.Method))"
         } else {
             Show-Warning "             pst=(unavailable: $pstReason)"
         }
