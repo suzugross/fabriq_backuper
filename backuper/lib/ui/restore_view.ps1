@@ -203,13 +203,16 @@ function Show-RestoreView {
     $cont = $script:RestoreSectionContainer
     $cont.Controls.Clear()
     $script:RestoreSectionChecks = @{}
+    # v0.19.1 fix: see backup_view.ps1 for full rationale. Width 200 +
+    # stride 215 to fit 4 sections in the 880px container after the
+    # credentials section was added in v0.19.0.
     $x = 0
     foreach ($s in $script:SectionList) {
-        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 300 -Height 22 -Checked ($s.Enabled -eq "1")
+        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 200 -Height 22 -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
         $cont.Controls.Add($cb)
         $script:RestoreSectionChecks[$s.SectionName] = $cb
-        $x += 320
+        $x += 215
     }
 
     # Target user combo (default = logged-on interactive user)

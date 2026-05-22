@@ -15,6 +15,24 @@
 
 ## [Unreleased]
 
+### Fixed
+- backuper v0.19.1: **section CheckBox レイアウトのオーバーフロー修正** —
+  [backup_view.ps1](backuper/lib/ui/backup_view.ps1) /
+  [restore_view.ps1](backuper/lib/ui/restore_view.ps1) の section チェック
+  ボックスが幅 300px + ピッチ 320px で固定されており、container 幅 880px に
+  3 セクション目までしか収まらない状態だった。v0.19.0 で 4 セクション目
+  (`credentials`) を追加した際、`credentials` チェックボックスが X=960 から
+  描画 (container の右端を 80px 超過) され **GUI 上に表示されない** 状態
+  だった。
+  - 修正: 幅 300 → 200、ピッチ 320 → 215 に圧縮。4 セクションが
+    X=0..200 / 215..415 / 430..630 / 645..845 で全て container 内に
+    収まる。
+  - 動作影響: backup_view / restore_view の見た目が微変更。section 名
+    "Windows Credentials" (19 文字) も 200px 幅に十分収まることを確認。
+  - 配備: E:\fabriq_backuper\ を再配置すると即時反映。
+  - 既知の制約: 5 セクション目を追加する場合は、container を広げるか
+    複数行 wrap に切り替える必要あり (コメントで明記)。
+
 ### Added
 - backuper v0.19.0: **新規 section `credentials` を追加** — Windows 資格情報
   マネージャ (Credential Manager / Vault) のターゲット名 / ユーザ名 / 種別 /

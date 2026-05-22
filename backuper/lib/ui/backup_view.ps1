@@ -416,13 +416,19 @@ function Show-BackupView {
     $cont = $script:BackupSectionContainer
     $cont.Controls.Clear()
     $script:BackupSectionChecks = @{}
+    # v0.19.1 fix: width 300 + stride 320 only fit 3 sections in the
+    # 880px container. v0.19.0 added the 4th (credentials) which then
+    # rendered at X>=960 - completely outside the container. Compressed
+    # to width 200 + stride 215 so 4 sections (max X=645+200=845) fit
+    # cleanly. A 5th section in the future will require a wrap or wider
+    # container.
     $x = 0
     foreach ($s in $script:SectionList) {
-        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 300 -Height 22 -Checked ($s.Enabled -eq "1")
+        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 200 -Height 22 -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
         $cont.Controls.Add($cb)
         $script:BackupSectionChecks[$s.SectionName] = $cb
-        $x += 320
+        $x += 215
     }
 
     Update-BackupPrinterGrid
