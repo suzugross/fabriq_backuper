@@ -15,6 +15,101 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.19.0: **新規 section `credentials` を追加** — Windows 資格情報
+  マネージャ (Credential Manager / Vault) のターゲット名 / ユーザ名 / 種別 /
+  Persist / 最終更新時刻を CSV + JSON manifest として採取し、移行先 PC で
+  operator がパスワード再入力するための payload (`登録.bat` + PowerShell
+  本体 + README + CSV) を target user の Documents に展開する。
+  - **パスワードはバックアップに含めない** — Windows DPAPI 仕様で別 PC へ
+    持ち越せないため、設計上採取しない。operator が新 PC で各エントリの
+    パスワードを手入力する運用に振り切る。
+  - **`backuper/lib/sections/credentials/backup.ps1`**:
+    - Win32 `CredEnumerateW` を P/Invoke 経由で呼び出し、現在のユーザの
+      vault を全件列挙 (`CRED_ENUMERATE_ALL_CREDENTIALS` flag、filter=NULL)。
+      フィルタ引数は **`IntPtr` で定義** (PowerShell の `string`→null 変換が
+      "" に化けて `ERROR_INVALID_FLAGS` を返すバグを回避)。
+    - `Resolve-HkcuRoot` の SID から target user 名 (`DOMAIN\user`) を
+      `NTAccount.Translate` で解決。
+    - **Admin context と target user が一致する場合 (Case A)**: 子 powershell
+      プロセスを直接 spawn (`Start-Process -WindowStyle Hidden`) し、IPC
+      JSON 経由で結果を回収。
+    - **Admin context と target user が一致しない場合 (Case B、キッティング
+      現場で常態化するケース)**: `Register-ScheduledTask` + `LogonType=Interactive`
+      (= schtasks の `/IT`) で **target user 権限の子プロセスを spawn**。
+      target user がログオン中であれば password 不要で実行可。30 秒の polling
+      timeout を持ち、target user 不在 / GPO 制限 / AppLocker 妨害の場合は
+      `targetUserDumpMethod=unavailable` と warning を立てて honest に失敗。
+    - 各エントリに restoreHint heuristic を付与:
+      - `cred-write` (パスワード再入力で復元可能)
+      - `manual` (BlobSize=0、token系 Generic =`MicrosoftAccount:` /
+        `WindowsLive:` / `OneDrive` / `DriveFS_` / `Office16_Data:` 等、
+        証明書系 = `DomainCertificate` / `GenericCertificate`)
+    - 出力: `manifest.json` (fabriq-credentials-backup schemaVersion=1) +
+      `_credentials_list.csv` (UTF-8 BOM + CRLF、operator 視認用)。
+  - **`backuper/lib/sections/credentials/dump_creds.ps1`** — `schtasks /IT`
+    spawn または direct sub-process で起動される子スクリプト。`CredEnumerateW`
+    を呼び、結果を JSON で `-OutputPath` に書き出すだけの単機能 (no
+    common.ps1 依存)。FILETIME 構造体の `dwLow/HighDateTime` は signed Int32
+    なので、`-band 0xFFFFFFFF` で sign-extension を抑制してから Int64 に
+    組み立てる方式を採用。
+  - **`backuper/lib/sections/credentials/restore.ps1`**:
+    - section restore 側は **操作 (CredWrite) は一切行わない**。
+      `<TargetUserProfilePath>\Documents\FabriqCredentialsBackup_<host>_<ts>\`
+      を作成し、CSV + `登録.bat` + `register_credentials.ps1` + `README.txt`
+      の 4 ファイルを展開するだけ。これは admin context で `CredWrite` すると
+      間違ったユーザの vault に書き込んでしまうため (DPAPI 制約)。
+    - operator が target user セッションで `登録.bat` をダブルクリック →
+      `register_credentials.ps1` が CSV 各エントリのパスワードを対話入力
+      させ、`CredWrite` で正しい (target user) の vault に書き込む二段運用。
+  - **`backuper/lib/sections/credentials/operator_payload/register_credentials.ps1`**:
+    - operator-facing PowerShell script。`Read-Host -AsSecureString` で
+      パスワード入力 → SecureString → BSTR → UTF-16LE bytes → `CredWriteW`
+      P/Invoke で登録。完了後は BSTR と blob を zero-fill + free して
+      memory に平文を残さない。
+    - `restoreHint=manual` の行はデフォルトで skip (y/N 確認で override 可)。
+    - 同じ Target/Type の既存 credential 検出 (`CredReadW`) → 上書き確認
+      プロンプト。
+    - 完了サマリ: 成功 / manual skip / 既存 skip / 未入力 skip / 失敗 の
+      件数集計。
+  - **`backuper/lib/sections/credentials/operator_payload/登録.bat`** —
+    ASCII-only ラッパー (`chcp 65001` + `powershell -NoProfile
+    -ExecutionPolicy Bypass -File register_credentials.ps1` + `pause`)。
+    GPO で `ExecutionPolicy=AllSigned` が `MachinePolicy` レベルにロック
+    されている managed environment では効かないが、Fabriq 想定顧客環境では
+    `-ExecutionPolicy` parameter override で十分動作する前提。
+  - **`backuper/lib/sections/credentials/operator_payload/README.txt`** —
+    operator 向け日本語手順書 (UTF-8 BOM)。復元手順 + RestoreHint=manual の
+    エントリ説明 + 登録後の確認方法 + フォルダ取り扱い注意を記載。
+  - **`backuper/data/sections.csv`** に `credentials` 行を追加 (Enabled=1)。
+  - **`backuper/lib/ui/backup_view.ps1`** の `$sectionParams` に
+    `credentials = @{ SourceUserProfilePath = ... }` を追加 (対称性のため)。
+  - **`backuper/lib/ui/restore_view.ps1`** の `$sectionParams` に
+    `credentials = @{ TargetUserProfilePath = ... }` を追加 (deploy 先
+    Documents の解決に必要)。
+  - **manifest schema** : `fabriq-credentials-backup` (backup) と
+    `fabriq-credentials-restore` (restore) を追加。既存 manifestType に
+    一切影響なし、aggregate manifest aggregator は section の
+    `InternalManifestPath` を統一的に拾うので追加コードなし。
+  - **section interface** : 不変 (既存 signature 厳守)。
+  - **既知の制約 (README 同等)** :
+    - Web Credentials (`Windows.Security.Credentials.PasswordVault`) は
+      本 phase では未対応。`webCredentialCount` は常に 0。
+    - 異ユーザ spawn (`schtasks /IT`) は target user がログオン中である
+      ことが前提。ログオフ環境では `targetUserDumpMethod=unavailable` で
+      Status=Failed。
+    - 証明書系 / blob 長 0 / token 系 Generic は restoreHint=manual と
+      なり、operator が手動再構築する必要あり。
+  - **PoC artifacts** (`dev/credentials_poc/`、本番非組込) :
+    - `01_enum_test.ps1` : CredEnumerate P/Invoke 単体検証
+    - `02_spawn_test.ps1` : schtasks /IT spawn 識別子検証
+    - `03_full_integration.ps1` : 上記 2 つの統合検証 (CredEnumerate via
+      schtasks /IT spawn)
+    - `10_section_harness.ps1` : credentials/backup.ps1 を engine 経由
+      せずに直接呼び出すテストハーネス
+    - `11_restore_harness.ps1` : credentials/restore.ps1 を engine 経由
+      せずに直接呼び出すテストハーネス
+
 ### Changed
 - backuper v0.18.3: **`_account_settings.txt` / `RESTORE_INSTRUCTIONS.txt` を
   「アカウント情報のみ」にスリム化** ([restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1) の

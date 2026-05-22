@@ -487,6 +487,12 @@ function Invoke-BackupStart {
         outlook_pop = @{
             SourceUserProfilePath = $sourceUserProfilePath
         }
+        # v0.19.0: credentials section. SourceUserProfilePath is metadata
+        # only - actual target user is auto-resolved via Resolve-HkcuRoot
+        # (logged-on user when admin context differs from interactive user).
+        credentials = @{
+            SourceUserProfilePath = $sourceUserProfilePath
+        }
     }
 
     $destRoot = $script:BackupDestinationBox.Text

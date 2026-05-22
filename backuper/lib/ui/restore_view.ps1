@@ -443,6 +443,14 @@ function Invoke-RestoreStart {
             CreateRuleClearShortcut = $createShortcut
             AttemptStrategyB        = $attemptStrategyB
         }
+        # v0.19.0: credentials section deploys the operator payload
+        # (register_credentials.ps1 + 登録.bat + CSV + README.txt) into
+        # the target user's Documents. TargetUserProfilePath drives that
+        # deploy path; without it the deploy would fall back to the
+        # admin profile (wrong user).
+        credentials = @{
+            TargetUserProfilePath = $targetUserProfilePath
+        }
     }
 
     $hostForEngine = $script:CurrentHost
