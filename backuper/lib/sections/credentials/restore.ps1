@@ -28,6 +28,11 @@
 #   TargetUserProfilePath : profile path of the user whose Documents
 #                           to deploy into. Falls back to $env:USERPROFILE
 #                           (= current admin user, likely wrong).
+#   IncludeTargets        : array of Target strings (from the source CSV's
+#                           "Target" column) to deploy. When provided, the
+#                           deployed CSV only contains rows whose Target
+#                           appears in this list. $null / empty / absent =
+#                           include all rows (= v0.19.x behavior). v0.20.0+.
 # ============================================================
 
 param(
@@ -51,6 +56,19 @@ if ($SectionParams.ContainsKey('TargetUserProfilePath') -and `
 } else {
     $targetUserProfilePath = $env:USERPROFILE
     $warnings += "TargetUserProfilePath not provided; falling back to current process profile ($targetUserProfilePath)"
+}
+
+# v0.20.0: optional IncludeTargets filter. $null / absent = include all
+# rows. If provided, only rows whose Target is in this set go into the
+# deployed CSV.
+$includeTargetSet = $null
+if ($SectionParams.ContainsKey('IncludeTargets') -and `
+    $null -ne $SectionParams['IncludeTargets']) {
+    $includeArr = @($SectionParams['IncludeTargets'])
+    # Treat empty array as "explicit zero" (operator wants nothing
+    # deployed) rather than "include all". Distinguishes from $null.
+    $includeTargetSet = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($t in $includeArr) { [void]$includeTargetSet.Add([string]$t) }
 }
 
 if (-not (Test-Path $targetUserProfilePath)) {
@@ -170,11 +188,39 @@ try {
 }
 
 # ----------------------------------------------------------
-# Copy payload + CSV
+# Deploy CSV (verbatim copy OR filtered by IncludeTargets) + payload
 # ----------------------------------------------------------
-$copied = @()
+$copied         = @()
+$deployedCount  = 0
+$srcRowCount    = 0
+$deployCsvPath  = Join-Path $deployDir 'credentials_list.csv'
+
 try {
-    Copy-Item -LiteralPath $srcCsv      -Destination (Join-Path $deployDir 'credentials_list.csv') -Force -ErrorAction Stop
+    if ($null -eq $includeTargetSet) {
+        # v0.19.x behavior: copy source CSV verbatim
+        Copy-Item -LiteralPath $srcCsv -Destination $deployCsvPath -Force -ErrorAction Stop
+        # Count rows (Import-Csv returns rows excluding header)
+        try { $srcRowCount = @(Import-Csv -LiteralPath $srcCsv -Encoding UTF8).Count } catch {}
+        $deployedCount = $srcRowCount
+    } else {
+        # v0.20.0: filter rows by Target ∈ IncludeTargets
+        $srcRows = @(Import-Csv -LiteralPath $srcCsv -Encoding UTF8)
+        $srcRowCount = $srcRows.Count
+        $kept = @($srcRows | Where-Object { $includeTargetSet.Contains([string]$_.Target) })
+        $deployedCount = $kept.Count
+
+        # Re-emit CSV with UTF-8 BOM + CRLF (mirror backup.ps1 format)
+        $csvLines = @('Store,Type,Target,UserName,Persist,Comment,LastWritten,BlobSize,RestoreHint')
+        foreach ($r in $kept) {
+            $csvRow = ($r | Select-Object Store, Type, Target, UserName, Persist, Comment, LastWritten, BlobSize, RestoreHint |
+                ConvertTo-Csv -NoTypeInformation | Select-Object -Last 1)
+            $csvLines += $csvRow
+        }
+        $csvText  = ($csvLines -join "`r`n") + "`r`n"
+        $bomBytes = [byte[]](0xEF, 0xBB, 0xBF)
+        $csvBytes = $bomBytes + [System.Text.Encoding]::UTF8.GetBytes($csvText)
+        [System.IO.File]::WriteAllBytes($deployCsvPath, $csvBytes)
+    }
     $copied += 'credentials_list.csv'
 
     Copy-Item -LiteralPath $payloadPs1  -Destination (Join-Path $deployDir 'register_credentials.ps1') -Force -ErrorAction Stop
@@ -206,6 +252,9 @@ $deployManifest = [ordered]@{
     deployedFiles         = $copied
     sourceCredentialCount = if ($srcManifestObj) { [int]$srcManifestObj.credentialCount } else { $null }
     sourceManualHintCount = if ($srcManifestObj) { [int]$srcManifestObj.manualHintCount } else { $null }
+    sourceCsvRowCount     = $srcRowCount
+    deployedCsvRowCount   = $deployedCount
+    includeTargetsApplied = ($null -ne $includeTargetSet)
     warnings              = $warnings
 }
 
@@ -227,6 +276,12 @@ if ($copied.Count -eq 0) {
 }
 
 Show-Info ("credentials/restore: deployed {0} files to {1} (status: {2})" -f $copied.Count, $deployDir, $status)
+if ($null -ne $includeTargetSet) {
+    Show-Info ("credentials/restore: IncludeTargets filter applied - {0} of {1} rows kept in deployed CSV" -f `
+        $deployedCount, $srcRowCount)
+} elseif ($srcRowCount -gt 0) {
+    Show-Info ("credentials/restore: deployed CSV contains all {0} rows (no IncludeTargets filter)" -f $srcRowCount)
+}
 if ($srcManifestObj) {
     Show-Info ("credentials/restore: source contained {0} credentials ({1} marked manual)" -f `
         $srcManifestObj.credentialCount, $srcManifestObj.manualHintCount)
@@ -244,6 +299,9 @@ return [PSCustomObject]@{
         deployedFileCount     = $copied.Count
         sourceCredentialCount = if ($srcManifestObj) { [int]$srcManifestObj.credentialCount } else { $null }
         sourceManualHintCount = if ($srcManifestObj) { [int]$srcManifestObj.manualHintCount } else { $null }
+        sourceCsvRowCount     = $srcRowCount
+        deployedCsvRowCount   = $deployedCount
+        includeTargetsApplied = ($null -ne $includeTargetSet)
     }
     Warnings             = $warnings
     ExternalOutputDir    = $null

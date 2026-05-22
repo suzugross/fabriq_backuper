@@ -15,6 +15,47 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.20.0: **資格情報リストア時の対象選択ダイアログ** を追加。
+  バックアップは全件採取 (= v0.19.x のまま) のまま、**リストア時に CSV
+  に含めるエントリを operator が選択** できるようになった。
+  - **新規ファイル** [credentials_select_dialog.ps1](backuper/lib/ui/credentials_select_dialog.ps1):
+    モーダルダイアログ。バックアップ manifest の credentials 配列を
+    DataGridView (Check / Target / Type / UserName / Persist / Hint) で
+    一覧表示。デフォルトは全件チェック ON。「全選択」「全クリア」
+    「manual を除外」のバルク操作ボタンと、選択件数のリアルタイム表示
+    (CommitEdit + CellValueChanged フックで checkbox 変更を即反映)。
+    OK で選択済み Target 配列を返す、キャンセルで `$null` を返す。
+  - **[restore_view.ps1](backuper/lib/ui/restore_view.ps1)** に
+    「資格情報の選択...」ボタン (X=660, Y=202) + 状態ラベル
+    (`(未選択 = 全件)` / `N 件選択中`) を「対象ユーザ」コンボの
+    右隣に追加。`Invoke-RestoreCredentialsSelect` がバックアップ manifest
+    を読み、ダイアログを呼び、結果を `$script:RestoreCredentialsIncludeTargets`
+    に保存する。
+  - **バックアップソース変更時の自動リセット**: タイムスタンプ combo の
+    `SelectedIndexChanged` および browse 経由ソース確定時に、
+    IncludeTargets と LastSource を `$null` に戻して
+    「古いバックアップの選択を新しいバックアップに適用してしまう」
+    事故を防止。
+  - **[credentials/restore.ps1](backuper/lib/sections/credentials/restore.ps1)**
+    に新規 SectionParam `IncludeTargets` (string array, optional) を追加。
+    - `$null` / 未指定 = 全件 deploy (= v0.19.x 動作と同じ、後方互換)
+    - 配列指定 = `Target` 列が配列に含まれるエントリのみを deploy CSV
+      に書き出し
+    - 空配列 (`@()`) = 0 件 deploy (header のみの CSV、operator が
+      明示的に「全部いらない」と指定した場合の honest 表現)
+    - 非マッチ Target = 単に skip (警告なし、deploy CSV から除外)
+    - フィルタ済 CSV は元と同じ UTF-8 BOM + CRLF + 9 列スキーマで再生成
+  - **`restore_manifest.json` schema additive 拡張**: `sourceCsvRowCount` /
+    `deployedCsvRowCount` / `includeTargetsApplied` の 3 フィールドを
+    追加。Section Summary にも同 3 フィールドを追加。
+  - **不変**: backup.ps1 / dump_creds.ps1 / 全 operator_payload / engine /
+    manifest_aggregator / sections.csv は無変更。manifest schema は
+    additive のみで後方互換。v0.19.x で取った既存バックアップを
+    v0.20.0 の restore で読んでも問題なし。
+  - **PoC artifact**: [dev/credentials_poc/12_restore_filter_harness.ps1](dev/credentials_poc/12_restore_filter_harness.ps1)
+    で 4 ケース (null / subset / empty / no_match) を自動検証。
+
 ### Changed
 - backuper v0.19.2: **credentials section の "OS 自動再生成エントリ" を
   バックアップ時点で除外** ([backup.ps1](backuper/lib/sections/credentials/backup.ps1))。

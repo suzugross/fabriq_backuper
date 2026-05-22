@@ -21,6 +21,15 @@ $script:RestoreUserList        = @()
 # Desktop. v0.17.0: default OFF (実機観察で「ルール手動実行 1 回で復活」が
 # 判明、デフォルトで全削除する必要性が下がった)。
 $script:RestoreOutlookShortcutCheck = $null
+# v0.20.0: credentials section restore selection state.
+# - RestoreCredentialsIncludeTargets: null = include all (default before
+#   operator interaction). Array (possibly empty) = explicit selection.
+# - RestoreCredentialsLastSource: source backup path that the current
+#   selection was made against; cleared/re-evaluated on backup source change.
+$script:RestoreCredentialsIncludeTargets = $null
+$script:RestoreCredentialsLastSource     = $null
+$script:RestoreCredentialsButton         = $null
+$script:RestoreCredentialsStatusLabel    = $null
 # v0.17.0: checkbox controlling whether outlook_pop restore should attempt
 # Strategy B-light (registry auto-rebuild). Default OFF -- operator manual
 # setup via Strategy A is the recommended path. Opt-in for advanced users
@@ -48,6 +57,10 @@ function New-RestoreView {
     $combo.Add_SelectedIndexChanged({
         $script:RestoreExplicitDir = $null
         if ($null -ne $script:RestoreBrowseLabel) { $script:RestoreBrowseLabel.Text = "" }
+        # v0.20.0: credentials selection is per-source; reset on source change
+        $script:RestoreCredentialsIncludeTargets = $null
+        $script:RestoreCredentialsLastSource     = $null
+        Update-RestoreCredentialsStatusLabel
         Update-RestoreSelection
     })
     $script:RestoreTimestampCombo = $combo
@@ -93,6 +106,20 @@ function New-RestoreView {
     $userCombo = New-StyledComboBox -X 386 -Y 202 -Width 260 -Height 24
     $script:RestoreUserCombo = $userCombo
     $panel.Controls.Add($userCombo)
+
+    # ---- Credentials selection button (v0.20.0) -----------
+    # Lives on the same Y as the target-user combo; lets operator open a
+    # modal grid to (de)select which credentials to actually re-register
+    # at restore time. Default ($script:RestoreCredentialsIncludeTargets
+    # = $null) means "include all", same as v0.19.x behavior.
+    $script:RestoreCredentialsButton = New-StyledButton `
+        -Text "資格情報の選択..." -X 660 -Y 202 -Width 150 -Height 26
+    $script:RestoreCredentialsButton.Add_Click({ Invoke-RestoreCredentialsSelect })
+    $panel.Controls.Add($script:RestoreCredentialsButton)
+
+    $script:RestoreCredentialsStatusLabel = New-StyledLabel `
+        -Text "(未選択 = 全件)" -X 816 -Y 206 -Width 90 -Height 18 -FgColor $script:fgDim
+    $panel.Controls.Add($script:RestoreCredentialsStatusLabel)
 
     # ---- Outlook extras row (Phase 0.15.0 + v0.17.0) ------
     # 2 つのチェックボックスを縦並びで配置:
@@ -285,6 +312,10 @@ function Invoke-RestoreBrowse {
 
     $script:RestoreExplicitDir = $chosen
     $script:RestoreBrowseLabel.Text = "Browse mode: $chosen"
+    # v0.20.0: source changed via Browse - reset credentials selection
+    $script:RestoreCredentialsIncludeTargets = $null
+    $script:RestoreCredentialsLastSource     = $null
+    Update-RestoreCredentialsStatusLabel
     $sz = if ($agg.summary.totalBytes) { [math]::Round([long]$agg.summary.totalBytes / 1MB, 1) } else { 0 }
     $secCount = if ($agg.summary.sectionCount) { [int]$agg.summary.sectionCount } else { 0 }
     $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  oldPcName=$($agg.oldPcName)  |  sections=$secCount  |  totalBytes=$sz MB"
@@ -386,6 +417,102 @@ function Update-RestoreSelection {
     Show-RestorePrinterListFromAggregate -AggregateDir $aggregateDir
 }
 
+# v0.20.0: helpers for the credentials selection dialog ----------
+function Get-RestoreCurrentAggregateDir {
+    # Returns the aggregate backup directory currently selected by the
+    # operator, or $null if none is selected. Mirrors the resolution
+    # done in Invoke-RestoreStart so the dialog reads from the same
+    # source the restore will use.
+    if (-not [string]::IsNullOrWhiteSpace($script:RestoreExplicitDir)) {
+        return $script:RestoreExplicitDir
+    }
+    if ($null -eq $script:CurrentHost) { return $null }
+    if ($null -eq $script:RestoreTimestampCombo -or `
+        $script:RestoreTimestampCombo.SelectedIndex -lt 0) {
+        return $null
+    }
+    $ts = $script:RestoreTimestampCombo.SelectedItem
+    return (Join-Path (Join-Path (Join-Path $script:BackuperRoot 'Backup') `
+        $script:CurrentHost.OldPCname) $ts)
+}
+
+function Update-RestoreCredentialsStatusLabel {
+    if ($null -eq $script:RestoreCredentialsStatusLabel) { return }
+    if ($null -eq $script:RestoreCredentialsIncludeTargets) {
+        $script:RestoreCredentialsStatusLabel.Text = '(未選択 = 全件)'
+    } else {
+        $script:RestoreCredentialsStatusLabel.Text = `
+            ('{0} 件選択中' -f $script:RestoreCredentialsIncludeTargets.Count)
+    }
+}
+
+function Invoke-RestoreCredentialsSelect {
+    # Resolve the source backup dir; bail with a clear message if none
+    # is selected yet so the operator knows what to do first.
+    $aggregateDir = Get-RestoreCurrentAggregateDir
+    if ([string]::IsNullOrWhiteSpace($aggregateDir) -or -not (Test-Path $aggregateDir)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "先にバックアップ (日時 または [バックアップを参照]) を選択してください。",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+
+    # Locate credentials section manifest
+    $credsManifest = Join-Path $aggregateDir 'sections\credentials\manifest.json'
+    if (-not (Test-Path $credsManifest)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "選択中のバックアップに credentials セクションの manifest がありません。`n($credsManifest)",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+
+    # Parse manifest
+    $credsList = @()
+    try {
+        $manifestObj = Get-Content -Path $credsManifest -Raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $manifestObj.credentials) {
+            $credsList = @($manifestObj.credentials)
+        }
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "credentials manifest の読み取りに失敗しました: $($_.Exception.Message)",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+
+    if ($credsList.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "選択中のバックアップに資格情報のエントリがありません (credentialCount=0)。",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+
+    # If the source has changed since the last selection, reset the
+    # preselected list (avoid carrying stale Target strings forward).
+    $preselect = $script:RestoreCredentialsIncludeTargets
+    if ($script:RestoreCredentialsLastSource -ne $aggregateDir) {
+        $preselect = $null
+    }
+
+    $selected = Show-CredentialsSelectDialog `
+        -Credentials $credsList `
+        -PreselectedTargets $preselect
+
+    if ($null -eq $selected) { return }  # cancelled
+
+    $script:RestoreCredentialsIncludeTargets = @($selected)
+    $script:RestoreCredentialsLastSource     = $aggregateDir
+    Update-RestoreCredentialsStatusLabel
+}
+
 function Invoke-RestoreStart {
     $useExplicit = -not [string]::IsNullOrWhiteSpace($script:RestoreExplicitDir)
     if (-not $useExplicit) {
@@ -451,8 +578,11 @@ function Invoke-RestoreStart {
         # the target user's Documents. TargetUserProfilePath drives that
         # deploy path; without it the deploy would fall back to the
         # admin profile (wrong user).
+        # v0.20.0: IncludeTargets (optional) filters which credentials make
+        # it into the deployed CSV. $null = include all (= v0.19.x behavior).
         credentials = @{
             TargetUserProfilePath = $targetUserProfilePath
+            IncludeTargets        = $script:RestoreCredentialsIncludeTargets
         }
     }
 
