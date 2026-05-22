@@ -394,14 +394,16 @@ function Get-AccountData {
 # PST <-> account resolution (3-stage chain)
 # ============================================================
 function Resolve-PstForAccount {
-    # Three-stage chain:
-    #   1. Filename match: PST file basename == account email (case-insensitive).
-    #      Highest confidence; Outlook 2010+ default naming convention.
-    #   2. EntryID binary scan: extract path from the production
-    #      mspst.dll EntryID wrapper.
-    #   3. Single-candidate fallback: if exactly one PST exists in
-    #      the profile (no ambiguity to resolve), pick it.
-    #   Failure: emit candidate list for operator triage.
+    # Three-stage chain (v0.17 update: Stage 1/2 順序を入れ替え、EntryID 優先).
+    #
+    # Stage 1 (authoritative): EntryID binary scan — Outlook が実際に
+    #   "現在この account の配信先" として binding している PST。命名規則の
+    #   推測より信頼度が高い。
+    # Stage 2 (fallback): Filename match — Outlook 2010+ default naming
+    #   "<email>.pst" の救済策。EntryID が壊れている / 取れない場合に活躍。
+    # Stage 3 (fallback): Single-candidate — profile に PST が 1 つだけなら
+    #   ambiguity 無し。
+    # Failure: emit candidate list for operator triage.
     param(
         $Account,
         [string[]]$PstCandidates
@@ -410,23 +412,7 @@ function Resolve-PstForAccount {
     $email = $Account.email
     if ([string]::IsNullOrWhiteSpace($email)) { $email = $Account.accountName }
 
-    # --- Stage 1: filename match ---
-    if (-not [string]::IsNullOrWhiteSpace($email)) {
-        foreach ($p in $PstCandidates) {
-            $base = [System.IO.Path]::GetFileNameWithoutExtension($p)
-            if ($base -ieq $email) {
-                return [ordered]@{
-                    path             = $p
-                    fileName         = (Split-Path $p -Leaf)
-                    detectionMethod  = 'filename-match'
-                    confidence       = 'high'
-                    reason           = "PST filename matches account email"
-                }
-            }
-        }
-    }
-
-    # --- Stage 2: EntryID binary scan ---
+    # --- Stage 1: EntryID binary scan (authoritative) ---
     $entryIdBytes = $Account._deliveryStoreEntryIdBytes
     if ($null -ne $entryIdBytes -and $entryIdBytes.Length -gt 0) {
         $parsed = Get-PstPathFromEntryIdBytes -EntryIdBytes $entryIdBytes
@@ -439,7 +425,23 @@ function Resolve-PstForAccount {
                 fileName         = (Split-Path $parsed -Leaf)
                 detectionMethod  = if ($matched) { 'entryid-scan-confirmed' } else { 'entryid-scan' }
                 confidence       = if ($matched) { 'high' } else { 'medium' }
-                reason           = "Path extracted from Delivery Store EntryID"
+                reason           = "Path extracted from Delivery Store EntryID (Outlook's actual binding)"
+            }
+        }
+    }
+
+    # --- Stage 2: filename match (fallback) ---
+    if (-not [string]::IsNullOrWhiteSpace($email)) {
+        foreach ($p in $PstCandidates) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($p)
+            if ($base -ieq $email) {
+                return [ordered]@{
+                    path             = $p
+                    fileName         = (Split-Path $p -Leaf)
+                    detectionMethod  = 'filename-match-fallback'
+                    confidence       = 'medium'
+                    reason           = "PST filename matches account email (EntryID unavailable)"
+                }
             }
         }
     }

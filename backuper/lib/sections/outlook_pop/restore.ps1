@@ -251,7 +251,12 @@ function Test-AccountImported {
 }
 
 function Convert-RegFileToStrategyBLight {
-    # Phase 2.10.3 / extended in Phase 2.12.0 for cross-version + IMAP.
+    # Phase 2.10.3 / extended in Phase 2.12.0 for cross-version + IMAP /
+    # v0.18.2: T7 reverted, T5 trigger reverted to cross-version only.
+    # IMAP-containing profiles are now gated out at the main-flow level
+    # BEFORE reaching this transform, so the function only ever processes
+    # POP-only profiles. T7 (IMAP subkey drop) and the expanded T5
+    # (IMAP-drop-triggered OST drop) became dead code and were removed.
     #
     # Pre-process a profile .reg file to make Outlook's account-to-store
     # binding cross-PC-portable. Five transforms, all section-aware where
@@ -313,19 +318,22 @@ function Convert-RegFileToStrategyBLight {
     #     stores; their OST file references point to source PC paths that
     #     either don't exist or can't be DPAPI-decrypted on the target.
     #
-    #     Gated on cross-version (Phase 2.12.1 hotfix). The drop creates
-    #     dangling MAPIUID references in surviving subkeys (IMAP account
-    #     "Service UID", MAPI section provider 0a0d02..., other service
-    #     definitions). Outlook 365 importing a 2013 (15.0) reg goes
-    #     through a lenient "schema migration" path that tolerates these,
-    #     but Outlook 365 importing its own (16.0) reg validates strictly
-    #     and fails to open the profile ("cannot open this folder set").
-    #
-    #     For same-version restore, leave OST service-def subkeys intact;
-    #     Outlook's normal IMAP cross-PC behaviour (OST auto-recreate on
-    #     first sync) handles the missing file case. T4 path rewrites
-    #     keep the subkey content internally consistent with the target
-    #     user's directory layout.
+    #     Gating: cross-version only (Phase 2.12.1 hotfix rationale,
+    #     reinstated in v0.18.2 after v0.18.0's expanded trigger was
+    #     proven unsafe). The drop creates dangling MAPIUID references in
+    #     surviving subkeys (IMAP account "Service UID", MAPI section
+    #     provider 0a0d02... etc). Outlook 365 importing a 2013 (15.0) reg
+    #     goes through a lenient "schema migration" path that tolerates
+    #     these, but Outlook 365 importing its own (16.0) reg validates
+    #     strictly and fails to open the profile ("cannot open this folder
+    #     set"). v0.18.0 attempted to side-step this by also dropping the
+    #     IMAP account subkey via T7 -- but well-known subkeys in same-ver
+    #     still hold the now-dangling MAPIUID and Outlook silently crashes
+    #     on startup. v0.18.2 abandons that path: IMAP-containing profiles
+    #     skip B-light entirely at the main-flow gate, so this function
+    #     only sees POP-only profiles. POP-only profiles have no OST
+    #     subkeys to begin with, so T5 is effectively a no-op for them,
+    #     but the cross-version condition is preserved for completeness.
     #
     # Returns the path to a new temp .reg with the transforms applied.
     param(
@@ -374,7 +382,10 @@ function Convert-RegFileToStrategyBLight {
     # ---- Pre-scan: identify OST-bearing service-def subkeys.
     # Always scanned; the resulting set is consumed differently per
     # version mode (T5 drops them when cross-version, T6 strips internal
-    # binary path values when same-version). ----
+    # binary path values when same-version POP-only). In practice from
+    # v0.18.2+ this function only sees POP-only profiles (IMAP-containing
+    # profiles are gated out earlier), so ostSections is typically empty
+    # and both T5/T6 become no-ops. The scan is preserved for safety. ----
     $isCrossVersion = -not [string]::IsNullOrWhiteSpace($SourceVersion) -and
                       -not [string]::IsNullOrWhiteSpace($TargetVersion) -and
                       $SourceVersion -ne $TargetVersion
@@ -404,8 +415,8 @@ function Convert-RegFileToStrategyBLight {
     $srcUserHex = ($srcUserBytes | ForEach-Object { '{0:x2}' -f $_ }) -join ','
     $dstUserHex = ($dstUserBytes | ForEach-Object { '{0:x2}' -f $_ }) -join ','
 
-    # ---- Main pass: T2/T3/T4 inline, T5 section drop (cross-ver),
-    # T6 binary EntryID strip in OST subkey (same-ver) ----
+    # ---- Main pass: T2/T3/T4 inline, T5 section drop (cross-ver only),
+    # T6 binary EntryID strip in OST subkey (same-ver POP-only) ----
     $processedLines = New-Object System.Collections.Generic.List[string]
     $currentKey    = $null
     $inAcctSubkey  = $false
@@ -421,7 +432,11 @@ function Convert-RegFileToStrategyBLight {
             $currentKey = $matches[1]
             $inAcctSubkey = $currentKey -match $intAcctRe
             $inOstSubkey  = $ostSections.Contains($currentKey)
-            # T5: drop entire section when cross-version
+            # T5: drop entire OST service-def section when cross-version.
+            # Same-version IMAP-mixed profiles are gated out at the
+            # main-flow level so we don't reach here for them; for
+            # POP-only profiles ostSections is empty so this branch is
+            # essentially never taken.
             if ($inOstSubkey -and $isCrossVersion) {
                 $dropSection = $true
                 $droppedSec++
@@ -466,7 +481,7 @@ function Convert-RegFileToStrategyBLight {
     }
 
     $t5Label = if ($isCrossVersion) { "T5 OST-drop=$droppedSec" }
-               else { 'T5 OST-drop=0 (skipped: same-version)' }
+               else { 'T5 OST-drop=0 (same-version)' }
     $t6Label = if ($isCrossVersion) { 'T6 OST-bin-strip=0 (skipped: cross-version)' }
                else { "T6 OST-bin-strip=$stripOstBin" }
     Show-Info ("  [BL-transform] T1 version-path=$t1Count  T2 POP-strip=$stripPop  " +
@@ -583,26 +598,20 @@ function New-OutlookAccountInfoText {
     #       <localized_outlook_files>\_account_settings.txt (operator
     #       safety net, travels with the PST file)
     #
-    # Content: source/target metadata, per-account email + PST file +
-    # POP3/SMTP server settings, and a manual setup procedure that an
-    # operator can follow if automatic restore ever has to be redone
-    # by hand. Body is in Japanese because the file is read by on-site
+    # v0.18.3 scope shrink: the function now emits ONLY account data
+    # (source/target metadata + per-account server settings + PST file
+    # references). All operator-facing procedural content was removed --
+    # manual setup steps, cross-version cleanup, OST/PST behaviour
+    # explanations, and the /cleanclientrules shortcut callout are now
+    # handled in separate documentation/tooling (out of scope for this
+    # repo). Body is in Japanese because the file is read by on-site
     # operators (UI policy applies to operator-facing artifacts).
     param(
         [Parameter(Mandatory = $true)]$Manifest,
         [Parameter(Mandatory = $true)][string]$TargetUserProfilePath,
         [Parameter(Mandatory = $true)]$PlannedAccounts,
         [Parameter(Mandatory = $true)]$ResultsByAccount,
-        [bool]$StrategyBAttempted = $false,
-        [bool]$StrategyBSucceeded = $false,
-        [string]$ProfileFilter = $null,
-        [bool]$IsCrossVersion = $false,
-        [string]$CrossVersionDirection = $null,
-        [bool]$ImapPresent = $false,
-        # Phase 0.15.0: when set, the function appends an "初回起動について"
-        # section explaining the /cleanclientrules launcher shortcut. $null
-        # means no shortcut was generated and the section is omitted.
-        [string]$RuleClearShortcutPath = $null
+        [string]$ProfileFilter = $null
     )
 
     # Optional per-profile filter: when writing the target-folder copy
@@ -614,26 +623,9 @@ function New-OutlookAccountInfoText {
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('========================================') | Out-Null
-    if ($StrategyBSucceeded) {
-        $lines.Add(' Outlook POP アカウント設定 (自動復元済み)') | Out-Null
-    } else {
-        $lines.Add(' Outlook POP アカウント復元 - 手動セットアップが必要') | Out-Null
-    }
+    $lines.Add(' Outlook アカウント情報') | Out-Null
     $lines.Add('========================================') | Out-Null
     $lines.Add('') | Out-Null
-
-    if ($StrategyBAttempted -and -not $StrategyBSucceeded) {
-        $lines.Add('注意: Strategy B (レジストリ自動インポート) を試行しましたが') | Out-Null
-        $lines.Add('完全な検証ができませんでした。手動ウィザードによるセットアップにフォールバックします。') | Out-Null
-        $lines.Add('詳細は実行サマリのセクション警告を参照してください。') | Out-Null
-        $lines.Add('') | Out-Null
-    }
-    if ($StrategyBSucceeded) {
-        $lines.Add('本ファイルはアカウントと PST のマッピング、および全サーバ設定の参照コピーです。') | Out-Null
-        $lines.Add('自動復元は成功しており、Outlook アカウントを最初から手動で再構成する場合に') | Out-Null
-        $lines.Add('のみ本設定が必要となります。') | Out-Null
-        $lines.Add('') | Out-Null
-    }
 
     $lines.Add("移行元 PC     : $($Manifest.computerName)") | Out-Null
     if ($Manifest.sourceUser -and $Manifest.sourceUser.userName) {
@@ -662,7 +654,7 @@ function New-OutlookAccountInfoText {
         $lines.Add('----------------------------------------') | Out-Null
 
         if ($r.status -ne 'Success') {
-            $lines.Add('  ** 手動セットアップに必要な情報が揃っていません **') | Out-Null
+            $lines.Add('  ** アカウント情報を取得できませんでした **') | Out-Null
             $lines.Add("  理由: $($r.reason)") | Out-Null
             $lines.Add('') | Out-Null
             continue
@@ -671,7 +663,7 @@ function New-OutlookAccountInfoText {
         $isImap = ("$($acct.type)" -eq 'imap')
 
         $lines.Add('') | Out-Null
-        $lines.Add('  ウィザード入力項目 (表示名 / メール / サーバ設定):') | Out-Null
+        $lines.Add('  アカウント基本情報:') | Out-Null
         $lines.Add("    表示名            : $($acct.displayName)") | Out-Null
         $lines.Add("    メールアドレス    : $($acct.email)") | Out-Null
         $lines.Add("    アカウント種別    : $(if ($isImap) { 'IMAP' } else { 'POP' })") | Out-Null
@@ -753,142 +745,29 @@ function New-OutlookAccountInfoText {
 
         if ($isImap) {
             $lines.Add('  ローカルデータファイル (OST):') | Out-Null
-            $lines.Add('    移行されません。OST はマシン単位の DPAPI で暗号化されており') | Out-Null
-            $lines.Add('    PC 間で持ち運べません。初回 IMAP 同期時に Outlook が既定の') | Out-Null
-            $lines.Add('    場所に新しい OST を作成し、IMAP サーバから全フォルダを') | Out-Null
-            $lines.Add('    再ダウンロードします。') | Out-Null
+            $lines.Add('    移行対象外 (per-machine DPAPI 暗号化のため)') | Out-Null
         } else {
-            $lines.Add('  既存データファイル (PST):') | Out-Null
-            $lines.Add("    $($r.targetPstPath)") | Out-Null
+            $lines.Add('  データファイル (PST):') | Out-Null
+            $lines.Add("    binding             : $($r.targetPstPath)") | Out-Null
+            # v0.17 update: マルチ PST プロファイル時は同一フォルダ内の他 PST を
+            # データとして列挙する (v0.18.3: 手順的な advice を削除、列挙のみ)。
+            if ($r.PSObject.Properties.Name -contains 'renameSkipped' -and `
+                $r.renameSkipped -and `
+                $r.PSObject.Properties.Name -contains 'otherPstsAtTarget' -and `
+                $r.otherPstsAtTarget.Count -gt 0) {
+                $lines.Add("    その他同居 PST:") | Out-Null
+                foreach ($op in $r.otherPstsAtTarget) {
+                    $lines.Add("      - $op") | Out-Null
+                }
+            }
         }
         $lines.Add('') | Out-Null
     }
 
-    $lines.Add('----------------------------------------') | Out-Null
-    $lines.Add(' 手動セットアップ手順 (必要な場合のみ):') | Out-Null
-    $lines.Add('----------------------------------------') | Out-Null
-    $lines.Add('  1. Outlook を起動') | Out-Null
-    $lines.Add('  2. ファイル > アカウント追加') | Out-Null
-    $lines.Add('  3. "詳細オプション" を展開し "自分で自分のアカウントを手動で設定"') | Out-Null
-    $lines.Add('     にチェックを入れる (POP アカウントの場合は必須。チェックしないと') | Out-Null
-    $lines.Add('     Outlook が IMAP に自動判定してしまう。IMAP の場合も明示的な制御の') | Out-Null
-    $lines.Add('     ため推奨。)') | Out-Null
-    $lines.Add('  4. 上記のメールアドレスを入力し "接続" をクリック') | Out-Null
-    $lines.Add('  5. 上のアカウントセクションに記載された "アカウント種別"') | Out-Null
-    $lines.Add('     (POP または IMAP) と一致する種別を選択') | Out-Null
-    $lines.Add('  6. 上記のサーバ設定をそのまま入力。IMAP の場合は') | Out-Null
-    $lines.Add('     ルートフォルダパスも記載があれば設定。') | Out-Null
-    $lines.Add('  7. POP のみ: データファイルを尋ねられたら "既存の Outlook データ') | Out-Null
-    $lines.Add('     ファイル" を選択し、記載された PST パスを参照。') | Out-Null
-    $lines.Add('     IMAP: データファイル選択ステップなし (OST は自動作成)。') | Out-Null
-    $lines.Add('  8. ウィザードを完了') | Out-Null
-    $lines.Add('  9. 初回送受信時に Outlook がパスワードを尋ねたら入力') | Out-Null
-    $lines.Add('     (DPAPI 制約によりパスワードは PC を跨いで配信不能)') | Out-Null
-    $lines.Add('') | Out-Null
-    $lines.Add(' POP のみ: メールアドレスが PST のファイル名と一致していれば') | Out-Null
-    $lines.Add(' (本ツールでは <email>.pst にリネーム済みなので一致するはず)、') | Out-Null
-    $lines.Add(' Outlook が既存 PST を自動でアタッチし、過去のメール/フォルダ/') | Out-Null
-    $lines.Add(' 連絡先がすべて表示されます。') | Out-Null
-    $lines.Add('') | Out-Null
-    $lines.Add(' IMAP のみ: Outlook が AppData\Local\Microsoft\Outlook\ 配下に') | Out-Null
-    $lines.Add(' 新しい OST を作成し、初回同期時にサーバから全フォルダを') | Out-Null
-    $lines.Add(' 再ダウンロードします (大きなメールボックスでは時間がかかります)。') | Out-Null
-    $lines.Add('') | Out-Null
-
-    if ($IsCrossVersion) {
-        # CrossVersionDirection is an internal enum string (e.g. "2013->2016+",
-        # "365->2019") used as-is in the section label for cross-reference
-        # against the run log.
-        $dirLabel = if ($CrossVersionDirection) { " ($CrossVersionDirection)" } else { '' }
-        $lines.Add('========================================') | Out-Null
-        $lines.Add(" 異バージョン復元時のクリーンアップ手順$dirLabel") | Out-Null
-        $lines.Add('========================================') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' 移行元と移行先の Outlook がメジャーバージョン違いです') | Out-Null
-        $lines.Add(' (例: 2013 -> 2016/2019/365)。Outlook の初回起動時に') | Out-Null
-        $lines.Add(' 操作者の対応が必要なプロンプトがいくつか表示されます。') | Out-Null
-        $lines.Add(' これらは Microsoft の挙動でレジストリでは抑制できません。') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' A. "IMAP 検索フォルダ" の警告ポップアップ (1回限り)') | Out-Null
-        $lines.Add('    旧 IMAP 検索フォルダが新 OST に適用できない旨が表示されます。') | Out-Null
-        $lines.Add('    OK で閉じれば再表示されません。') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' B. 空の "Outlook.pst" が自動作成される') | Out-Null
-        $lines.Add('    異バージョン reg-import ではプロファイルに "既定の配信ストア"') | Out-Null
-        $lines.Add('    ポインタが含まれないため、Outlook が空の Outlook.pst を新規作成し') | Out-Null
-        $lines.Add('    既定として利用します。移行した PST に再バインドする手順:') | Out-Null
-        $lines.Add('      1. ファイル > アカウント設定 > アカウント設定') | Out-Null
-        $lines.Add('         > データファイル タブ') | Out-Null
-        $lines.Add('      2. 移行した PST') | Out-Null
-        $lines.Add('         (Outlook ファイル フォルダ配下の <email>.pst) を選択し') | Out-Null
-        $lines.Add('         "既定に設定" をクリック') | Out-Null
-        $lines.Add('      3. Outlook を完全に終了し、再起動') | Out-Null
-        $lines.Add('      4. 同じデータファイル タブで Outlook.pst を選択し') | Out-Null
-        $lines.Add('         "削除" をクリック') | Out-Null
-        $lines.Add('      5. メール タブで POP アカウントを選択し') | Out-Null
-        $lines.Add('         "フォルダの変更" をクリック、移行した PST の受信トレイを') | Out-Null
-        $lines.Add('         選択して OK') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' C. パスワード入力') | Out-Null
-        $lines.Add('    初回送受信時に POP / IMAP のパスワードを入力 (DPAPI 制約により') | Out-Null
-        $lines.Add('    パスワードは PC を跨いで持ち運べないため、必ず手入力が必要)。') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' 上記手順の完了後は、以降の起動と送受信が通常通り動作します。') | Out-Null
-        $lines.Add('') | Out-Null
-    }
-
-    # Same-version IMAP-present: POP delivery target sometimes auto-binds
-    # to the IMAP OST instead of the migrated PST after Strategy B-light
-    # strips Delivery Store EntryID. Cross-version cleanup section already
-    # covers the same fix step (under "B. Outlook.pst cleanup"), so this
-    # section is suppressed when IsCrossVersion is true to avoid redundancy.
-    if ($ImapPresent -and -not $IsCrossVersion) {
-        $lines.Add('========================================') | Out-Null
-        $lines.Add(' POP の配信先確認 (IMAP 共存プロファイル)') | Out-Null
-        $lines.Add('========================================') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' 移行元プロファイルには上記の POP アカウントに加えて') | Out-Null
-        $lines.Add(' IMAP アカウントが含まれていました。Strategy B-light が') | Out-Null
-        $lines.Add(' 明示的な POP 配信バインド (Delivery Store EntryID) を除去するため、') | Out-Null
-        $lines.Add(' 移行先 PC の Outlook はプロファイル内の利用可能なメッセージストアから') | Out-Null
-        $lines.Add(' 配信先を自動選択します。移行した PST と再作成された IMAP OST が') | Out-Null
-        $lines.Add(' 共存している場合、Outlook が PST ではなく OST を選んでしまい、') | Out-Null
-        $lines.Add(' 新着 POP メールが IMAP フォルダに落ちることがあります。') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' 確認と修正手順:') | Out-Null
-        $lines.Add('   1. ファイル > アカウント設定 > アカウント設定 > メール タブ') | Out-Null
-        $lines.Add('   2. 各 POP アカウントを選択') | Out-Null
-        $lines.Add('   3. 下部の "選択したアカウントは新しいメッセージを次の場所に') | Out-Null
-        $lines.Add('      配信します:" の表記を確認') | Out-Null
-        $lines.Add('   4. 配信先が IMAP OST (またはその他誤った場所) であれば') | Out-Null
-        $lines.Add('      "フォルダの変更" をクリックし、移行した PST') | Out-Null
-        $lines.Add('      (Outlook ファイル フォルダ配下の <email>.pst) の受信トレイを') | Out-Null
-        $lines.Add('      選択して OK') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' これは 1 回限りの修正で、以降の起動でもバインドが維持されます。') | Out-Null
-        $lines.Add('') | Out-Null
-    }
-
-    # Phase 0.15.0: rule-clear shortcut callout. Inserted only when the
-    # launcher shortcut was actually generated.
-    if (-not [string]::IsNullOrWhiteSpace($RuleClearShortcutPath)) {
-        $lines.Add('========================================') | Out-Null
-        $lines.Add(' 初回起動について') | Out-Null
-        $lines.Add('========================================') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' Desktop に生成された次のショートカットから Outlook を起動してください:') | Out-Null
-        $lines.Add("   $(Split-Path $RuleClearShortcutPath -Leaf)") | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' これは "outlook.exe /cleanclientrules" を実行するショートカットで、') | Out-Null
-        $lines.Add(' 移行されたクライアントサイドの仕分けルールをクリアします。') | Out-Null
-        $lines.Add('') | Out-Null
-        $lines.Add(' - 移行先 PC では PST 内のルールが正しく動作しない場合があるため、') | Out-Null
-        $lines.Add('   初回起動時にクリアすることで受信時のエラーを回避します。') | Out-Null
-        $lines.Add(' - サーバサイドのルール (IMAP / Exchange) は影響を受けません。') | Out-Null
-        $lines.Add(' - 必要なルールは Outlook 上で手動で再設定してください。') | Out-Null
-        $lines.Add(' - 初回起動後は通常の Outlook アイコンから起動して問題ありません。') | Out-Null
-        $lines.Add('') | Out-Null
-    }
+    # v0.18.3: all procedural sections removed. The file is account-data
+    # only -- manual setup steps, cross-version cleanup notes, OST/PST
+    # behaviour explanations, and the /cleanclientrules shortcut callout
+    # are handled by separate documentation/tooling (out of scope here).
 
     $lines.Add('========================================') | Out-Null
 
@@ -912,6 +791,19 @@ if ([string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
 $createRuleClearShortcut = $false
 if ($SectionParams.ContainsKey('CreateRuleClearShortcut')) {
     $createRuleClearShortcut = [bool]$SectionParams['CreateRuleClearShortcut']
+}
+
+# v0.17.0: Strategy B-light (registry auto-rebuild) is now OFF by default.
+# Reason: the T1-T6 MAPI registry transforms are heuristic-based and have a
+# track record of subtle profile corruption (cf. restore.ps1:260+ T-series
+# comments). Operator manual setup (Strategy A) via the generated
+# _account_settings.txt + RESTORE_INSTRUCTIONS.txt is the recommended path.
+# The UI checkbox in restore_view.ps1 ("レジストリ自動再構築 (実験的)") gates
+# this; callers that omit the flag will skip Strategy B entirely and go
+# straight to Strategy A operator handoff.
+$attemptStrategyB = $false
+if ($SectionParams.ContainsKey('AttemptStrategyB')) {
+    $attemptStrategyB = [bool]$SectionParams['AttemptStrategyB']
 }
 
 # ----------------------------------------------------------
@@ -1020,30 +912,14 @@ if (-not [string]::IsNullOrWhiteSpace($srcRegVer) -and
     }
 }
 
-# ----------------------------------------------------------
-# Phase 2.12.3 / 2.13.0: detect IMAP presence in source profile.
-# Primary path (Phase 2.13.0+ backup): manifest.items.profiles[].accounts[]
-# now includes IMAP entries with type='imap', alongside counts.imapAccount.
-# Legacy path (pre-2.13.0 backup): IMAP was skipped from enumeration but
-# counted in counts.imapAccountSkipped; still consulted for backward
-# compatibility so older backups continue to trigger the operator note.
-# ----------------------------------------------------------
-$imapPresent = $false
-$imapEnumerated = @()
-foreach ($prof in @($manifest.items.profiles)) {
-    foreach ($acct in @($prof.accounts)) {
-        if ("$($acct.type)" -eq 'imap') { $imapEnumerated += $acct }
-    }
-}
-if ($imapEnumerated.Count -gt 0) {
-    $imapPresent = $true
-    Show-Info ("Source profile contains IMAP account(s) enumerated in manifest (count=$($imapEnumerated.Count))")
-} elseif ($manifest.counts -and `
-          $null -ne $manifest.counts.imapAccountSkipped -and `
-          [int]$manifest.counts.imapAccountSkipped -gt 0) {
-    $imapPresent = $true
-    Show-Info ("Source profile contains IMAP account(s) (legacy schema, skipped count=$($manifest.counts.imapAccountSkipped))")
-}
+# v0.18.3: removed the global $imapPresent detection block. The flag was
+# previously consumed by the Stage 5a popup's "elseif ($imapPresent)"
+# branch (v0.18.2 removed it -- replaced by per-profile partial-skip
+# logic that uses $bLightSkippedImapProfileNames) and by
+# New-OutlookAccountInfoText's IMAP wizard re-add section (also removed
+# in v0.18.2). With both consumers gone the variable was dead code.
+# Per-profile IMAP detection still happens inline at the Strategy B-light
+# safety gate via $profileHasImap.
 
 $plannedAccounts = @()
 foreach ($prof in @($manifest.items.profiles)) {
@@ -1095,14 +971,19 @@ foreach ($pa in $plannedAccounts) {
     Show-Info "[$entryId] $($a.email)"
 
     $accountResult = [ordered]@{
-        profile       = $profileName
-        accountSubKey = $a.subKey
-        accountType   = "$($a.type)"
-        email         = $a.email
-        status        = 'Failed'
-        reason        = $null
-        targetPstPath = $null
-        verifyResult  = $null
+        profile           = $profileName
+        accountSubKey     = $a.subKey
+        accountType       = "$($a.type)"
+        email             = $a.email
+        status            = 'Failed'
+        reason            = $null
+        targetPstPath     = $null
+        # v0.17 update: マルチ PST 環境ではリネームを skip し、operator が
+        # Outlook wizard で明示選択することを期待する。下記 2 フィールドで
+        # _account_settings.txt 等の operator 向け文言に反映する。
+        renameSkipped     = $false
+        otherPstsAtTarget = @()
+        verifyResult      = $null
     }
 
     # Phase 2.13.0: IMAP accounts have no PST to place (OST is per-machine
@@ -1157,6 +1038,53 @@ foreach ($pa in $plannedAccounts) {
         continue
     }
 
+    # v0.17 update: マルチ PST プロファイルではリネームを skip する。
+    #
+    # Why: <email>.pst という名前の他 PST (古いアーカイブ等) が同じプロファイル
+    # に共存していた場合、リネームすると古いアーカイブを active な PST として
+    # auto-attach させてしまう。EntryID で正しく解決した PST を上書きせず
+    # 原名のまま保持し、operator が Outlook wizard で「Browse」で明示選択する
+    # 運用とする。_account_settings.txt にどの PST を選ぶべきかを明記。
+    #
+    # Detection: profileCandidates に sourcePath 以外の PST が存在すれば
+    # マルチ PST と判定。
+    $otherPstsInProfile = @()
+    if ($null -ne $a.pst.profileCandidates) {
+        $otherPstsInProfile = @($a.pst.profileCandidates | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and ($_ -ine $srcPath)
+        })
+    }
+    $isMultiPstProfile = ($otherPstsInProfile.Count -gt 0)
+
+    if ($isMultiPstProfile) {
+        # Rebase each other PST to the target user path so that the
+        # operator-facing _account_settings.txt can reference them by
+        # their actual filesystem location post-userdata-copy.
+        $otherPstsAtTarget = @($otherPstsInProfile | ForEach-Object {
+            $op = "$_"
+            if ($null -ne $sourceUserProfile -and `
+                $op.Length -ge $sourceUserProfile.Length -and `
+                $op.Substring(0, $sourceUserProfile.Length) -ieq $sourceUserProfile) {
+                "$($targetUserProfilePath.TrimEnd('\','/'))$($op.Substring($sourceUserProfile.Length))"
+            } else { $op }
+        })
+
+        Show-Info "  Multi-PST profile detected ($($otherPstsInProfile.Count + 1) PSTs in profile), skipping rename"
+        Show-Info "  PST preserved at original name: $rebasedPath"
+        foreach ($op in $otherPstsAtTarget) {
+            Show-Info "    other PST in profile: $op"
+        }
+        $accountResult.renameSkipped     = $true
+        $accountResult.otherPstsAtTarget = $otherPstsAtTarget
+        $accountResult.targetPstPath     = $rebasedPath
+        $accountResult.status            = 'Success'
+        $resultsByAccount += $accountResult
+        $successCount++
+        try { Set-EntryStatus -Id $entryId -Status 'Done' } catch { }
+        continue
+    }
+
+    # Single-PST profile: 従来の path-collision-attach 用リネームを実施
     if ($rebasedPath -ine $renamedPath) {
         if (Test-Path -LiteralPath $renamedPath) {
             Show-Info "  rename target already at <email>.pst (idempotent skip): $renamedPath"
@@ -1204,7 +1132,13 @@ $strategyBAttempted = $false
 $strategyBSucceeded = $false
 $strategyBDetails = @()
 
-if ($regExports.Count -gt 0 -and $successCount -gt 0) {
+if (-not $attemptStrategyB) {
+    # v0.17.0: default flow. Strategy B-light skipped; operator manual
+    # setup via Strategy A is the canonical path. Falls through to Stage 5
+    # which generates RESTORE_INSTRUCTIONS.txt + _account_settings.txt and
+    # presents an operator-friendly popup.
+    Show-Info 'Strategy B-light: skipped (UI opt-in not selected). Strategy A operator manual setup is the v0.17+ default path.'
+} elseif ($regExports.Count -gt 0 -and $successCount -gt 0) {
     $strategyBAttempted = $true
     Show-Info ('Strategy B: reg-import path is viable (' + $regExports.Count + ' profile export(s))')
 
@@ -1240,7 +1174,15 @@ if ($regExports.Count -gt 0 -and $successCount -gt 0) {
         if ([string]::IsNullOrWhiteSpace($blSrcUserName)) { $blSrcUserName = $blDstUserName }
         Show-Info "  [BL-transform] user rewrite: $blSrcUserName -> $blDstUserName"
 
+        # v0.18.2: per-profile B-light tracking. POP-only profiles go
+        # through B-light; IMAP-containing profiles skip B-light entirely
+        # (gate just below) and fall through to Strategy A for their
+        # accounts. The two name arrays let the post-loop logic distinguish
+        # "everything auto-restored" from "some auto, some wizard" and
+        # "all manual" without losing per-profile granularity.
         $allProfilesVerified = $true
+        $bLightVerifiedProfileNames = @()
+        $bLightSkippedImapProfileNames = @()
         foreach ($re in $regExports) {
             $profName = "$($re.profileName)"
             $regFile  = "$($re.regFile)"
@@ -1266,10 +1208,63 @@ if ($regExports.Count -gt 0 -and $successCount -gt 0) {
                 break
             }
 
-            # Phase 2.10.3 / extended in Phase 2.12.0: apply B-light pre-processing.
-            # The 5 transforms inside cover: POP+IMAP binding strip (T2/T3),
-            # user-path rewrite (T4), OST service-def drop (T5), and -- only
-            # when version args differ -- cross-version path rewrite (T1).
+            # v0.18.2 GATE: skip B-light entirely for any profile that
+            # contains IMAP accounts (any version).
+            #
+            # History (why we ended up here):
+            #   v0.17.0  : kept IMAP accounts in the imported reg -> OST
+            #              recreate worked on 15.0->16.0 (lenient migration)
+            #              but on 16.0->16.0 the imported state caused
+            #              "send/receive can't reach server" until the
+            #              operator manually deleted the IMAP account.
+            #   v0.18.0  : added T7 (drop IMAP account subkeys) + expanded
+            #              T5 (drop their OST service-def subkeys) so that
+            #              same-version IMAP-mixed could keep auto-restoring
+            #              the POP side. This left dangling MAPIUID refs in
+            #              well-known subkeys (MAPI Section Provider
+            #              0a0d02..., Service Provider 8503...) which the
+            #              same-version strict validator rejects -> Outlook
+            #              silently crashed at startup (observed 2026-05-22
+            #              16.0 MSI -> 16.0 365 C2R, 1 POP + 1 IMAP).
+            #   v0.18.1  : safety gate for same-version IMAP-mixed only.
+            #              Cross-version IMAP-mixed still went through T7+T5.
+            #   v0.18.2  : decision -- B-light is only safe for POP-only
+            #              profiles, full stop. IMAP-containing profiles
+            #              fall back to Strategy A (operator wizard) which
+            #              leaves the registry untouched and avoids both
+            #              traps. T7 and the T5 expansion are reverted
+            #              (the gate makes them dead code).
+            #
+            # `continue` (not `break`) so the remaining profiles in a
+            # multi-profile setup can still be B-light if they are
+            # POP-only.
+            $profileHasImap = @($plannedAccounts | Where-Object {
+                $_.ProfileName -eq $profName -and "$($_.Account.type)" -eq 'imap'
+            }).Count -gt 0
+            if ($profileHasImap) {
+                $msg = ("Strategy B: profile '$profName' contains IMAP account(s). " +
+                        "Skipping B-light for this profile (POP-only profiles still " +
+                        "processed); its accounts fall back to Strategy A operator " +
+                        "wizard. Rationale: cleanly auto-restoring IMAP-mixed " +
+                        "profiles via reg-import is not possible -- the MAPIUID " +
+                        "cross-reference graph in well-known subkeys cannot be " +
+                        "safely pruned offline.")
+                $warnings += $msg
+                Show-Warning "  $msg"
+                $bLightSkippedImapProfileNames += $profName
+                $perProfile.importSucceeded = $false
+                $perProfile.importOutput = 'skipped by safety gate: profile contains IMAP'
+                $strategyBDetails += $perProfile
+                continue
+            }
+
+            # Apply B-light pre-processing. POP-only profiles only reach
+            # this point. Five transforms cover: cross-version path rewrite
+            # (T1, only when version args differ), POP delivery-binding
+            # strip (T2), IMAP Store EID strip (T3, no-op on POP-only),
+            # user-path rewrite (T4), OST service-def drop (T5, no-op
+            # because POP-only profiles have no OST subkeys), OST internal-
+            # binary strip (T6, same-version POP-only, no-op when no OST).
             $blPath = Convert-RegFileToStrategyBLight `
                 -SrcRegPath $regPath `
                 -SourceUserName $blSrcUserName `
@@ -1321,14 +1316,17 @@ if ($regExports.Count -gt 0 -and $successCount -gt 0) {
             }
             Show-Success "  [$profName] reg import OK"
 
-            # Per-account verify (Phase 2.13.0: dispatch on account type)
+            # Per-account verify. v0.18.2: only POP accounts reach here
+            # (IMAP-containing profiles were gated out above). Track
+            # per-profile success so the post-loop summary can distinguish
+            # "this profile was auto-restored" from "this profile was
+            # skipped due to IMAP" vs "this profile actually failed".
             $profileAccounts = @($plannedAccounts | Where-Object { $_.ProfileName -eq $profName })
+            $thisProfileVerified = $true
             foreach ($pa in $profileAccounts) {
                 $a = $pa.Account
-                $expectedServer = if ("$($a.type)" -eq 'imap') { "$($a.imap.server)" }
-                                  else { "$($a.pop3.server)" }
-                $serverValueName = if ("$($a.type)" -eq 'imap') { 'IMAP Server' }
-                                   else { 'POP3 Server' }
+                $expectedServer = "$($a.pop3.server)"
+                $serverValueName = 'POP3 Server'
                 $vr = Test-AccountImported `
                     -HiveDrivePath $targetHivePsDrive `
                     -OutlookVersion $outlookVersion `
@@ -1355,16 +1353,40 @@ if ($regExports.Count -gt 0 -and $successCount -gt 0) {
                 } else {
                     Show-Warning "    [verify] $($a.email): NG - $($vr.Reason)"
                     $warnings += "Strategy B verify failed for $profName/$($a.subKey) ($($a.email)): $($vr.Reason)"
+                    $thisProfileVerified = $false
                     $allProfilesVerified = $false
                 }
+            }
+
+            if ($thisProfileVerified) {
+                $bLightVerifiedProfileNames += $profName
             }
 
             $strategyBDetails += $perProfile
         }
 
-        if ($allProfilesVerified) {
+        # v0.18.2 overall verdict:
+        #   $strategyBSucceeded is true when at least one profile was
+        #   auto-restored AND no attempted profile failed mid-verify.
+        #   Profiles skipped at the IMAP gate are NOT failures -- they
+        #   are intentional handoffs to Strategy A. Per-profile branching
+        #   downstream uses $bLightVerifiedProfileNames /
+        #   $bLightSkippedImapProfileNames to keep the operator messaging
+        #   accurate for mixed multi-profile setups.
+        if ($bLightVerifiedProfileNames.Count -gt 0 -and $allProfilesVerified) {
             $strategyBSucceeded = $true
-            Show-Success 'Strategy B: all profiles imported and verified'
+            if ($bLightSkippedImapProfileNames.Count -gt 0) {
+                Show-Success ("Strategy B: $($bLightVerifiedProfileNames.Count) profile(s) " +
+                              "auto-restored; $($bLightSkippedImapProfileNames.Count) IMAP-containing " +
+                              "profile(s) handed off to Strategy A wizard")
+            } else {
+                Show-Success 'Strategy B: all profiles imported and verified'
+            }
+        } elseif ($bLightSkippedImapProfileNames.Count -gt 0 -and
+                  $bLightVerifiedProfileNames.Count -eq 0 -and
+                  $allProfilesVerified) {
+            Show-Warning ('Strategy B: every reg-export profile contains IMAP -- ' +
+                          'B-light skipped for all; falling back to Strategy A')
         } else {
             Show-Warning 'Strategy B: at least one profile/account failed - falling back to Strategy A'
         }
@@ -1407,14 +1429,23 @@ if ($createRuleClearShortcut) {
 $instructionsPath = $null
 
 if ($strategyBSucceeded) {
-    # ---- Stage 5a: Strategy B success popup ----
+    # ---- Stage 5a: Strategy B success popup (full or partial in v0.18.2) ----
+    # Title differs based on whether all profiles were B-light verified
+    # or whether IMAP-containing profiles were intentionally skipped to
+    # Strategy A. Body always describes the auto-restored part the same
+    # way; the partial case appends a section enumerating the wizard-
+    # required profiles.
     $emails = ($resultsByAccount | Where-Object { $_.verifyResult -eq 'verified' } |
                ForEach-Object { $_.email }) -join ', '
-    $popCount  = @($plannedAccounts | Where-Object { "$($_.Account.type)" -ne 'imap' }).Count
-    $imapCount = @($plannedAccounts | Where-Object { "$($_.Account.type)" -eq 'imap' }).Count
-    $countLabel = if ($imapCount -gt 0) { "POP=$popCount  IMAP=$imapCount" } else { "POP3 $popCount 件" }
-    $popupTitle = 'Outlook POP/IMAP - 復元完了'
-    $popupBody  = "$countLabel のアカウントを自動復元しました:`r`n  $emails`r`n`r`n" +
+    $verifiedPopCount = @($resultsByAccount | Where-Object { $_.verifyResult -eq 'verified' }).Count
+    $hasSkippedImapProfiles = $bLightSkippedImapProfileNames.Count -gt 0
+    $popupTitle = if ($hasSkippedImapProfiles) {
+        'Outlook POP - 一部自動復元 / IMAP profile は wizard 手動'
+    } else {
+        'Outlook POP - 復元完了 (実験機能)'
+    }
+    $popupBody  = "*** レジストリ自動再構築 (実験機能) で復元 ***`r`n" +
+                  "POP3 $verifiedPopCount 件のアカウントを自動復元しました:`r`n  $emails`r`n`r`n" +
                   "操作者の対応が必要 (Outlook を 2 回起動):`r`n" +
                   "  1. Outlook を起動。'PST のリンクのため再起動が必要' という通知が出て`r`n" +
                   "     Outlook が自動終了します。想定動作なのでそのまま閉じてください。`r`n" +
@@ -1433,15 +1464,18 @@ if ($strategyBSucceeded) {
                       "  - 初回送受信時に POP / IMAP のパスワードを入力`r`n" +
                       "詳細な手順は _account_settings.txt の '異バージョン復元時のクリーンアップ手順'`r`n" +
                       "セクションを参照してください。"
-    } elseif ($imapPresent) {
-        $popupBody += "`r`n`r`n*** 移行元プロファイルに IMAP アカウントが存在 ***`r`n" +
-                      "初回起動後、各 POP アカウントの配信先を確認してください:`r`n" +
-                      "  ファイル > アカウント設定 > メール タブ > POP アカウントを選択`r`n" +
-                      "  -> 下部に '新しいメッセージを次の場所に配信します' と表示`r`n" +
-                      "  配信先が移行した PST ではなく IMAP OST を指していた場合、`r`n" +
-                      "  'フォルダの変更' をクリックして PST の受信トレイを選択してください。`r`n" +
-                      "詳細な手順は _account_settings.txt の 'POP の配信先確認' セクションを`r`n" +
-                      "参照してください。"
+    }
+    # v0.18.2: partial-restore notice for multi-profile mixed setups.
+    # Single-profile IMAP-mixed case falls into the else branch (Strategy A
+    # fallback) since $strategyBSucceeded would be $false there.
+    if ($hasSkippedImapProfiles) {
+        $skippedList = $bLightSkippedImapProfileNames -join ', '
+        $popupBody += "`r`n`r`n*** IMAP を含むため wizard 手動セットアップが必要なプロファイル ***`r`n" +
+                      "$skippedList`r`n`r`n" +
+                      "上記のプロファイルは IMAP アカウントを含むため Strategy B-light の対象外です。`r`n" +
+                      "コントロールパネル > Mail > プロファイルの表示 で該当プロファイルを選び、`r`n" +
+                      "Outlook で  ファイル > アカウント追加 から全アカウントを wizard で手動セットアップ`r`n" +
+                      "してください。各 PST フォルダ内の _account_settings.txt にサーバ設定を記載しています。"
     }
     # Phase 0.15.0: rule-clear shortcut callout. Inserted last so it sits
     # visually adjacent to the operator's next action ("launch Outlook").
@@ -1459,22 +1493,16 @@ if ($strategyBSucceeded) {
     } catch { }
 } else {
     # ---- Stage 5b: Strategy A fallback - RESTORE_INSTRUCTIONS.txt ----
+    # v0.18.3: file content is account-data only now (procedures moved
+    # out of this repo); the filename is preserved for backward
+    # compatibility with operator-facing tooling that references it.
     $instructionsPath = Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
     try {
-        $shortcutPathForText = if ($null -ne $shortcutResult -and $shortcutResult.Success) {
-            $shortcutResult.ShortcutPath
-        } else { $null }
         $instructionsText = New-OutlookAccountInfoText `
             -Manifest $manifest `
             -TargetUserProfilePath $targetUserProfilePath `
             -PlannedAccounts $plannedAccounts `
-            -ResultsByAccount $resultsByAccount `
-            -StrategyBAttempted $strategyBAttempted `
-            -StrategyBSucceeded $false `
-            -IsCrossVersion $isCrossVersion `
-            -CrossVersionDirection $crossVersionDirection `
-            -ImapPresent $imapPresent `
-            -RuleClearShortcutPath $shortcutPathForText
+            -ResultsByAccount $resultsByAccount
         $instructionsText | Out-File -FilePath $instructionsPath -Encoding UTF8 -Force
         Show-Info "Wrote instruction file: $instructionsPath"
     } catch {
@@ -1483,22 +1511,46 @@ if ($strategyBSucceeded) {
     }
 
     try {
-        $popupBody = "$($plannedAccounts.Count) 件の Outlook アカウント (POP / IMAP) で手動セットアップが必要です。`r`n`r`n" +
-                     "PST ファイルは移行先パスに配置済みです。操作者が一致するメールアドレスでアカウントを" +
-                     "追加すると、Outlook のウィザードが自動で PST をアタッチします。`r`n`r`n" +
-                     "手順書を開いて手順に従ってください:`r`n$instructionsPath"
+        # v0.17.0: 2 種類の popup body. AttemptStrategyB=false (= 新デフォルト
+        # 動作で意図的に skip) のときは「正常に PST 配置完了、operator 手動
+        # セットアップへ」という安心感ある文言。AttemptStrategyB=true (= UI
+        # で opt-in したが Strategy B 失敗) のときは従来通り fallback を示唆
+        # する文言を維持。
+        $popupTitle = if (-not $attemptStrategyB) {
+            'Outlook POP/IMAP - PST 配置完了'
+        } else {
+            'Outlook POP - 手動セットアップが必要'
+        }
+        $popupBody = if (-not $attemptStrategyB) {
+            "PST ファイルは移行先パスに配置済みです。$($plannedAccounts.Count) 件のアカウントを" +
+            "Outlook で手動で追加してください。`r`n`r`n" +
+            "手順:`r`n" +
+            "  1. Outlook を起動 > ファイル > アカウント追加`r`n" +
+            "  2. 各メールアドレスを入力 (autodiscover が大半の設定を自動補完)`r`n" +
+            "  3. データファイルを求められたら、配置済みの <email>.pst を選択`r`n" +
+            "  4. パスワードは初回送受信時に入力`r`n`r`n" +
+            "詳細手順書 (アカウントごとのサーバ設定・PST パスを記載):`r`n$instructionsPath`r`n`r`n" +
+            "各 PST 配置先のフォルダにも _account_settings.txt が併設されています。"
+        } else {
+            "$($plannedAccounts.Count) 件の Outlook アカウント (POP / IMAP) で手動セットアップが必要です。`r`n`r`n" +
+            "PST ファイルは移行先パスに配置済みです。操作者が一致するメールアドレスでアカウントを" +
+            "追加すると、Outlook のウィザードが自動で PST をアタッチします。`r`n`r`n" +
+            "手順書を開いて手順に従ってください:`r`n$instructionsPath"
+        }
         if ($null -ne $shortcutResult -and $shortcutResult.Success) {
             $popupBody += "`r`n`r`n*** 重要: Outlook の初回起動 ***`r`n" +
                           "アカウント追加が済んだら、Desktop の`r`n" +
                           "[Outlook を初回起動 (仕分けルールをクリア).lnk] から起動してください。`r`n" +
                           "移行された仕分けルールが PST に残っている場合のクリーンアップとして機能します。"
         }
-        Show-CompletionPopup -Title 'Outlook POP - 手動セットアップが必要' -Body $popupBody -Status 'Partial'
+        # v0.17.0: Status は AttemptStrategyB=false (= 正常デフォルト) なら Success、
+        # opt-in したが Strategy B 失敗なら Partial。
+        $popupStatus = if (-not $attemptStrategyB) { 'Success' } else { 'Partial' }
+        Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status $popupStatus
     } catch { }
 
-    try {
-        Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$instructionsPath`"" -ErrorAction Stop | Out-Null
-    } catch { }
+    # v0.17.0: notepad.exe による RESTORE_INSTRUCTIONS.txt の自動オープンを削除。
+    # operator が popup の指示に従って明示的に開く運用に変更。
 }
 
 # ----------------------------------------------------------
@@ -1528,21 +1580,15 @@ try {
             continue
         }
         $settingsPath = Join-Path $dir '_account_settings.txt'
-        $shortcutPathForText = if ($null -ne $shortcutResult -and $shortcutResult.Success) {
-            $shortcutResult.ShortcutPath
-        } else { $null }
+        # v0.18.3: account-data only. The per-profile B-light status that
+        # this caller used to compute and pass via $StrategyBSucceeded is
+        # no longer rendered in the file body, so it isn't forwarded.
         $settingsText = New-OutlookAccountInfoText `
             -Manifest $manifest `
             -TargetUserProfilePath $targetUserProfilePath `
             -PlannedAccounts $plannedAccounts `
             -ResultsByAccount $resultsByAccount `
-            -StrategyBAttempted $strategyBAttempted `
-            -StrategyBSucceeded $strategyBSucceeded `
-            -ProfileFilter $profName `
-            -IsCrossVersion $isCrossVersion `
-            -CrossVersionDirection $crossVersionDirection `
-            -ImapPresent $imapPresent `
-            -RuleClearShortcutPath $shortcutPathForText
+            -ProfileFilter $profName
         $settingsText | Out-File -FilePath $settingsPath -Encoding UTF8 -Force
         $targetSettingsWritten += $settingsPath
         Show-Info "Wrote target settings file: $settingsPath"

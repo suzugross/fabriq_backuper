@@ -102,11 +102,85 @@ foreach ($v in $outlookVersions) {
     }
 }
 if ($null -eq $profilesKeyPath) {
+    # v0.17.0 diag: profile detection failed. Walk each parent of the
+    # 16.0/15.0 Profiles key with two independent surfaces:
+    #   - PowerShell Registry provider (Test-Path / Get-Item)
+    #   - reg.exe query (raw Win32 RegOpenKeyEx via reg.exe)
+    # When the elevated admin is a different user than the logged-on
+    # one, ACL on HKU:\<sid>\Software\... can silently deny the provider
+    # while reg.exe (which can lean on different access paths) may or
+    # may not see the key. The diff between the two probes reveals
+    # whether the cause is ACL access vs a genuinely missing key.
+    Show-Warning 'Profiles key not found under HKCU source. Running diagnostic probe...'
+
+    $probeSubpaths = @(
+        '\Software',
+        '\Software\Microsoft',
+        '\Software\Microsoft\Office',
+        '\Software\Microsoft\Office\16.0',
+        '\Software\Microsoft\Office\16.0\Outlook',
+        '\Software\Microsoft\Office\16.0\Outlook\Profiles',
+        '\Software\Microsoft\Office\15.0',
+        '\Software\Microsoft\Office\15.0\Outlook',
+        '\Software\Microsoft\Office\15.0\Outlook\Profiles'
+    )
+
+    foreach ($sub in $probeSubpaths) {
+        $psPath = "$($hkcuInfo.PsDrivePath)$sub"
+        $exists = Test-Path -LiteralPath $psPath
+        if ($exists) {
+            Show-Info "  [probe-ps]  EXIST   $psPath"
+        } else {
+            # Capture the underlying exception (ACL denial vs missing key
+            # surface very different .Exception.Message texts).
+            $err = $null
+            try {
+                $null = Get-Item -LiteralPath $psPath -ErrorAction Stop
+            } catch {
+                $err = $_.Exception.Message
+            }
+            $tail = if ($err) { "  ($err)" } else { '' }
+            Show-Warning "  [probe-ps]  MISSING $psPath$tail"
+        }
+    }
+
+    foreach ($sub in $probeSubpaths) {
+        $regPath = "$($hkcuInfo.RegExePath)$sub"
+        # /ve probes default value; success (exit 0) means key exists and
+        # is readable, exit 1 means missing or access-denied.
+        #
+        # WHY Start-Process with file redirection: `& reg.exe query ... 2>&1`
+        # plus engine's $ErrorActionPreference='Stop' makes reg.exe's stderr
+        # output ("ERROR: 指定された ... 見つかりませんでした") terminate the
+        # whole section the moment the loop hits a missing key. Same trap
+        # solved earlier in restore.ps1:Invoke-RegImport. Start-Process with
+        # separate file redirects sidesteps the PS stream merge entirely.
+        $tempOut = [System.IO.Path]::GetTempFileName()
+        $tempErr = [System.IO.Path]::GetTempFileName()
+        $exit = -1
+        try {
+            $proc = Start-Process -FilePath 'reg.exe' `
+                -ArgumentList @('query', $regPath, '/ve') `
+                -NoNewWindow -Wait -PassThru `
+                -RedirectStandardOutput $tempOut `
+                -RedirectStandardError  $tempErr
+            $exit = $proc.ExitCode
+        } finally {
+            Remove-Item -LiteralPath $tempOut -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tempErr -Force -ErrorAction SilentlyContinue
+        }
+        if ($exit -eq 0) {
+            Show-Info "  [probe-reg] EXIST   $regPath"
+        } else {
+            Show-Warning "  [probe-reg] MISSING $regPath  (reg.exe exit=$exit)"
+        }
+    }
+
     Show-Skip "No Outlook 16.0 or 15.0 mail profile registry found — skipping section"
     return [PSCustomObject]@{
         Status               = 'Skipped'
         ElapsedMs            = [int]$sw.ElapsedMilliseconds
-        Summary              = [ordered]@{ note = 'no Outlook 16.0/15.0 profile registry' }
+        Summary              = [ordered]@{ note = 'no Outlook 16.0/15.0 profile registry (see probe log)' }
         Warnings             = @()
         ExternalOutputDir    = $null
         ExternalManifestPath = $null
@@ -383,28 +457,38 @@ function Get-PstPathFromDeliveryStoreEntryId {
 }
 
 function Resolve-AccountPst {
-    # 3-stage PST resolution chain (v0.16, refactored from v0.15 inline
-    # logic to consolidate behaviour and apply filename-match-first).
+    # 3-stage PST resolution chain.
     #
-    # Stage 1 (highest confidence): filename match against email.
-    #   Outlook 2010+ default naming convention is "<email>.pst" for
-    #   POP3 accounts. When this matches deterministically, no further
-    #   lookup is needed and the result is unambiguous even when the
-    #   profile contains multiple PSTs.
+    # v0.17 update: Stage 1 / Stage 2 順序を入れ替え (EntryID 最優先)。
     #
-    # Stage 2 (medium confidence): EntryID binary scan.
-    #   Falls through when filename match fails (e.g. PST manually
-    #   renamed). Uses Get-PstPathFromDeliveryStoreEntryId, which is
-    #   format-agnostic for production mspst.dll EntryIDs.
+    # Why: v0.16 では EntryID parser が production mspst.dll 形式に未対応
+    # だったため filename-match を Stage 1 に置いた。同 v0.16 で parser を
+    # format-agnostic な binary scanner に書き直して動くようになったため、
+    # より authoritative な EntryID を Stage 1 に昇格。
     #
-    # Stage 3 (medium confidence): single-candidate fallback.
-    #   When the profile has exactly one PST and no other resolution
-    #   succeeded, attribute it to this account. Avoids "unavailable"
-    #   for trivially obvious cases.
+    # 解決するシナリオ (v0.16 では誤動作していたケース):
+    #   profile に 2 PST: <email>.pst (古いアーカイブ) + 個人用.pst
+    #     (EntryID が現在 binding している配信先)
+    #   旧 Stage 順序: filename-match で <email>.pst を選んでしまい (誤),
+    #                  古いアーカイブが targetPstPath になる
+    #   新 Stage 順序: EntryID scan で 個人用.pst を選ぶ (正解)
+    #
+    # Stage 1 (authoritative): EntryID binary scan.
+    #   Delivery Store EntryID は Outlook が "現在この account の配信先と
+    #   して使っている PST" を binding した記録。命名規則の推測より遥かに
+    #   信頼度が高い。
+    #
+    # Stage 2 (fallback): filename match against email.
+    #   Outlook 2010+ default naming "<email>.pst" の救済策。EntryID が
+    #   壊れている / 取れない場合に活躍。
+    #
+    # Stage 3 (fallback): single-candidate.
+    #   profile に PST が 1 つしかない場合は ambiguity 無し。
     #
     # Returns: hashtable @{ Path; Method; Reason }
     #   Path   : full PST file path, or $null when no match
-    #   Method : 'filename-match' | 'entryid-scan' | 'single-candidate' | 'unresolved'
+    #   Method : 'entryid-scan-confirmed' | 'entryid-scan' |
+    #            'filename-match-fallback' | 'single-candidate' | 'unresolved'
     #   Reason : human-readable diagnostic
     param(
         [Parameter(Mandatory)][string]$Email,
@@ -412,21 +496,7 @@ function Resolve-AccountPst {
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$PstCandidates
     )
 
-    # --- Stage 1: filename match (case-insensitive on basename) ---
-    if (-not [string]::IsNullOrWhiteSpace($Email)) {
-        foreach ($p in $PstCandidates) {
-            $base = [System.IO.Path]::GetFileNameWithoutExtension($p)
-            if ($base -ieq $Email) {
-                return @{
-                    Path   = $p
-                    Method = 'filename-match'
-                    Reason = 'PST filename matches account email'
-                }
-            }
-        }
-    }
-
-    # --- Stage 2: EntryID binary scan ---
+    # --- Stage 1: EntryID binary scan (authoritative) ---
     if ($null -ne $EntryIdBytes -and $EntryIdBytes.Length -gt 0) {
         $parsed = Get-PstPathFromDeliveryStoreEntryId -EntryIdBytes $EntryIdBytes
         if (-not [string]::IsNullOrWhiteSpace($parsed)) {
@@ -437,7 +507,21 @@ function Resolve-AccountPst {
             return @{
                 Path   = if ($matched) { $matched } else { $parsed }
                 Method = if ($matched) { 'entryid-scan-confirmed' } else { 'entryid-scan' }
-                Reason = 'Path extracted from Delivery Store EntryID'
+                Reason = "Path extracted from Delivery Store EntryID (Outlook's actual binding)"
+            }
+        }
+    }
+
+    # --- Stage 2: filename match (fallback when EntryID unavailable) ---
+    if (-not [string]::IsNullOrWhiteSpace($Email)) {
+        foreach ($p in $PstCandidates) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($p)
+            if ($base -ieq $Email) {
+                return @{
+                    Path   = $p
+                    Method = 'filename-match-fallback'
+                    Reason = 'PST filename matches account email (used because EntryID unavailable)'
+                }
             }
         }
     }
@@ -458,7 +542,7 @@ function Resolve-AccountPst {
         Reason = if ($PstCandidates.Count -eq 0) {
                      'No PST found in profile'
                  } else {
-                     "$($PstCandidates.Count) PST candidates but none matched filename or EntryID"
+                     "$($PstCandidates.Count) PST candidates but none matched EntryID or filename"
                  }
     }
 }

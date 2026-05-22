@@ -370,9 +370,23 @@ function global:Resolve-HkcuRoot {
 
     if ($null -ne $script:_LoggedOnUserSid) {
         $sid = $script:_LoggedOnUserSid
-        # Ensure HKU PSDrive exists
+        # Ensure HKU PSDrive exists.
+        #
+        # v0.17.0 fix (deviation from vendored kernel/common.ps1): added
+        # -Scope Global. Without it, New-PSDrive creates the drive in
+        # this function's local scope and the drive vanishes the moment
+        # the function returns, so the caller's `Test-Path "HKU:\$sid\..."`
+        # fails with "ドライブが見つかりません" / "drive 'HKU' does not
+        # exist". Resolve-HkcuRoot still returns Redirected=$true (because
+        # the in-function Test-Path succeeded), but every subsequent
+        # provider call from the section script silently misses. Observed
+        # 2026-05-22 on OLD-PC-01 (cross-user admin elevation, Outlook
+        # 2013), where outlook_pop loudly skipped its entire section and
+        # printer's per-user DEVMODE capture silently no-op'd. The fabriq
+        # main kernel/common.ps1 carries the same defect; that is a
+        # separate upstream concern outside this repo's scope.
         if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
-            New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
+            New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS -Scope Global | Out-Null
         }
         if (Test-Path "HKU:\$sid") {
             return @{

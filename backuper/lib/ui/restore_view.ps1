@@ -18,8 +18,14 @@ $script:RestoreUserCombo       = $null
 $script:RestoreUserList        = @()
 # Phase 0.15.0: checkbox controlling whether outlook_pop restore should
 # generate a "/cleanclientrules" launcher shortcut on the target user's
-# Desktop. Defaults to checked. See SectionParams.outlook_pop.CreateRuleClearShortcut.
+# Desktop. v0.17.0: default OFF (実機観察で「ルール手動実行 1 回で復活」が
+# 判明、デフォルトで全削除する必要性が下がった)。
 $script:RestoreOutlookShortcutCheck = $null
+# v0.17.0: checkbox controlling whether outlook_pop restore should attempt
+# Strategy B-light (registry auto-rebuild). Default OFF -- operator manual
+# setup via Strategy A is the recommended path. Opt-in for advanced users
+# who want to try registry import.
+$script:RestoreOutlookAttemptStrategyBCheck = $null
 
 function New-RestoreView {
     $panel = New-Object System.Windows.Forms.Panel
@@ -88,43 +94,56 @@ function New-RestoreView {
     $script:RestoreUserCombo = $userCombo
     $panel.Controls.Add($userCombo)
 
-    # ---- Outlook extras row (Phase 0.15.0) ----------------
-    # The /cleanclientrules launcher shortcut option. Default checked so
-    # operators get the safe behaviour automatically; can be unchecked when
-    # the source PST is known not to have stale rules.
-    $outlookExtrasLbl = New-StyledLabel -Text "Outlook 追加オプション" `
-        -X 24 -Y 234 -Width 300 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+    # ---- Outlook extras row (Phase 0.15.0 + v0.17.0) ------
+    # 2 つのチェックボックスを縦並びで配置:
+    #   1. 初回起動用ショートカット (rule-clear) - default OFF (v0.17 変更)
+    #   2. レジストリ自動再構築 (Strategy B-light) - default OFF (v0.17 新規)
+    # どちらも opt-in 形式。デフォルトは "operator 手動セットアップが主軸" の運用。
+    $outlookExtrasLbl = New-StyledLabel -Text "Outlook 追加オプション (どちらも opt-in、通常は OFF のまま)" `
+        -X 24 -Y 234 -Width 600 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($outlookExtrasLbl)
 
+    # v0.17.0: rule-clear shortcut, default OFF
     $shortcutCheck = New-StyledCheckBox `
-        -Text "初回起動用ショートカットを生成 (推奨)" `
-        -X 24 -Y 254 -Width 400 -Height 22 -Checked $true
+        -Text "初回起動用ショートカットを生成 (壊れた仕分けルールをクリア)" `
+        -X 24 -Y 254 -Width 500 -Height 22 -Checked $false
     $script:RestoreOutlookShortcutCheck = $shortcutCheck
     $panel.Controls.Add($shortcutCheck)
 
     $shortcutHint = New-StyledLabel `
-        -Text ("移行された仕分けルールが移行先 PC で正しく動作しない可能性があるため、" + [Environment]::NewLine +
-               "Outlook を /cleanclientrules 付きで起動するショートカットを Desktop に生成します。") `
-        -X 44 -Y 278 -Width 860 -Height 32 -FgColor $script:fgDim
+        -Text "ルールが壊れている場合の対処用。通常は不要 (ルール 1 回手動実行で復活するため)" `
+        -X 44 -Y 276 -Width 860 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($shortcutHint)
 
-    # ---- Printer list row (Phase 0.15.0: shifted Y by 76 to make room) ----
+    # v0.17.0: NEW - Strategy B-light opt-in, default OFF
+    $strategyBCheck = New-StyledCheckBox `
+        -Text "レジストリ自動再構築 (実験的、通常は使用しない)" `
+        -X 24 -Y 296 -Width 500 -Height 22 -Checked $false
+    $script:RestoreOutlookAttemptStrategyBCheck = $strategyBCheck
+    $panel.Controls.Add($strategyBCheck)
+
+    $strategyBHint = New-StyledLabel `
+        -Text "MAPI registry transform 経由で自動再構築。不安定なため operator 手動セットアップを推奨" `
+        -X 44 -Y 318 -Width 860 -Height 16 -FgColor $script:fgDim
+    $panel.Controls.Add($strategyBHint)
+
+    # ---- Printer list row (v0.17.0: shifted Y +30 to fit 2nd checkbox row) ----
     $pLbl = New-StyledLabel -Text "このバックアップ内のプリンタ (除外するチェックを外す)" `
-        -X 24 -Y 314 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 344 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($pLbl)
 
-    $btnSelAll = New-StyledButton -Text "全選択" -X 620 -Y 310 -Width 96 -Height 24
+    $btnSelAll = New-StyledButton -Text "全選択" -X 620 -Y 340 -Width 96 -Height 24
     $btnSelAll.Add_Click({ Set-AllRestorePrinterChecks $true })
     $panel.Controls.Add($btnSelAll)
-    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 310 -Width 80 -Height 24
+    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 340 -Width 80 -Height 24
     $btnNone.Add_Click({ Set-AllRestorePrinterChecks $false })
     $panel.Controls.Add($btnNone)
 
-    # Grid bottom edge unchanged (Y+H = 614, same as before); only the top
-    # shifted down. Height reduced from 350 to 274 to absorb the 76-px shift.
+    # Grid bottom edge unchanged (Y+H = 614, same as before); top shifted
+    # +30 vs v0.16, height reduced from 274 to 244 to fit 2nd checkbox row.
     $grid = New-Object System.Windows.Forms.DataGridView
-    $grid.Location = New-Object System.Drawing.Point(24, 340)
-    $grid.Size = New-Object System.Drawing.Size(880, 274)
+    $grid.Location = New-Object System.Drawing.Point(24, 370)
+    $grid.Size = New-Object System.Drawing.Size(880, 244)
     Set-GridStyle -Grid $grid
     $grid.ReadOnly = $false
 
@@ -405,6 +424,12 @@ function Invoke-RestoreStart {
     if ($null -ne $script:RestoreOutlookShortcutCheck) {
         $createShortcut = [bool]$script:RestoreOutlookShortcutCheck.Checked
     }
+    # v0.17.0: Strategy B-light は opt-in。Checked=$false が新デフォルト動作
+    # (= Strategy A operator manual setup)。Checked=$true で旧 v0.16.0 動作。
+    $attemptStrategyB = $false
+    if ($null -ne $script:RestoreOutlookAttemptStrategyBCheck) {
+        $attemptStrategyB = [bool]$script:RestoreOutlookAttemptStrategyBCheck.Checked
+    }
     # Phase 0.15.0: outlook_pop now receives both TargetUserProfilePath and
     # CreateRuleClearShortcut. Previously TargetUserProfilePath was not
     # forwarded; outlook_pop fell back to $env:USERPROFILE which under admin
@@ -416,6 +441,7 @@ function Invoke-RestoreStart {
         outlook_pop = @{
             TargetUserProfilePath   = $targetUserProfilePath
             CreateRuleClearShortcut = $createShortcut
+            AttemptStrategyB        = $attemptStrategyB
         }
     }
 
