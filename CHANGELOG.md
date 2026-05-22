@@ -15,6 +15,56 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.19.2: **credentials section の "OS 自動再生成エントリ" を
+  バックアップ時点で除外** ([backup.ps1](backuper/lib/sections/credentials/backup.ps1))。
+  - 対象: `MicrosoftAccount:target=SSO_POP_Device` /
+    `WindowsLive:target=virtualapp/didlogical` の 2 種 (Windows が
+    Microsoft アカウント / Device SSO のためバックグラウンドで自動生成・
+    更新するノイズエントリ、BlobSize=0)。
+  - これらは復元しても OS が起動時 / MS アカウント再サインイン時に
+    自動再生成するため、CSV / manifest に載せても operator が何もできない
+    純粋なノイズだった (v0.19.1 までは manual hint で残っていた)。
+  - **manifest.json schema に `systemNoiseFilteredCount` を additive 追加**。
+    aggregate manifest 経由でフィルタ件数が可視化される。
+  - **Section Summary** にも `systemNoiseFilteredCount` を追加。
+  - 動作影響: backup の credentials section 出力で credentialCount /
+    manualHintCount が実機平均で 2〜4 件減る (該当の 2 ターゲットは
+    Win10/11 環境にほぼ確実に存在するため)。restore 側は CSV をそのまま
+    読むため自動的に追従、コード変更なし。
+  - 拡張性: より多くの noise パターンを除外したくなった場合は
+    `Test-IsSystemNoiseCredential` 関数に exact-target match を追加する
+    だけで対応可能。
+
+- backuper v0.19.2: **operator-facing register_credentials.ps1 を
+  「パスワード入力のみ」フローに簡素化**
+  ([register_credentials.ps1](backuper/lib/sections/credentials/operator_payload/register_credentials.ps1))。
+  v0.19.0/0.19.1 では各エントリで 2〜3 個の [y/N] 確認プロンプトが出ていたが、
+  operator がエントリを目視確認後にパスワードを入力するか否か (= 空 Enter) で
+  意思表示できるため、確認プロンプトは冗長と判断。
+  - **撤廃したプロンプト**:
+    - `※ ... 再登録を試みますか? [y/N]` (manual hint エントリの override
+      確認) → 撤廃。manual hint は情報行 1 行に降格 (色: DarkYellow)。
+    - `★ 既存資格情報があります。上書きしますか? [y/N]` → 撤廃。問答無用で
+      上書き (operator は復元意思を持って起動しているため確認は冗長)。
+  - **証明書系の扱い変更**: `DomainCertificate` / `GenericCertificate` は
+    password 再入力では復元不可能なため、パスワード入力プロンプトを出さず
+    に silent skip (`スキップ (証明書)` カウントとして集計表示)。
+  - **新しい操作フロー** (1 エントリあたり):
+    1. Target / Type / UserName / Persist / Comment を表示
+    2. (manual hint があれば) 「注: blob 長 N のトークン/参照系の可能性」を
+       1 行表示
+    3. (証明書系なら) silent skip
+    4. それ以外は `Password (空 Enter で skip):` プロンプト 1 回
+    5. パスワード入力 → 上書きで登録 / 空 Enter → skip
+  - **Summary カウンタ変更**: `スキップ (manual)` / `スキップ (既存)` を
+    削除、`スキップ (証明書)` を追加。
+  - **README.txt 更新**: 復元手順セクションを新フローに合わせて書き直し、
+    「スキップされるエントリ (Hint=manual)」セクションを「情報注記
+    (blob 長 0 のトークン/参照系の可能性あり)」に改題して decision ではなく
+    情報提示として整理。`Hint` を表示列から削除 (operator の意思決定に
+    使わない情報になったため)。
+
 ### Fixed
 - backuper v0.19.1: **section CheckBox レイアウトのオーバーフロー修正** —
   [backup_view.ps1](backuper/lib/ui/backup_view.ps1) /

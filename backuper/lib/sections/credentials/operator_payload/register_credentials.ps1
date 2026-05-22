@@ -171,11 +171,18 @@ if ($rows.Count -eq 0) {
 # ----------------------------------------------------------
 $total       = $rows.Count
 $successCnt  = 0
-$skipManual  = 0
-$skipExist   = 0
+$skipCert    = 0
 $skipUser    = 0
 $failCnt     = 0
 $idx         = 0
+
+# v0.19.2: 余計な [y/N] 確認プロンプトを全廃。各エントリで operator は
+# 「パスワードを入力する」(= 登録) か「空 Enter」(= スキップ) かだけ判断する。
+# - 証明書系 (DomainCertificate / GenericCertificate) は password で復元
+#   不可能なので silent skip (パスワードを訊いても無意味なため)。
+# - 既存に同じ target/type がある場合は **問答無用で上書き** (operator は
+#   そもそも復元する意思を持って script を起動しているため確認は冗長)。
+# - manual hint は decision ではなく情報として 1 行注記するだけに留める。
 
 foreach ($row in $rows) {
     $idx++
@@ -188,21 +195,20 @@ foreach ($row in $rows) {
     if (-not [string]::IsNullOrWhiteSpace($row.Comment)) {
         Write-Host ('  Comment  : {0}' -f $row.Comment)
     }
-    Write-Host ('  Hint     : {0} (BlobSize={1})' -f $row.RestoreHint, $row.BlobSize)
 
-    # Manual hint - default skip
-    if ($row.RestoreHint -eq 'manual') {
-        Write-Host '  ※ このエントリはトークン系 / 証明書系 / blob 長 0 のため、パスワード' -ForegroundColor Yellow
-        Write-Host '     再入力では復元できないと判定されています (RestoreHint=manual)。' -ForegroundColor Yellow
-        $ans = Read-Host '  それでも再登録を試みますか? [y/N]'
-        if ($ans -notmatch '^[yY]') {
-            Write-Host '  スキップしました。' -ForegroundColor DarkGray
-            $skipManual++
-            continue
-        }
+    # 証明書系は password 再入力では復元できないため silent skip
+    if ($row.Type -eq 'DomainCertificate' -or $row.Type -eq 'GenericCertificate') {
+        Write-Host '  証明書ベースのため自動スキップ (パスワード再入力では復元不可)。' -ForegroundColor DarkGray
+        $skipCert++
+        continue
     }
 
-    # Resolve type code
+    # manual hint は情報表示のみ (操作 flow には影響しない)
+    if ($row.RestoreHint -eq 'manual') {
+        Write-Host ('  注: blob 長 {0} のトークン/参照系の可能性あり (登録しても実機で機能しない場合があります)' -f $row.BlobSize) -ForegroundColor DarkYellow
+    }
+
+    # 未知の Type は失敗扱い
     $typeCode = _TypeCode $row.Type
     if ($typeCode -eq 0) {
         Write-Host ('  ! 未知の Type "{0}" — スキップします。' -f $row.Type) -ForegroundColor Red
@@ -210,31 +216,15 @@ foreach ($row in $rows) {
         continue
     }
 
-    # Existing collision check
-    $exists = $false
-    try { $exists = Test-CredentialExists -TargetName $row.Target -Type $typeCode } catch {
-        Write-Host ('  ! 既存確認に失敗: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
-    }
-    if ($exists) {
-        Write-Host '  ★ 同じ Target/Type の資格情報が既に登録されています。' -ForegroundColor Yellow
-        $ans = Read-Host '  上書きしますか? [y/N]'
-        if ($ans -notmatch '^[yY]') {
-            Write-Host '  スキップしました。' -ForegroundColor DarkGray
-            $skipExist++
-            continue
-        }
-    }
-
-    # Prompt for password
-    Write-Host '  パスワードを入力してください (空 Enter でスキップ):' -NoNewline
-    $secure = Read-Host -AsSecureString ' '
+    # パスワード入力 (空 Enter で skip)
+    $secure = Read-Host -Prompt '  Password (空 Enter で skip)' -AsSecureString
     if ($null -eq $secure -or $secure.Length -eq 0) {
-        Write-Host '  パスワード未入力 — スキップしました。' -ForegroundColor DarkGray
+        Write-Host '  空入力のためスキップ' -ForegroundColor DarkGray
         $skipUser++
         continue
     }
 
-    # Write
+    # 書き込み (既存があれば問答無用で上書き)
     try {
         Write-CredentialFromSecure `
             -TargetName $row.Target `
@@ -260,8 +250,7 @@ Write-Host '完了'
 Write-Host ('=' * 64) -ForegroundColor Cyan
 Write-Host ('  対象             : {0} 件' -f $total)
 Write-Host ('  登録成功         : {0} 件' -f $successCnt) -ForegroundColor Green
-Write-Host ('  スキップ (manual): {0} 件' -f $skipManual) -ForegroundColor DarkGray
-Write-Host ('  スキップ (既存)  : {0} 件' -f $skipExist) -ForegroundColor DarkGray
+Write-Host ('  スキップ (証明書): {0} 件' -f $skipCert) -ForegroundColor DarkGray
 Write-Host ('  スキップ (未入力): {0} 件' -f $skipUser) -ForegroundColor DarkGray
 Write-Host ('  失敗             : {0} 件' -f $failCnt) -ForegroundColor $(if ($failCnt -gt 0) { 'Red' } else { 'Gray' })
 Write-Host ''

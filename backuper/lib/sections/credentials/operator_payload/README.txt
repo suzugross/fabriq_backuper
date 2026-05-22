@@ -46,33 +46,46 @@ Fabriq BackUper - 資格情報バックアップ (使い方)
      - Type    (Generic / DomainPassword / DomainCertificate 等)
      - UserName
      - Persist (Session / LocalMachine / Enterprise)
-     - Hint    (cred-write = 再入力で復元可 / manual = 不可)
 
-4. エントリごとにパスワードを入力 → Enter で次のエントリへ。
-   - パスワードを入力せず Enter (空入力) でそのエントリをスキップ
-   - 既に同じ Target/Type が登録されている場合は上書きの確認が出ます
+4. 各エントリで以下のいずれかを行います:
+     - **パスワードを入力 → Enter** : そのエントリで登録 (既に同 Target/
+       Type が登録済みでも問答無用で上書き、確認は入りません)
+     - **何も入力せず Enter (空入力)** : そのエントリをスキップ
+
+   ※ 証明書ベース (Type=DomainCertificate / GenericCertificate) の
+      エントリはパスワード再入力では復元できないため、自動的にスキップ
+      されます (パスワード入力プロンプトは出ません)。
 
 
 -------------------------------------------------------------
-スキップされるエントリ (Hint=manual)
+情報注記 ("blob 長 0 のトークン/参照系の可能性あり")
 -------------------------------------------------------------
 
-以下のエントリは「パスワード再入力では復元できない」と判定され、
-デフォルトでスキップされます (続行確認の y/N プロンプトが出ます):
+エントリの中にはパスワード本体を持たないトークン/参照系のものが
+混じっています。これらは元 PC で BlobSize=0 として観測されていた
+エントリで、登録自体は可能ですが、移行先で意図通り動作しない場合が
+あります。
 
-  - **トークン系 Generic** (MicrosoftAccount: / WindowsLive: /
+該当パターン:
+  - **トークン系 Generic** (MicrosoftAccount:user= / WindowsLive: /
     OneDrive / DriveFS_ / Office16_Data: 等)
-      OAuth/refresh トークンや SSO バインドが格納されているため、
-      パスワードを入れても復元できません。各アプリ (Outlook / Edge /
-      OneDrive 等) を起動して再サインインすることで自動的に再登録
-      されます。
+      OAuth/refresh トークン や SSO バインドが格納されているため、
+      パスワード再入力では原状復元できません。各アプリ (Outlook /
+      Edge / OneDrive 等) を **起動して再サインイン** することで OS が
+      自動的に再生成します。**スキップ (空 Enter) 推奨**。
+
+  - **SspiPfc** 系の Domain 資格情報 (Comment=SspiPfc, BlobSize=0)
+      ログオンセッションに紐付く参照エントリで、独立した password を
+      持っていません。SMB 共有等で必要であれば普通にパスワードを
+      入力して構いません (通常の Domain 資格情報として登録されます)。
 
   - **証明書系** (DomainCertificate / GenericCertificate)
-      証明書ストアから別途証明書をインポートする必要があります。
+      上記の通り自動スキップ。証明書ストアから別途インポートが必要。
 
-  - **blob 長 0** のエントリ
-      パスワード本体を保持していない参照エントリ (アカウントが
-      別の場所で管理されている等)。再入力では復元できません。
+なお、Windows OS が自動再生成する完全ノイズ (例:
+`MicrosoftAccount:target=SSO_POP_Device`,
+`WindowsLive:target=virtualapp/didlogical`) は **バックアップ時点で
+除外** されているため、本 CSV には含まれません (v0.19.2 以降)。
 
 
 -------------------------------------------------------------
@@ -99,4 +112,4 @@ Fabriq BackUper - 資格情報バックアップ (使い方)
 
 
 ============================================================
-Fabriq BackUper v0.19.0
+Fabriq BackUper v0.19.2
