@@ -35,7 +35,11 @@ function Invoke-NetshIpv4 {
         [switch]$AllowFailure
     )
 
+    # Start-Process refuses identical paths for -RedirectStandardOutput and
+    # -RedirectStandardError on PS 5.1, so we use two separate temp files
+    # and concatenate them for the error message.
     $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $stderrFile = [System.IO.Path]::GetTempFileName()
     try {
         $proc = Start-Process -FilePath 'netsh.exe' `
                               -ArgumentList $Arguments `
@@ -43,11 +47,13 @@ function Invoke-NetshIpv4 {
                               -Wait `
                               -PassThru `
                               -RedirectStandardOutput $stdoutFile `
-                              -RedirectStandardError  $stdoutFile
-        $exit = $proc.ExitCode
-        $out  = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue
+                              -RedirectStandardError  $stderrFile
+        $exit   = $proc.ExitCode
+        $outRaw = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue
+        $errRaw = Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue
+        $combined = (@($outRaw, $errRaw) | Where-Object { $_ }) -join ' || '
         if ($exit -ne 0) {
-            $msg = "netsh failed during '$StepName' (exit=$exit): $($out -replace "\r?\n", ' | ')"
+            $msg = "netsh failed during '$StepName' (exit=$exit): $($combined -replace "\r?\n", ' | ')"
             if ($AllowFailure) {
                 Write-Host "[warn] $msg" -ForegroundColor Yellow
             }
@@ -58,6 +64,7 @@ function Invoke-NetshIpv4 {
     }
     finally {
         Remove-Item -LiteralPath $stdoutFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
     }
 }
 

@@ -67,6 +67,46 @@ if ($jsonText -match '"\s*password\s*"') {
 
 $netConfig = if ($Role -eq 'source') { $migProfile.network.source } else { $migProfile.network.target }
 
+# Pre-flight: verify the configured interfaceAlias actually exists on this
+# PC. Without this check, Get-NetIPInterface inside New-RollbackSnapshot
+# throws "No matching MSFT_NetIPInterface objects found" after the operator
+# already pressed Y, and (in EXE-launched conhost) the window closes before
+# the error is readable. Failing here lets us list available adapters and
+# point at the profile field to fix.
+$_aliasOk = $false
+try {
+    $null = Get-NetAdapter -Name $netConfig.interfaceAlias -ErrorAction Stop
+    $_aliasOk = $true
+} catch {
+    # fall through to the reporting block below
+}
+if (-not $_aliasOk) {
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Red
+    Write-Host "[FATAL] interfaceAlias '$($netConfig.interfaceAlias)' not found on this PC." -ForegroundColor Red
+    Write-Host "================================================================" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Available network adapters on this PC:" -ForegroundColor Yellow
+    try {
+        Get-NetAdapter | Sort-Object Name | ForEach-Object {
+            Write-Host ("  - {0,-30}  Status={1,-12}  Media={2}" -f $_.Name, $_.Status, $_.MediaConnectState) -ForegroundColor Cyan
+        }
+    } catch {
+        Write-Host "  (failed to enumerate adapters: $($_.Exception.Message))" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    Write-Host "Fix:" -ForegroundColor Yellow
+    Write-Host "  1. Pick the adapter name you want to use from the list above" -ForegroundColor Yellow
+    Write-Host "     (typical examples: 'Ethernet', 'Ethernet0', 'イーサネット')" -ForegroundColor Yellow
+    Write-Host "  2. Edit  $ProfilePath" -ForegroundColor Yellow
+    Write-Host "     and set both network.source.interfaceAlias and" -ForegroundColor Yellow
+    Write-Host "     network.target.interfaceAlias to the chosen name." -ForegroundColor Yellow
+    Write-Host "  3. Re-run Fabriq_LanPrep.exe (or this script)." -ForegroundColor Yellow
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host "  Fabriq LAN-Prep  -  Role: $Role" -ForegroundColor Cyan
@@ -98,6 +138,12 @@ if (-not $Force) {
         exit 0
     }
 }
+
+# Steps 1-4 are wrapped in try/catch so that any throw inside snapshot
+# capture / netsh / share creation surfaces a readable error message and
+# keeps the console open. Without this, an EXE-launched conhost window
+# closed immediately on terminating errors and the operator never saw why.
+try {
 
 # Step 1: snapshot current config.
 Write-Host ""
@@ -148,3 +194,30 @@ Write-Host ""
 Write-Host "[revert] when finished:"
 Write-Host "         Revert-LanMigration.ps1 -SnapshotPath `"$($migProfile.rollback.snapshotPath)`""
 Write-Host ""
+
+}
+catch {
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Red
+    Write-Host "[FATAL] LAN-Prep failed during apply." -ForegroundColor Red
+    Write-Host "================================================================" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Error message:" -ForegroundColor Yellow
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Stack trace:" -ForegroundColor DarkGray
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "Notes:" -ForegroundColor Yellow
+    Write-Host "  - The rollback snapshot may have been written to:" -ForegroundColor Yellow
+    Write-Host "      $($migProfile.rollback.snapshotPath)" -ForegroundColor Yellow
+    Write-Host "    If yes, you can revert with:" -ForegroundColor Yellow
+    Write-Host "      Revert-LanMigration.ps1 -SnapshotPath `"$($migProfile.rollback.snapshotPath)`"" -ForegroundColor Cyan
+    Write-Host "  - Common causes:" -ForegroundColor Yellow
+    Write-Host "      * netsh failed (run 'netsh interface ipv4 show config' to diagnose)" -ForegroundColor Yellow
+    Write-Host "      * New-SmbShare rejected the path/permissions" -ForegroundColor Yellow
+    Write-Host "      * NTFS ACL principal not resolvable" -ForegroundColor Yellow
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
+}

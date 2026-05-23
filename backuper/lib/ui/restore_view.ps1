@@ -278,6 +278,66 @@ function Get-SelectedRestoreUserProfilePath {
 function Invoke-RestoreBrowse {
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = "バックアップフォルダを選択 (manifest.json を含むこと)。UNC の場合は先に [UNC 接続...] で認証してください。"
+
+    # v0.24.5: when a migration profile is loaded and a host is selected,
+    # pre-seed SelectedPath so the operator lands directly in the target
+    # PC's backup folder.
+    #
+    # Fallback chain (first existing path wins):
+    #   1. <share.localPath>\<OldPCname>   (only if running on target host)
+    #   2. <share.localPath>               (only if running on target host)
+    #   3. <backuper.backupRootUnc>\<OldPCname>
+    #   4. <backuper.backupRootUnc>
+    #   5. (no preset)
+    #
+    # Target-host detection: a registered SMB share whose name matches
+    # profile.share.shareName has Path == profile.share.localPath. If yes,
+    # we're sitting ON the target host and should prefer local paths over
+    # UNC (no auth needed, no network round-trip, more robust). Get-SmbShare
+    # is read-only and doesn't require admin context to enumerate own shares.
+    if ($null -ne $script:MigrationProfile -and `
+        $null -ne $script:CurrentHost) {
+
+        $hostName  = $script:CurrentHost.OldPCname
+        $shareRoot = $script:MigrationProfile.backuper.backupRootUnc
+        $shareLocal = $null
+        $shareName  = $null
+        if ($null -ne $script:MigrationProfile.share) {
+            $shareLocal = $script:MigrationProfile.share.localPath
+            $shareName  = $script:MigrationProfile.share.shareName
+        }
+
+        $isTargetHost = $false
+        if (-not [string]::IsNullOrWhiteSpace($shareLocal) -and `
+            -not [string]::IsNullOrWhiteSpace($shareName) -and `
+            (Test-Path -LiteralPath $shareLocal)) {
+            try {
+                $smb = Get-SmbShare -Name $shareName -ErrorAction Stop
+                if ($smb -and $smb.Path -ieq $shareLocal) {
+                    $isTargetHost = $true
+                }
+            } catch {
+                # Not a registered share on this PC -> not the target host.
+            }
+        }
+
+        $candidates = @()
+        if ($isTargetHost) {
+            $candidates += (Join-Path $shareLocal $hostName)
+            $candidates += $shareLocal
+        }
+        if (-not [string]::IsNullOrWhiteSpace($shareRoot)) {
+            $candidates += (Join-Path $shareRoot $hostName)
+            $candidates += $shareRoot
+        }
+        foreach ($c in $candidates) {
+            if (-not [string]::IsNullOrWhiteSpace($c) -and (Test-Path -LiteralPath $c)) {
+                $dlg.SelectedPath = $c
+                break
+            }
+        }
+    }
+
     if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
     $chosen = $dlg.SelectedPath
 

@@ -40,12 +40,45 @@ if (-not (Test-LanPrepIsAdmin)) {
     exit 1
 }
 
-$snapshot = Read-RollbackSnapshot -Path $SnapshotPath
+try {
+    $snapshot = Read-RollbackSnapshot -Path $SnapshotPath
+}
+catch {
+    Write-Host ""
+    Write-Host "[FATAL] Failed to read snapshot file: $SnapshotPath" -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
+}
 
 # Optional: load the migration profile to know the share name we may need to remove.
 $migProfile = $null
 if (Test-Path -LiteralPath $ProfilePath) {
-    $migProfile = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    try {
+        $migProfile = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Write-Host "[warn] Failed to parse profile (continuing with snapshot-only revert): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Pre-flight: warn if the snapshot's interfaceAlias no longer exists. We
+# don't abort because revert may still be partially useful (DNS reset etc.),
+# but the operator should know.
+try {
+    $null = Get-NetAdapter -Name $snapshot.interfaceAlias -ErrorAction Stop
+}
+catch {
+    Write-Host ""
+    Write-Host "[warn] Adapter '$($snapshot.interfaceAlias)' (recorded in snapshot) is not present on this PC." -ForegroundColor Yellow
+    Write-Host "       The snapshot may have been captured on a different machine, or the adapter was renamed." -ForegroundColor Yellow
+    Write-Host "       Available adapters:" -ForegroundColor Yellow
+    try {
+        Get-NetAdapter | Sort-Object Name | ForEach-Object {
+            Write-Host ("         - {0,-30}  Status={1,-12}  Media={2}" -f $_.Name, $_.Status, $_.MediaConnectState) -ForegroundColor Cyan
+        }
+    } catch {}
+    Write-Host ""
 }
 
 Write-Host ""
@@ -79,6 +112,10 @@ if (-not $Force) {
     }
 }
 
+# Steps wrapped in try/catch so that an EXE-launched conhost window stays
+# open on terminating errors (e.g. netsh failure).
+try {
+
 Write-Host ""
 Write-Host "[step] restoring network configuration..." -ForegroundColor Cyan
 Restore-MigrationNetworkConfig -Snapshot $snapshot
@@ -99,4 +136,21 @@ if ($snapshot.role -eq 'target' -and $migProfile -and $migProfile.share.localPat
     Write-Host "[note] local path '$($migProfile.share.localPath)' was NOT removed."
     Write-Host "       Delete it manually once backup data is no longer needed."
     Write-Host ""
+}
+
+}
+catch {
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Red
+    Write-Host "[FATAL] Revert failed." -ForegroundColor Red
+    Write-Host "================================================================" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Error message:" -ForegroundColor Yellow
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Stack trace:" -ForegroundColor DarkGray
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
 }

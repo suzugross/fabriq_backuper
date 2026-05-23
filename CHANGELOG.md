@@ -15,7 +15,221 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.24.5: **target ホスト上では UNC ではなくローカルパスを優先** —
+  [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1) の
+  `Invoke-RestoreBrowse`。
+  - **動機**: target PC は自分自身が SMB 共有を提供しているので、自 PC 上で
+    Restore を実行する際は UNC `\\<self-ip>\FabriqMigration` を経由する
+    必要はなく、ローカルパス `C:\FabriqMigration` で直接アクセスできる。
+    UNC 経由だと認証 / network stack 越しの I/O / SMB 経由オーバーヘッドが
+    発生するが、ローカル直接なら全て不要。
+  - **target ホスト検出**: `Get-SmbShare -Name profile.share.shareName` を
+    試行し、得られた `Path` が `profile.share.localPath` と一致すれば
+    「自 PC = target」と判定。一致しない / 共有不在 / 例外 はすべて非 target
+    扱い。`Get-SmbShare` は read-only enumeration なので副作用ゼロ。
+  - **新しい優先順位** (最初に存在する path が勝つ):
+    1. `<share.localPath>\<OldPCname>`   (target ホスト時のみ) - **local 直**
+    2. `<share.localPath>`               (target ホスト時のみ) - local share root
+    3. `<backuper.backupRootUnc>\<OldPCname>`                 - UNC fallback
+    4. `<backuper.backupRootUnc>`                              - UNC share root
+    5. (preset 無し)                                           - dialog blank
+  - **source PC / 第三者 PC**: target 検出が false になり、UNC fallback (3-4)
+    に進む = v0.24.4 と同じ挙動
+  - **profile 不在時**: 完全に従来通り (= preset 無し)
+  - **不変**: backuper 本体の他箇所 / section interface / manifest schema /
+    fabriq main 書込み なし。VERSION: 0.24.4 → 0.24.5 (PATCH、refinement)
+
+- backuper v0.24.4: **リストアの「バックアップを参照...」初期パスを profile +
+  選択ホストから自動構築** —
+  [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1) の
+  `Invoke-RestoreBrowse`。
+  - migration_profile.json が読み込まれていて、かつ session_form で host
+    (OldPCname) が選択されている時、FolderBrowserDialog の `SelectedPath`
+    を以下の優先順位でプリセット:
+    1. `<backuper.backupRootUnc>\<CurrentHost.OldPCname>` が accessible →
+       ここに着地 (= operator は dialog 開いた瞬間に対象 PC のバックアップ
+       一覧 (timestamp フォルダ) を見られる)
+    2. 1 が不在/未認証 → `<backuper.backupRootUnc>` (共有ルート) を試行
+    3. それも不在 → 従来通り SelectedPath は空 (dialog はシステムデフォルト
+       位置で開く)
+  - **UNC 認証との関係**: `Test-Path` は未認証 UNC で false を返すため、
+    operator が事前に「UNC 接続...」で認証を通していないと候補 1/2 とも
+    fall-through する。これは既存挙動と同じで、operator のメンタルモデルを
+    崩さない。
+  - **profile 不在時の挙動**: 完全に従来通り (= dialog がシステムデフォルト
+    位置で開く)。
+  - **検証**:
+    1. target PC で `Fabriq_BackUper.exe` → 「リストア」モード
+    2. session_form で対象 OldPCname を選択
+    3. restore_view で「UNC 接続...」を押して認証
+    4. 「バックアップを参照...」をクリック → dialog 内に `<OldPCname>` 配下の
+       timestamp フォルダが並んで見えること
+  - **不変**: section interface / manifest schema / backup_view / engine /
+    fabriq main 書込み なし。VERSION: 0.24.3 → 0.24.4 (PATCH、UX 改善)。
+
+### Fixed
+- backuper v0.24.3: **`Invoke-NetshIpv4` で stdout/stderr に同じ tempfile を
+  渡していたバグを修正** —
+  [tools/lan_prep/lib/network_config.ps1](tools/lan_prep/lib/network_config.ps1)。
+  - **症状**: VM (Windows 11 25H2, PS 5.1.26100.8457) で `Prepare-LanMigration.ps1
+    -Role target` の Step 2 (IP 適用) で必ず terminating error:
+    > `Start-Process: このコマンドは、"RedirectStandardOutput" と
+    > "RedirectStandardError" が同じであるため、実行できません`
+  - **真因**: `Start-Process -RedirectStandardOutput $f -RedirectStandardError $f`
+    と同一 path を指定していた。PS 5.1 は `$ErrorActionPreference='Stop'` 下で
+    これを terminating error として明示的に拒否する仕様。私の実装上のバグ。
+  - **修正**: stdout 用 / stderr 用に `[System.IO.Path]::GetTempFileName()` を
+    2 回呼んで別 path を確保。読み出し時は両ファイルを `||` で連結して error
+    message に含める。`finally` ブロックで両方とも `Remove-Item -Force`。
+  - **副次効果**: v0.24.2 で投入した safety net (Transcript + trap + finally
+    Read-Host) はこの bug の診断ログを完全に保存していた = 機能は正常。
+    operator はログ送付で原因究明できた、という validation も得られた。
+  - **不変**: section interface / manifest schema / backuper 本体への影響なし。
+    VERSION: 0.24.2 → 0.24.3 (PATCH、純粋な bugfix)。
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映。EXE は無変更。
+
+- backuper v0.24.2: **`fabriq_lanprep.ps1` に Transcript ログ + top-level trap
+  + finally Read-Host を追加 — window 即閉じ問題への確実な safety net** —
+  [fabriq_lanprep.ps1](fabriq_lanprep.ps1)。
+  - **背景**: v0.24.1 の pre-flight + try/catch でも、`Prepare-LanMigration.ps1`
+    の catch ブロック実行中の何らかの状況 (PSReadLine 干渉? `&` 子呼び出し
+    + parent の `$ErrorActionPreference=Stop` の相互作用?) で window が
+    閉じてしまい、operator は赤い error メッセージを読み切れない、と
+    2026-05-23 報告 (VM, `Ethernet0`)。catch ブロックは実行されている
+    (赤い文字が一瞬見える) が `Read-Host` まで到達できないか到達しても
+    抜けてから window が落ちる挙動。
+  - **修正 1: `Start-Transcript`**: 起動直後 (Add-Type / dot-source の
+    **前**) に `%TEMP%\fabriq_lanprep_<yyyyMMdd_HHmmss>.log` に出力開始。
+    `$env:TEMP` 不在時は repo root にフォールバック。`Stop-Transcript` は
+    `finally` ブロックと top-level trap の両方で呼ぶ (二重呼びは無害)。
+    これで window が閉じても全コンソール出力がログファイルに残る → operator
+    が `notepad %TEMP%\fabriq_lanprep_*.log` でエラーを後から確認可能。
+  - **修正 2: Top-level `trap` ブロック**: try/catch を escape した
+    terminating error の最終 receiver。エラー message / `$_.InvocationInfo`
+    の ScriptName + ScriptLineNumber + Line / ScriptStackTrace を表示 +
+    log file path を案内 + `Read-Host` で停止 + `Stop-Transcript` + `break`。
+    `break` で script 終了するが、`Read-Host` が先に走るので必ず operator
+    が確認できる。
+  - **修正 3: main body を `try { ... } finally { ... }` で wrap**: 正常 path
+    と早期 return path の両方で `finally` ブロックの `Read-Host` +
+    `Stop-Transcript` が実行される。これまでの早期 `return` (Add-Type 失敗 /
+    common.ps1 ロード失敗 / profile password 検知) も window 保持。
+  - **早期 return の `Read-Host` 重複削除**: 各 early-return ブロック内の
+    `Read-Host "Press Enter to exit"` は finally{} が代行するため削除。
+    `return` だけ残す。
+  - **不変**:
+    - 正常実行 path の動作は不変 (Transcript ログが追加で出力されるだけ)
+    - `Prepare-LanMigration.ps1` / `Revert-LanMigration.ps1` / `menu_form.ps1`
+      / EXE / 配備物の他のファイルには手を入れていない
+    - VERSION: 0.24.1 → 0.24.2 (PATCH、bugfix のみ)
+  - **配備方針**: `E:\fabriq_backuper\` を再配置で反映 (EXE は無変更、再ビルド
+    不要)。
+  - **検証**: VM で再現 → window が即閉じても `notepad
+    %TEMP%\fabriq_lanprep_*.log` でエラー全文が見られること / 報告いただいた
+    ログ内容で原因を解析して v0.24.3 で対症療法、という流れを想定。
+
+- backuper v0.24.1: **LAN_PREP の Y 押下直後 silent crash を修正 (interfaceAlias
+  不一致時の操作性向上)** —
+  [tools/lan_prep/Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1) /
+  [tools/lan_prep/Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1)。
+  - **背景**: VM (例: `Ethernet0` がデフォルト alias) で sample profile
+    (`イーサネット`) のまま起動すると、Y 押下後の Step 1 (rollback snapshot
+    取得) 内の `Get-NetIPInterface -InterfaceAlias 'イーサネット'
+    -ErrorAction Stop` が "No matching MSFT_NetIPInterface objects found" で
+    throw → `$ErrorActionPreference='Stop'` で script terminate → EXE 起動の
+    conhost window が即閉じ → operator は何が起きたか分からない、という
+    事象。実機 (Hyper-V VM, `Ethernet0`) で 2026-05-23 観測。
+  - **修正 1: Pre-flight adapter check (`Prepare-LanMigration.ps1`)**:
+    confirm prompt (Y/N) の **前** に `Get-NetAdapter -Name $netConfig.interfaceAlias
+    -ErrorAction Stop` を実行。失敗時は:
+    - `Get-NetAdapter | Sort-Object Name` で **使用可能な adapter 一覧を表示**
+      (Name / Status / MediaConnectState)
+    - 修正先パス (`$ProfilePath`) と修正すべきフィールド
+      (`network.source.interfaceAlias` / `network.target.interfaceAlias`) を案内
+    - `Read-Host "Press Enter to exit"` で console を保持してから exit 1
+  - **修正 2: Step 1-4 全体を try/catch で wrap** (`Prepare-LanMigration.ps1`):
+    snapshot 取得 / netsh / 共有作成 / NTFS ACL 等の throw を catch し、
+    error message + stack trace + recovery hints (revert command) を表示 →
+    `Read-Host` で停止。これにより EXE 起動 conhost でも事後解析が可能に。
+  - **修正 3: `Revert-LanMigration.ps1` にも同様の改良**:
+    - snapshot 読み込み失敗時の error 表示 + Read-Host
+    - profile parse 失敗を warning に降格 (snapshot-only revert で続行)
+    - snapshot 内の `interfaceAlias` が現在の PC に無い場合は warning +
+      adapter 一覧表示 (= 別マシンの snapshot を持ち込んだケース等を検知)。
+      ただし abort せず、revert を試みる (DNS reset 等の部分的復元が効く)
+    - Step 全体を try/catch で wrap して error 時の console 保持
+  - **不変**:
+    - 正常 path (= profile が正しい場合) には影響なし
+    - VERSION: 0.24.0 → 0.24.1 (PATCH、bugfix + UX 改善のみ)
+    - sample profile の interfaceAlias `イーサネット` 自体は変えていない
+      (日本語 Windows 物理機がデフォルトなので、operator がコピー後に
+      環境に合わせて編集する前提)。VM ユーザ向けには pre-flight check の
+      hint 文 (`'Ethernet'`, `'Ethernet0'`, `'イーサネット'` を例示) で
+      ガイドする
+  - **検証**: VM で profile の interfaceAlias を間違ったまま起動 →
+    adapter 一覧 + 修正先案内が console に残ること / 正しい alias に
+    書き換えて再起動 → 通常 path で snapshot + 共有作成 + IP 変更が
+    通ること
+
 ### Added
+- backuper v0.24.0: **`Fabriq_LanPrep.exe` (operator-facing entry) を新設** —
+  これまで `tools/lan_prep/Prepare-LanMigration.ps1` を PowerShell から直接
+  呼ぶ必要があり、operator にとって UAC 昇格と引数指定 (`-Role target`) が
+  ハードルになっていた。Fabriq_BackUper.exe と同形の C# launcher を追加し、
+  ダブルクリック → UAC 自動昇格 → WinForms メニュー画面 (lavender テーマ) →
+  「移行先」「移行元」「元に戻す」「終了」ボタン、の運用に統一。
+  - **新規 `dev/launcher/Launcher_LanPrep.cs`**: `Launcher_BackUper.cs` と
+    同パターン。`conhost.exe powershell.exe -File fabriq_lanprep.ps1` を
+    `UseShellExecute=true` で起動。AssemblyTitle / Product / 起動先 ps1 名
+    のみ差し替え、その他のロジックは backuper launcher と同等。
+  - **新規 `dev/launcher/app_lanprep.manifest`**: `requireAdministrator` +
+    `dpiAware=true`、`supportedOS` は Windows 7〜10。ビルド時に
+    `/win32manifest:` で埋め込まれる。
+  - **新規 `dev/launcher/build_lanprep.ps1`**: `build_backuper.ps1` の
+    mirror。csc.exe を 64-bit / 32-bit Framework 4.x の順で探索 → `/target:winexe`
+    `/platform:anycpu` `/optimize+` でビルドし、`Fabriq_LanPrep.exe` を repo
+    root に出力。実行中の同名 EXE があれば warning (`-Force` で override)。
+  - **新規 `fabriq_lanprep.ps1` (repo root entry)**:
+    - `backuper/common.ps1` + `backuper/lib/ui/theme.ps1` を dot-source し、
+      LAN-Prep でも backuper と同じ lavender テーマ・Show-* helper を共有
+    - `migration_profile.json` を optional に読み込み (backuper 本体と同じ
+      load policy: 不在=silent / schemaVersion mismatch=warning / `password`
+      キー混入=FATAL)
+    - `Show-LanPrepMenu` を呼んで action 文字列 (`target`/`source`/`revert`/
+      `exit`) を取得 → switch で対応する既存 PS1 (`Prepare-LanMigration.ps1`
+      または `Revert-LanMigration.ps1`) を `&` で呼び出す
+    - Revert action は profile.rollback.snapshotPath をそのまま `-SnapshotPath`
+      に渡す。snapshot ファイル不在なら error + skip (Prepare 未実行のケース)
+    - 完了後 `Read-Host "Press Enter to close this window"` で console を
+      保持し、operator に結果ログを確認させる
+  - **新規 `tools/lan_prep/lib/menu_form.ps1`**:
+    - `Show-LanPrepMenu` (global function)。modal WinForms ダイアログ
+    - レイアウト: 520px 幅、profile 有り 380px / 無し 360px 高さ
+    - profile 有り: lavender バナー「LAN 移行 profile: <profileName>」
+    - profile 無し: 赤色の警告ラベル「migration_profile.json が未配置です」を
+      表示 + Target / Source / Revert ボタンを **Enabled=$false** で disable
+      (= 終了ボタンのみ押下可能 → operator が profile を配置してから再起動)
+    - ボタン: 移行先 (lavender accent, 大) / 移行元 (lavender accent, 大) /
+      元に戻す (中、neutral) / 終了 (小、neutral)
+    - Esc キーで「終了」と同等動作
+    - クリック時に `$script:_lanPrepMenuResult` を action 文字列に設定して
+      フォーム close。caller (`fabriq_lanprep.ps1`) が結果を switch する
+  - **既存 `tools/lan_prep/Prepare-LanMigration.ps1` /
+    `Revert-LanMigration.ps1` は無変更**。menu からの呼び出しは
+    `& "<entry>.ps1" -Role target` のシンプルな子呼び出しで、リファクタや
+    関数化は行っていない (= PowerShell から直接呼ぶ運用も従来通り維持)
+  - **VERSION**: 0.23.0 → 0.24.0 (MINOR、operator-facing entry 新設)
+  - **配備方針**:
+    1. user 側で `dev\launcher\build_lanprep.ps1` を実行して
+       `Fabriq_LanPrep.exe` をビルド
+    2. `E:\fabriq_backuper\` を customer 端末に配置
+       (`Fabriq_LanPrep.exe` + `fabriq_lanprep.ps1` + `tools\lan_prep\` +
+       `backuper\` 一式)
+    3. operator は `Fabriq_LanPrep.exe` をダブルクリック (UAC 自動昇格)
+  - **不変**: backuper 本体 / section interface / manifest schema / fabriq
+    main への書き込みなし
+
 - backuper v0.23.0: **backuper 本体に LAN 移行 profile reader を組込み** —
   `backuper/data/migration_profile.json` が存在すれば起動時に読み込み、
   WinForms UI 3 箇所のデフォルトに反映する。profile 不在時は完全に
