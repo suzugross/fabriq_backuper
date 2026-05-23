@@ -230,16 +230,15 @@ function Show-RestoreView {
     $cont = $script:RestoreSectionContainer
     $cont.Controls.Clear()
     $script:RestoreSectionChecks = @{}
-    # v0.19.1 fix: see backup_view.ps1 for full rationale. Width 200 +
-    # stride 215 to fit 4 sections in the 880px container after the
-    # credentials section was added in v0.19.0.
+    # v0.22.0: width 168 + stride 178 fits 5 sections (msime_dict added).
+    # See backup_view.ps1 for the layout history.
     $x = 0
     foreach ($s in $script:SectionList) {
-        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 200 -Height 22 -Checked ($s.Enabled -eq "1")
+        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 168 -Height 22 -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
         $cont.Controls.Add($cb)
         $script:RestoreSectionChecks[$s.SectionName] = $cb
-        $x += 215
+        $x += 178
     }
 
     # Target user combo (default = logged-on interactive user)
@@ -583,6 +582,13 @@ function Invoke-RestoreStart {
         credentials = @{
             TargetUserProfilePath = $targetUserProfilePath
             IncludeTargets        = $script:RestoreCredentialsIncludeTargets
+        }
+        # v0.22.0: msime_dict section. TargetUserProfilePath drives the
+        # write destination (%APPDATA%\Microsoft\IME\15.0\IMEJP\UserDict\)
+        # under the resolved user; the section stops the target user's
+        # ctfmon to release the file lock before copying.
+        msime_dict = @{
+            TargetUserProfilePath = $targetUserProfilePath
         }
     }
 

@@ -3,3 +3,4 @@ Enabled,SectionName,DisplayName,Description
 1,userdata,User Data,Files and directories (drives modules/extended/userdata_backup)
 1,outlook_pop,Outlook POP Account,POP3/SMTP account settings + PST mapping + Strategy B-light restore (Phase 2.10.3)
 1,credentials,Windows Credentials,Credential Manager target/user list (passwords NOT captured) + restore payload for operator re-entry (v0.19.0)
+1,msime_dict,MS-IME Dictionary,Microsoft IME user dictionary (imjp15cu.dic + auto-backup) - fixed path across Win10/11 and old/new IME (v0.22.0)

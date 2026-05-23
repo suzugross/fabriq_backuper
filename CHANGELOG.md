@@ -16,6 +16,73 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.22.0: **新規 section `msime_dict` を追加** — Microsoft IME
+  のユーザ辞書 (`imjp15cu.dic` + auto-backup) をバックアップ／リストア
+  する。OS / IME 種別の分岐を operator に判断させない設計。
+  - **パス固定の根拠**: `%APPDATA%\Microsoft\IME\15.0\IMEJP\UserDict\`
+    は MSIME 内部バージョン (15.0) で固定されており、Win10 / Win11
+    23H2 / 24H2 / 25H2、旧 IME / 新 (Win11 default) IME のいずれでも
+    同一パス・同一ファイル形式 (公開情報 + 実機 Win11 25H2 環境で確認
+    済)。**operator は IME 種別を一切意識せずに backup / restore できる**。
+  - **`backuper/lib/sections/msime_dict/backup.ps1`**:
+    - `SourceUserProfilePath\AppData\Roaming\Microsoft\IME\15.0\IMEJP
+      \UserDict\` 配下から `imjp15cu.dic` + `imjp15cu.dic_bak` を採取。
+    - `robocopy /B` (backup mode) で取得 — IMEJP プロセスが
+      `imjp15cu.dic` を握っていてもロック越しに読み出せる。`/R:1 /W:1`
+      で stale lock 検知時の retry をすぐ諦め、`/COPY:DT` で data +
+      timestamp のみ複製 (ACL はキャリーオーバーしない)。robocopy
+      exit code を `$LASTEXITCODE` で見て >= 8 なら warning 立て、
+      ファイル単位の `Test-Path` で payload 確定。
+    - 学習キャッシュ (`%LOCALAPPDATA%\Microsoft\IME\15.0\IMEJP\Cache
+      \imjp15cache.dat`) は **意図的に対象外**。cache 由来のリストア
+      不安定化リスクを避け、辞書本体 + auto-backup のみで安全寄りに
+      振った設計判断。
+    - manifest schema `fabriq-msime-dict-backup` v1 を新設。各ファイル
+      の `sourcePath` / `exists` / `bytes` / `lastWrite` /
+      `copySucceeded`、トップに `userDictDirExists` / `capturedCount`
+      / `totalBytes`。
+    - Status 判定:
+      - `imjp15cu.dic` 採取成功 → Success (warnings 有なら Partial)
+      - UserDict dir そのものが不在 → Skipped (源 PC に IME 辞書なし)
+      - dir 存在するが採取失敗 → Failed
+  - **`backuper/lib/sections/msime_dict/restore.ps1`**:
+    - `TargetUserProfilePath\AppData\Roaming\Microsoft\IME\15.0\IMEJP
+      \UserDict\` を deploy 先として、source の `payload/` を展開。
+    - **ctfmon ロック対策**: `HKLM\SOFTWARE\Microsoft\Windows NT
+      \CurrentVersion\ProfileList` で `TargetUserProfilePath` から
+      target SID を逆引き → `Win32_Process` の `Name='ctfmon.exe'` を
+      列挙し、`GetOwnerSid` (CIM method) で SID 一致するもののみ
+      `Stop-Process`。SID 解決できない場合は kill step を skip
+      (admin 側 ctfmon を巻き込んで IME を全停止させないための保護)。
+    - 既存 `imjp15cu.dic` は **問答無用で上書き** (退避なし)。
+      キッティング前提セマンティクスに振った設計判断。
+    - ctfmon kill 後 500ms 待機 → `Copy-Item -Force` で deploy。
+      失敗時は warning を立てて当該ファイルだけ skip、全体 Status
+      は primary file (`imjp15cu.dic`) の成否で決まる。
+    - **target user の再ログインが必要** な旨は console log でも
+      明示。即時反映は ctfmon 再起動 + IME 再初期化が必要なため、
+      キッティング直後の通常運用 (再起動して引き渡し) ならそのまま
+      機能する。
+    - manifest schema `fabriq-msime-dict-restore` v1 を新設。
+      `targetUserSid` / `ctfmonStopped` / `ctfmonPidsStopped` /
+      `deployed[]` を記録。
+  - **`backuper/data/sections.csv`** に `msime_dict` 行を追加
+    (Enabled=1)。
+  - **`backuper/lib/ui/backup_view.ps1`** の `$sectionParams` に
+    `msime_dict = @{ SourceUserProfilePath = ... }` を追加。
+  - **`backuper/lib/ui/restore_view.ps1`** の `$sectionParams` に
+    `msime_dict = @{ TargetUserProfilePath = ... }` を追加。
+  - **section CheckBox レイアウト圧縮** (副次対応): 5 セクションを
+    880px container に収めるため width=200/stride=215 → width=168/
+    stride=178 に変更。最長 DisplayName "Printer Environment" (19
+    chars) も Segoe UI 9pt + checkbox indicator 込みで 168px 内に
+    収まる。max X = 4*178 + 168 = 880 ぴったり。6 セクション目を
+    追加する場合は container を広げるか複数行 wrap に切り替え必要
+    (コメント明記)。
+  - **section interface** : 不変。
+  - **既存 section / manifest aggregator / engine / common.ps1** :
+    無変更。
+
 - backuper v0.21.0: **printer section に WSD → TCP/IP standard port 救済機能** を追加。
   WSD (Web Services for Devices) ポートを使うプリンタは、復元時に動的 discovery に
   依存するため、`Add-PrinterPort` で programmatic に再構築できず、その port を参照

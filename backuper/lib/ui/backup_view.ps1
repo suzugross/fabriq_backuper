@@ -416,19 +416,22 @@ function Show-BackupView {
     $cont = $script:BackupSectionContainer
     $cont.Controls.Clear()
     $script:BackupSectionChecks = @{}
-    # v0.19.1 fix: width 300 + stride 320 only fit 3 sections in the
-    # 880px container. v0.19.0 added the 4th (credentials) which then
-    # rendered at X>=960 - completely outside the container. Compressed
-    # to width 200 + stride 215 so 4 sections (max X=645+200=845) fit
-    # cleanly. A 5th section in the future will require a wrap or wider
-    # container.
+    # Layout history:
+    #   v0.19.0: width 300 + stride 320 -> only 3 sections fit; 4th
+    #            (credentials) rendered at X>=960, outside the 880px
+    #            container.
+    #   v0.19.1: width 200 + stride 215 -> 4 sections fit (max X=845).
+    #   v0.22.0: width 168 + stride 178 -> 5 sections fit (max X=880
+    #            exactly) so msime_dict joins the row. The longest
+    #            DisplayName today ("Printer Environment", 19 chars)
+    #            still renders cleanly at this width with Segoe UI 9pt.
     $x = 0
     foreach ($s in $script:SectionList) {
-        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 200 -Height 22 -Checked ($s.Enabled -eq "1")
+        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 168 -Height 22 -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
         $cont.Controls.Add($cb)
         $script:BackupSectionChecks[$s.SectionName] = $cb
-        $x += 215
+        $x += 178
     }
 
     Update-BackupPrinterGrid
@@ -497,6 +500,13 @@ function Invoke-BackupStart {
         # only - actual target user is auto-resolved via Resolve-HkcuRoot
         # (logged-on user when admin context differs from interactive user).
         credentials = @{
+            SourceUserProfilePath = $sourceUserProfilePath
+        }
+        # v0.22.0: msime_dict section. The MSIME user dictionary lives at
+        # a fixed path (%APPDATA%\Microsoft\IME\15.0\IMEJP\UserDict\)
+        # regardless of OS or IME generation, so SourceUserProfilePath is
+        # the only knob needed.
+        msime_dict = @{
             SourceUserProfilePath = $sourceUserProfilePath
         }
     }
