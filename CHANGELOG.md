@@ -16,6 +16,45 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.21.0: **printer section に WSD → TCP/IP standard port 救済機能** を追加。
+  WSD (Web Services for Devices) ポートを使うプリンタは、復元時に動的 discovery に
+  依存するため、`Add-PrinterPort` で programmatic に再構築できず、その port を参照
+  する `Add-Printer` が失敗していた (現場で「上手くいく端末といかない端末がある」
+  事象の主因)。本リリースで以下の救済路線を追加。
+  - **[backup.ps1](backuper/lib/sections/printer/backup.ps1)** に
+    `Get-IPv4FromLocation` ヘルパーを新規追加。WSD discovery で取得した
+    `printer.Location` (典型形 `http://<ip>:80/wsd/mex`) から IPv4 を厳密 regex で
+    抽出 (各オクテット 0-255 範囲、前後数字なしの境界条件付き)。ホスト名形式は
+    cross-PC restore で DNS 非対称になりやすいため意図的に拾わない。
+  - **ports.json / manifest.json の port エントリに `wsdResolvedHost` を additive
+    追加**。WSD 以外の port では `$null`、WSD でも Location に IP が無ければ `$null`。
+  - **WSD warning を Status 切り離し**: v0.20.x 以前は WSD port が 1 つでもあれば
+    `$warnings` に積まれて Status=Partial 強制だった。v0.21.0 では IPv4 を resolve
+    できた WSD は Show-Info に降格 (warnings に積まない = Status は Success のまま)、
+    resolve 不能な WSD のみ warning として残す (= 本当に復元できないため)。
+  - **[restore.ps1](backuper/lib/sections/printer/restore.ps1) の WSD case を全面
+    書き換え**: 従来は `$warnings += "WSD port skipped"` で必ず skip だったが、
+    `wsdResolvedHost` (または backward-compat として `printer.location` からの IP
+    抽出) があれば `IP_<ip>` 名で TCP/IP standard port (RAW 9100) を作成。
+    同名 port が既存ならそれを再利用。
+  - **Phase C で portName の in-memory rewrite を実施**: WSD port を `IP_<ip>` に
+    書き換えた場合、後続の `Add-Printer -PortName` 引数を rewrite map で張り替え。
+    manifest 自体は不変 (副作用なし、何度 restore しても同じ結果)。
+  - **新規 helper** `Resolve-WsdHost`: `wsdResolvedHost` field を最優先、無ければ
+    referring printer の `location` から IP 抽出にフォールバック。これにより
+    **v0.20.x 以前の既存バックアップでも追加採取なしに救済可能**。
+  - **新規 Summary field**: `wsdRewrites` (rewrite 件数)。manifest aggregate にも
+    伝搬。
+  - **manifest schema** : additive のみ (`wsdResolvedHost` 追加)、後方互換。
+  - **section interface** : 不変。
+  - **後方互換**: v0.20.x で取った既存バックアップを v0.21.0 の restore で読むと、
+    新規フィールド `wsdResolvedHost` は欠落しているが、`Resolve-WsdHost` が printer
+    の `location` から IP を抽出するフォールバック経路で救済される。
+  - **既知の前提**: 復元先 PC が元の WSD プリンタと同じ LAN セグメントに到達でき、
+    RAW 9100 が空いていること。SNMP / LPR 強制環境ではこの方針は使えない (現場
+    要件で出てきたら別 SectionParam で port 9515 / LPR モードを追加検討)。
+
+### Added
 - backuper v0.20.0: **資格情報リストア時の対象選択ダイアログ** を追加。
   バックアップは全件採取 (= v0.19.x のまま) のまま、**リストア時に CSV
   に含めるエントリを operator が選択** できるようになった。

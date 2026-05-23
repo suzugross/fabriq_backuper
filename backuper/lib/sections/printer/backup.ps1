@@ -214,6 +214,22 @@ function Get-SafeFileName {
     return ($Name -replace '[^\w\-]', '_')
 }
 
+# v0.21.0: Extract IPv4 from a printer Location string. WSD-discovered
+# printers typically store "http://<ip>:80/wsd/mex" (or similar) in
+# Location; we mine it so restore can substitute a TCP/IP standard port
+# when the source PC was using WSD. Hostnames are skipped: cross-PC
+# restore needs an address that survives DNS/WINS asymmetry, and the
+# vast majority of WSD-MFP deployments use static IPs anyway.
+function Get-IPv4FromLocation {
+    param([string]$Location)
+    if ([string]::IsNullOrWhiteSpace($Location)) { return $null }
+    $m = [System.Text.RegularExpressions.Regex]::Match(
+        $Location,
+        '(?<!\d)((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?!\d)')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+
 # ----------------------------------------------------------
 # Write printers.json
 # ----------------------------------------------------------
@@ -227,11 +243,29 @@ try {
 $relevantPortNames = @($printers | ForEach-Object { $_.PortName } | Sort-Object -Unique)
 $relevantPorts = @($ports | Where-Object { $_.Name -in $relevantPortNames })
 
+# v0.21.0: Build a port-name -> WSD-resolved-IPv4 map by mining each
+# printer's Location field. WSD discovery populates Location with the
+# device's metadata-exchange URL (typically http://<ip>:80/wsd/mex),
+# so this is the only at-backup-time IP source we have for ports that
+# Windows recorded only as WSD-<uuid>.
+$portToWsdHost = @{}
+foreach ($pr in $printers) {
+    $thisPort = @($ports | Where-Object { $_.Name -eq $pr.PortName } | Select-Object -First 1)
+    if ($thisPort.Count -eq 0) { continue }
+    if ((Get-PortType -Port $thisPort[0]) -ne 'WSD') { continue }
+    $ip = Get-IPv4FromLocation -Location $pr.Location
+    if (-not [string]::IsNullOrWhiteSpace($ip)) {
+        $portToWsdHost[$pr.PortName] = $ip
+    }
+}
+
 try {
     $portRows = foreach ($p in $relevantPorts) {
+        $pt = Get-PortType -Port $p
+        $wsdHost = if ($pt -eq 'WSD' -and $portToWsdHost.ContainsKey($p.Name)) { $portToWsdHost[$p.Name] } else { $null }
         [PSCustomObject]@{
             Name               = $p.Name
-            PortType           = Get-PortType -Port $p
+            PortType           = $pt
             Description        = $p.Description
             PortMonitor        = $p.PortMonitor
             PrinterHostAddress = $p.PrinterHostAddress
@@ -240,12 +274,24 @@ try {
             LprQueueName       = $p.LprQueueName
             SnmpEnabled        = [bool]$p.SnmpEnabled
             SnmpCommunity      = $p.SnmpCommunity
+            # v0.21.0 additive: resolved IPv4 for WSD ports so restore
+            # can fall back to a TCP/IP standard port (port 9100).
+            WsdResolvedHost    = $wsdHost
         }
     }
     Write-JsonArray -Path (Join-Path $sectionDir 'ports.json') -Data $portRows
     Show-Success "ports.json written"
+    # v0.21.0: WSD ports are no longer logged as warnings (which forced
+    # Partial status). When the Location URL yielded an IPv4 we can
+    # restore via TCP/IP rewrite; report it as info. Only WSD ports
+    # WITHOUT a resolvable IPv4 are escalated, since those genuinely
+    # cannot be restored without operator intervention.
     foreach ($w in @($portRows | Where-Object { $_.PortType -eq 'WSD' })) {
-        $warnings += "WSD port '$($w.Name)': dynamic discovery dependent, restore not guaranteed"
+        if ([string]::IsNullOrWhiteSpace($w.WsdResolvedHost)) {
+            $warnings += "WSD port '$($w.Name)': no IPv4 found in Location; restore will skip this port"
+        } else {
+            Show-Info "WSD port '$($w.Name)' resolved as IPv4 $($w.WsdResolvedHost) (will be rewritten to TCP/IP on restore)"
+        }
     }
 } catch { $warnings += "Failed to write ports.json: $_" }
 
@@ -469,9 +515,11 @@ $manifestPrinters = foreach ($p in $printers) {
     }
 }
 $manifestPorts = foreach ($p in $relevantPorts) {
+    $pt = Get-PortType -Port $p
+    $wsdHost = if ($pt -eq 'WSD' -and $portToWsdHost.ContainsKey($p.Name)) { $portToWsdHost[$p.Name] } else { $null }
     [PSCustomObject]@{
         name               = $p.Name
-        portType           = Get-PortType -Port $p
+        portType           = $pt
         printerHostAddress = $p.PrinterHostAddress
         portNumber         = $p.PortNumber
         lprHostName        = $p.LprHostName
@@ -479,6 +527,11 @@ $manifestPorts = foreach ($p in $relevantPorts) {
         snmpEnabled        = [bool]$p.SnmpEnabled
         snmpCommunity      = $p.SnmpCommunity
         portMonitor        = $p.PortMonitor
+        # v0.21.0 additive: IPv4 from the originating printer's Location
+        # URL. Restore uses this to substitute a TCP/IP standard port
+        # for WSD ports (which cannot be re-created programmatically on
+        # a different machine).
+        wsdResolvedHost    = $wsdHost
     }
 }
 $manifestDrivers = foreach ($d in $driverInfoList) {

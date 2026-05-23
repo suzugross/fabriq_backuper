@@ -156,6 +156,34 @@ if ($plannedPrinters.Count -eq 0) {
 
 Show-Info "Restoring $($plannedPrinters.Count) printer(s) (skipped: RDP=$skippedRdp, virtual=$skippedVirtual, filter=$skippedFilter)"
 
+# v0.21.0: WSD-port rewrite map. Filled while building ports below
+# (and via backward-compat IPv4 mining from printer.location for
+# manifests produced by v0.20.x or earlier). After that loop, each
+# planned printer's portName is rewritten via this map before Add-Printer.
+$portNameRewrites = @{}
+function Get-IPv4FromLocationCompat {
+    param([string]$Location)
+    if ([string]::IsNullOrWhiteSpace($Location)) { return $null }
+    $m = [System.Text.RegularExpressions.Regex]::Match(
+        $Location,
+        '(?<!\d)((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?!\d)')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+function Resolve-WsdHost {
+    param($PortEntry, $PlannedPrinters)
+    if ($PortEntry.PSObject.Properties.Name -contains 'wsdResolvedHost' -and `
+        -not [string]::IsNullOrWhiteSpace($PortEntry.wsdResolvedHost)) {
+        return [string]$PortEntry.wsdResolvedHost
+    }
+    # Backward-compat for manifests written by v0.20.x and earlier.
+    $referringPrinter = @($PlannedPrinters | Where-Object { $_.portName -eq $PortEntry.name } | Select-Object -First 1)
+    if ($referringPrinter.Count -gt 0) {
+        return (Get-IPv4FromLocationCompat -Location $referringPrinter[0].location)
+    }
+    return $null
+}
+
 # Conflict snapshot
 $existingPrinters = @{}
 foreach ($e in @(Get-Printer -ErrorAction SilentlyContinue)) { $existingPrinters[$e.Name] = $e }
@@ -274,7 +302,36 @@ foreach ($port in $plannedPorts) {
             } catch { $warnings += "LPR port failed $($port.name): $($_.Exception.Message)"; $portFail++ }
         }
         'Local'   { $portSkip++ }
-        'WSD'     { $warnings += "WSD port skipped: $($port.name)"; $portSkip++ }
+        'WSD'     {
+            # v0.21.0: WSD ports cannot be re-created via Add-PrinterPort
+            # (PnP-X / WS-Discovery is required, and the source UUID is
+            # rarely reproducible on the target PC). Mine the IPv4 we
+            # saved at backup time (wsdResolvedHost) - falling back to
+            # the referring printer's Location URL for legacy manifests -
+            # and create a TCP/IP standard port (RAW 9100) in its place.
+            $wsdHost = Resolve-WsdHost -PortEntry $port -PlannedPrinters $plannedPrinters
+            if ([string]::IsNullOrWhiteSpace($wsdHost)) {
+                $warnings += "WSD port '$($port.name)': no IPv4 resolvable, port skipped (referring printers will fail)"
+                $portSkip++
+                break
+            }
+            $rewriteName = "IP_$wsdHost"
+            if ($existingPorts.ContainsKey($rewriteName)) {
+                Show-Skip "WSD->TCPIP rewrite target exists: $rewriteName (reusing for $($port.name))"
+                $portNameRewrites[$port.name] = $rewriteName
+                $portSkip++
+                break
+            }
+            try {
+                Add-PrinterPort -Name $rewriteName -PrinterHostAddress $wsdHost -PortNumber 9100 -ErrorAction Stop
+                $portNameRewrites[$port.name] = $rewriteName
+                Show-Success "WSD->TCPIP rewrite: '$($port.name)' -> '$rewriteName' (host=$wsdHost, port=9100)"
+                $portSuccess++
+            } catch {
+                $warnings += "WSD->TCPIP rewrite failed for '$($port.name)' (host=$wsdHost): $($_.Exception.Message)"
+                $portFail++
+            }
+        }
         'Bonjour' { $warnings += "Bonjour port skipped: $($port.name)"; $portSkip++ }
         default   { $warnings += "Unsupported port type '$($port.portType)': $($port.name)"; $portSkip++ }
     }
@@ -293,8 +350,19 @@ foreach ($p in $plannedPrinters) {
         try { Remove-Printer -Name $p.name -ErrorAction Stop; Show-Info "Removed (replace): $($p.name)" }
         catch { $warnings += "Replace failed for $($p.name): $($_.Exception.Message)"; $printerFail++; continue }
     }
+    # v0.21.0: apply WSD->TCPIP port-name rewrite to this printer's
+    # portName. If the WSD port was successfully (or pre-existently)
+    # rewritten in Phase B, use the new name; otherwise the original
+    # name is kept and Add-Printer will fail honestly.
+    $effectivePortName = if ($portNameRewrites.ContainsKey($p.portName)) {
+        $portNameRewrites[$p.portName]
+    } else { $p.portName }
+    if ($effectivePortName -ne $p.portName) {
+        Show-Info "Printer '$($p.name)': portName '$($p.portName)' -> '$effectivePortName' (WSD->TCPIP)"
+    }
+
     try {
-        Add-Printer -Name $p.name -DriverName $p.driverName -PortName $p.portName -ErrorAction Stop
+        Add-Printer -Name $p.name -DriverName $p.driverName -PortName $effectivePortName -ErrorAction Stop
         Show-Success "Printer: $($p.name)"
         $printerSuccess++
         $restoredPrinterNames += $p.name
@@ -455,6 +523,7 @@ return [PSCustomObject]@{
         settingsSuccess = $settingsSuccess; settingsFail = $settingsFail
         hwConfigRestored = $hwConfigRestoredCount
         skippedRdp = $skippedRdp; skippedVirtual = $skippedVirtual; skippedFilter = $skippedFilter
+        wsdRewrites = $portNameRewrites.Count
     }
     Warnings = $warnings
 }
