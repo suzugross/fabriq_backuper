@@ -27,7 +27,10 @@ function global:Show-BackuperSessionForm {
     param(
         [Parameter(Mandatory)][array]$HostList,
         [Parameter(Mandatory)][string]$VerifyTokenPath,
-        [string]$CurrentPCName = $env:COMPUTERNAME
+        [string]$CurrentPCName = $env:COMPUTERNAME,
+        # v0.23.0: optional LAN migration profile. When provided, a banner is
+        # shown under the title; otherwise layout is identical to v0.22.x.
+        $MigrationProfile = $null
     )
 
     $result = @{
@@ -37,8 +40,13 @@ function global:Show-BackuperSessionForm {
         Cancelled         = $true
     }
 
+    # When a migration profile is loaded, reserve 24 px below the title for
+    # a profile banner. Otherwise keep the original v0.22.x layout exactly.
+    $hasProfile = ($null -ne $MigrationProfile)
+    $formHeight = if ($hasProfile) { 534 } else { 510 }
+
     $form = New-Object System.Windows.Forms.Form
-    Set-FormStyle -Form $form -Title 'Fabriq BackUper - セッション設定' -Width 620 -Height 510
+    Set-FormStyle -Form $form -Title 'Fabriq BackUper - セッション設定' -Width 620 -Height $formHeight
     $form.KeyPreview = $true
 
     $yPos = 15
@@ -51,6 +59,20 @@ function global:Show-BackuperSessionForm {
         -Font $script:fontTitle -FgColor $script:bgAccent
     $form.Controls.Add($titleLabel)
     $yPos += 38
+
+    # ========================================
+    # LAN migration profile banner (v0.23.0, optional)
+    # Shown only when the caller supplied a profile object; absent profile
+    # leaves $yPos at the same value as v0.22.x (full back-compat layout).
+    # ========================================
+    if ($hasProfile) {
+        $bannerText = "LAN 移行 profile: $($MigrationProfile.profileName)"
+        $bannerLabel = New-StyledLabel -Text $bannerText `
+            -X 20 -Y $yPos -Width 560 -Height 20 `
+            -Font $script:fontBold -FgColor $script:bgAccent
+        $form.Controls.Add($bannerLabel)
+        $yPos += 24
+    }
 
     # ========================================
     # Host Selection Section

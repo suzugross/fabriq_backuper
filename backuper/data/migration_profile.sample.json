@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "profileName": "OLD-PC-01 -> NEW-PC-01",
+  "network": {
+    "source": {
+      "interfaceAlias": "イーサネット",
+      "ipAddress": "192.168.250.10",
+      "prefixLength": 24,
+      "gateway": null,
+      "dnsServers": []
+    },
+    "target": {
+      "interfaceAlias": "イーサネット",
+      "ipAddress": "192.168.250.20",
+      "prefixLength": 24,
+      "gateway": null,
+      "dnsServers": []
+    },
+    "setNetworkCategoryPrivate": true,
+    "enableFileAndPrinterSharing": true
+  },
+  "share": {
+    "hostRole": "target",
+    "shareName": "FabriqMigration",
+    "localPath": "C:\\FabriqMigration",
+    "smbPermissions": [
+      { "principal": "Everyone", "access": "Full" }
+    ],
+    "ntfsPermissions": [
+      { "principal": "Everyone", "access": "Modify" }
+    ]
+  },
+  "backuper": {
+    "backupRootUnc": "\\\\192.168.250.20\\FabriqMigration",
+    "uncUsername": "",
+    "autoConnectOnLaunch": true
+  },
+  "rollback": {
+    "snapshotPath": "C:\\FabriqMigration\\_rollback_snapshot.json",
+    "revertNetwork": true,
+    "removeShare": true
+  }
+}

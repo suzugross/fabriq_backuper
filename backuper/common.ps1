@@ -412,6 +412,151 @@ function global:Resolve-HkcuRoot {
 }
 
 # ============================================================
+# Outlook Running Detection / Graceful Shutdown
+#
+# v0.23.0 addition (NOT vendored from kernel/common.ps1). Used by
+# backup_view to pre-check before running outlook_pop backup: if
+# OUTLOOK.EXE is alive in the source user's session, the registry
+# profile keys and PST files are likely held in inconsistent state
+# (Outlook flushes on close). The caller pops up a confirmation
+# dialog, then Stop-OutlookForSource gracefully closes + (if needed)
+# force-kills.
+#
+# SID scoping is critical: when the backuper process is admin-elevated
+# under a different account than the interactive source user, naive
+# enumeration would also see (and try to kill) the admin's own Outlook.
+# The Get-CimInstance + GetOwnerSid filter restricts to the source
+# user's processes only.
+# ============================================================
+
+function global:Test-OutlookRunningForSource {
+    # Enumerate OUTLOOK.EXE processes owned by the source user (SID).
+    # Returns an array of [PSCustomObject]@{ ProcessId } objects, empty
+    # when nothing matches.
+    #
+    # If $SourceUserSid is omitted, the SID is resolved via Resolve-HkcuRoot
+    # (admin-elevated cross-user case) or falls back to the current
+    # process identity SID.
+    param([string]$SourceUserSid = $null)
+
+    if ([string]::IsNullOrWhiteSpace($SourceUserSid)) {
+        $hkcuInfo = Resolve-HkcuRoot
+        if ($hkcuInfo -and -not [string]::IsNullOrWhiteSpace($hkcuInfo.SID)) {
+            $SourceUserSid = $hkcuInfo.SID
+        } else {
+            $SourceUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        }
+    }
+
+    $matched = @()
+    $procs = @()
+    try {
+        $procs = @(Get-CimInstance -ClassName Win32_Process `
+                       -Filter "Name='OUTLOOK.EXE'" -ErrorAction Stop)
+    } catch {
+        Show-Warning "OUTLOOK.EXE enumeration failed: $($_.Exception.Message)"
+        return @()
+    }
+
+    foreach ($p in $procs) {
+        $ownerSid = $null
+        try {
+            $result = Invoke-CimMethod -InputObject $p `
+                          -MethodName GetOwnerSid -ErrorAction Stop
+            if ($result -and $result.ReturnValue -eq 0) {
+                $ownerSid = "$($result.Sid)"
+            }
+        } catch { }
+        if ($ownerSid -eq $SourceUserSid) {
+            $matched += [PSCustomObject]@{
+                ProcessId = [int]$p.ProcessId
+                OwnerSid  = $ownerSid
+            }
+        }
+    }
+    return @($matched)
+}
+
+function global:Stop-OutlookForSource {
+    # Graceful close + force-kill chain for source-user OUTLOOK.EXE.
+    #
+    # Phase 1: enumerate via Test-OutlookRunningForSource.
+    # Phase 2: send CloseMainWindow (WM_CLOSE equivalent) to each so
+    #          Outlook can prompt the operator for unsaved drafts and
+    #          exit cleanly when possible.
+    # Phase 3: poll for up to GracefulWaitSeconds; break early if all
+    #          processes have exited.
+    # Phase 4: Stop-Process -Force any survivor.
+    # Phase 5: brief settling sleep so subsequent reg.exe export sees a
+    #          quiesced hive.
+    #
+    # Returns a hashtable:
+    #   Result          : 'NoneRunning' | 'KilledGraceful' | 'KilledForce'
+    #   AttemptedIds    : int[] - PIDs that were targeted
+    #   ForceKilledIds  : int[] - PIDs that survived graceful close and were force-killed
+    param(
+        [string]$SourceUserSid = $null,
+        [int]$GracefulWaitSeconds = 5
+    )
+
+    $procInfos = Test-OutlookRunningForSource -SourceUserSid $SourceUserSid
+    if ($procInfos.Count -eq 0) {
+        return @{
+            Result         = 'NoneRunning'
+            AttemptedIds   = @()
+            ForceKilledIds = @()
+        }
+    }
+
+    $attemptedIds = @($procInfos | ForEach-Object { $_.ProcessId })
+
+    # Phase 2: graceful close request per process.
+    foreach ($processId in $attemptedIds) {
+        try {
+            $proc = Get-Process -Id $processId -ErrorAction Stop
+            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+                [void]$proc.CloseMainWindow()
+            }
+        } catch { }
+    }
+
+    # Phase 3: poll for graceful exit.
+    $deadline = (Get-Date).AddSeconds($GracefulWaitSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $stillAlive = $false
+        foreach ($processId in $attemptedIds) {
+            try {
+                $p = Get-Process -Id $processId -ErrorAction Stop
+                if (-not $p.HasExited) { $stillAlive = $true; break }
+            } catch { }
+        }
+        if (-not $stillAlive) { break }
+        Start-Sleep -Milliseconds 500
+    }
+
+    # Phase 4: force-kill survivors.
+    $forceKilled = @()
+    foreach ($processId in $attemptedIds) {
+        try {
+            $p = Get-Process -Id $processId -ErrorAction Stop
+            if (-not $p.HasExited) {
+                Stop-Process -Id $processId -Force -ErrorAction Stop
+                $forceKilled += $processId
+            }
+        } catch { }
+    }
+
+    # Phase 5: settling delay so the next reg.exe export sees a flushed hive.
+    Start-Sleep -Milliseconds 1000
+
+    return @{
+        Result         = if ($forceKilled.Count -gt 0) { 'KilledForce' } else { 'KilledGraceful' }
+        AttemptedIds   = $attemptedIds
+        ForceKilledIds = $forceKilled
+    }
+}
+
+# ============================================================
 # Fabriq Root Discovery (verbatim from checksheet/common.ps1)
 #
 # Two-tier fallback for locating the parent fabriq directory:

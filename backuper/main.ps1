@@ -65,6 +65,47 @@ if (Test-Path $_verFile) {
     $script:BackuperVersion = (Get-Content -Path $_verFile -Raw).Trim()
 }
 
+# ============================================================
+# Optional: LAN migration profile (v0.23.0)
+# When backuper\data\migration_profile.json exists and validates,
+# it is exposed as $script:MigrationProfile. UI surfaces (session
+# form banner, backup/restore destination default, UNC dialog
+# presets) read from this object when non-null. Absence is the
+# expected default - no profile = traditional behaviour.
+#
+# Failure policy:
+#   - Profile file absent           -> silent, $script:MigrationProfile stays $null
+#   - schemaVersion != 1            -> warning, ignore (treat as absent)
+#   - JSON parse failure            -> warning, ignore
+#   - File contains a 'password' key -> FATAL (security: passwords belong in
+#                                       the interactive UNC dialog only,
+#                                       never in source-controlled config)
+# ============================================================
+$script:MigrationProfile = $null
+$_profilePath = Join-Path $script:FabriqBackuperRoot 'data\migration_profile.json'
+if (Test-Path -LiteralPath $_profilePath) {
+    try {
+        $_jsonText = Get-Content -LiteralPath $_profilePath -Raw -Encoding UTF8
+        if ($_jsonText -match '"\s*password\s*"') {
+            Show-Error "Migration profile contains a 'password' key. Remove it before launching backuper."
+            Show-Error "  Profile: $_profilePath"
+            Read-Host "Press Enter to exit"
+            return
+        }
+        $_profileObj = $_jsonText | ConvertFrom-Json
+        if ($_profileObj.schemaVersion -eq 1) {
+            $script:MigrationProfile = $_profileObj
+            Show-Info "Migration profile loaded: $($_profileObj.profileName)"
+        }
+        else {
+            Show-Warning "Migration profile schemaVersion=$($_profileObj.schemaVersion) (expected 1). Profile ignored."
+        }
+    }
+    catch {
+        Show-Warning "Failed to parse migration profile (ignored): $($_.Exception.Message)"
+    }
+}
+
 # Suppress per-module Confirm-ModuleExecution prompts: the FabriqBackUper
 # UI is the canonical confirmation surface; wrapped modules should run
 # without their own Y/N prompts.
@@ -203,7 +244,8 @@ if ($null -eq $coldHostlist -or $coldHostlist.Count -eq 0) {
 $sess = Show-BackuperSessionForm `
     -HostList         $coldHostlist `
     -VerifyTokenPath  $verifyPath `
-    -CurrentPCName    $env:COMPUTERNAME
+    -CurrentPCName    $env:COMPUTERNAME `
+    -MigrationProfile $script:MigrationProfile
 
 if ($sess.Cancelled) {
     Show-Info "Session cancelled. Exiting."

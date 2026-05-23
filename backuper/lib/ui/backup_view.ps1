@@ -66,7 +66,16 @@ function New-BackupView {
     $destBox.Location = New-Object System.Drawing.Point(24, 66)
     $destBox.Size = New-Object System.Drawing.Size(620, 24)
     Set-TextBoxStyle -TextBox $destBox
-    $destBox.Text = (Join-Path $script:BackuperRoot 'Backup')
+    # v0.23.0: when a LAN migration profile is loaded, default the backup
+    # destination to backupRootUnc; otherwise fall back to the local
+    # Backup\ subfolder under BackuperRoot (v0.22.x behaviour).
+    if ($null -ne $script:MigrationProfile -and `
+        -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.backupRootUnc)) {
+        $destBox.Text = $script:MigrationProfile.backuper.backupRootUnc
+    }
+    else {
+        $destBox.Text = (Join-Path $script:BackuperRoot 'Backup')
+    }
     $panel.Controls.Add($destBox)
     $script:BackupDestinationBox = $destBox
 
@@ -88,7 +97,14 @@ function New-BackupView {
     $btnUncConnect = New-StyledButton -Text "UNC 接続..." -X 762 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
     $btnUncConnect.Add_Click({
         $initial = if ($script:BackupDestinationBox.Text -like '\\*') { $script:BackupDestinationBox.Text } else { '' }
-        $unc = Show-UncConnectDialog -InitialPath $initial
+        # v0.23.0: if a migration profile is loaded, forward uncUsername as a
+        # preset so the operator only needs to type the password.
+        $initialUser = ''
+        if ($null -ne $script:MigrationProfile -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
+            $initialUser = $script:MigrationProfile.backuper.uncUsername
+        }
+        $unc = Show-UncConnectDialog -InitialPath $initial -InitialUsername $initialUser
         if (-not [string]::IsNullOrWhiteSpace($unc)) {
             $script:BackupDestinationBox.Text = $unc
         }
@@ -543,11 +559,60 @@ function Invoke-BackupStart {
     )
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
+    # v0.23.0: Outlook running pre-check (only when outlook_pop is selected).
+    # PST files and HKCU Outlook profile keys are written / locked by an
+    # active OUTLOOK.EXE process, so a backup taken mid-flight risks an
+    # inconsistent .reg export and a partial PST capture. The pre-check
+    # is scoped to the source user's SID so that an admin-elevated
+    # backup running under a different identity does not enumerate (and
+    # later kill) the admin's own unrelated Outlook session.
+    $outlookCloseSummary = $null
+    $outlookPopSelected = @($picked | Where-Object { $_.SectionName -eq 'outlook_pop' }).Count -gt 0
+    if ($outlookPopSelected) {
+        $runningOutlook = @(Test-OutlookRunningForSource)
+        if ($runningOutlook.Count -gt 0) {
+            $pidLabel = (@($runningOutlook | ForEach-Object { $_.ProcessId }) -join ', ')
+            $outlookConfirm = [System.Windows.Forms.MessageBox]::Show(
+                "取得元ユーザのセッションで OUTLOOK.EXE が起動中です (PID: $pidLabel)。`n`n" +
+                "Outlook が起動したままバックアップすると、PST ファイルとレジストリ`n" +
+                "プロファイルの整合性が崩れる可能性があります。Outlook を閉じてから`n" +
+                "バックアップを続行しますか?`n`n" +
+                "[はい] Outlook を閉じて続行`n" +
+                "       (草稿の保存ダイアログが出たら画面で対応してください。`n" +
+                "        5 秒たっても閉じない場合は強制終了します)`n" +
+                "[いいえ] バックアップを中止 (手動で閉じてからやり直し)",
+                "Fabriq BackUper - Outlook 起動中",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            if ($outlookConfirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+                return
+            }
+            $stopResult = Stop-OutlookForSource
+            $outlookCloseSummary = switch ($stopResult.Result) {
+                'KilledGraceful' {
+                    "Outlook を閉じました (graceful、対象 $($stopResult.AttemptedIds.Count) 件)"
+                }
+                'KilledForce' {
+                    "Outlook を強制終了しました (graceful + force kill、対象 " +
+                    "$($stopResult.AttemptedIds.Count) 件 / うち force=" +
+                    "$($stopResult.ForceKilledIds.Count) 件)"
+                }
+                default {
+                    "Outlook close result: $($stopResult.Result)"
+                }
+            }
+        }
+    }
+
     Switch-View 'Progress'
     Initialize-ProgressView -Title "バックアップ実行中..."
     Add-ProgressLog "$($script:CurrentHost.OldPCname) のバックアップを開始します"
     Add-ProgressLog "保存先: $destRoot"
     Add-ProgressLog $userSummary
+    if (-not [string]::IsNullOrWhiteSpace($outlookCloseSummary)) {
+        Add-ProgressLog $outlookCloseSummary
+    }
     if ($selectedPrinters.Count -gt 0) {
         Add-ProgressLog "選択プリンタ: $($selectedPrinters -join ', ')"
     }

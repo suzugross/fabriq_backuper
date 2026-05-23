@@ -72,7 +72,20 @@ function New-RestoreView {
 
     $btnUncConnect = New-StyledButton -Text "UNC 接続..." -X 670 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
     $btnUncConnect.Add_Click({
-        $unc = Show-UncConnectDialog
+        # v0.23.0: pre-fill UNC path + username from the migration profile
+        # when present. Restore reads from the same share that backup wrote
+        # to, so backupRootUnc is the right preset for both modes.
+        $initial = ''
+        $initialUser = ''
+        if ($null -ne $script:MigrationProfile) {
+            if (-not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.backupRootUnc)) {
+                $initial = $script:MigrationProfile.backuper.backupRootUnc
+            }
+            if (-not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
+                $initialUser = $script:MigrationProfile.backuper.uncUsername
+            }
+        }
+        $unc = Show-UncConnectDialog -InitialPath $initial -InitialUsername $initialUser
         if (-not [string]::IsNullOrWhiteSpace($unc)) {
             [System.Windows.Forms.MessageBox]::Show(
                 "接続成功:`n$unc`n`n続けて [バックアップを参照...] をクリックし、この共有内の実際のバックアップフォルダを選択してください。",

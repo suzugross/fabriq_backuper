@@ -16,6 +16,224 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.23.0: **backuper 本体に LAN 移行 profile reader を組込み** —
+  `backuper/data/migration_profile.json` が存在すれば起動時に読み込み、
+  WinForms UI 3 箇所のデフォルトに反映する。profile 不在時は完全に
+  v0.22.x と同じ挙動 (= additive、後方互換)。
+  - **[backuper/main.ps1](backuper/main.ps1)**: VERSION 読込み直後に
+    profile reader を挿入。
+    - 検出条件: `Test-Path` で `backuper\data\migration_profile.json`
+      存在チェック
+    - 検証: `schemaVersion` が 1 であることを必須、不一致なら warning +
+      ignore (起動継続)
+    - **セキュリティ gate**: JSON 文字列内に `"password"` キーが見つかれば
+      **FATAL で起動阻止** (defence-in-depth、source-controlled config に
+      password が紛れ込む事故を防止)。パスワードは UNC dialog の対話入力
+      経由のみで扱う運用に固定
+    - parse 失敗は warning + ignore (LAN_PREP tool の fail-fast とは別
+      ポリシー。backuper は日常作業ツールなので profile 不正で起動を
+      止めるのは厳しすぎる)
+    - 成功時は `$script:MigrationProfile` にセット、`Show-Info` で
+      profileName を console に出力
+  - **[session_form.ps1](backuper/lib/ui/session_form.ps1)**:
+    `Show-BackuperSessionForm` に `$MigrationProfile` パラメータを追加
+    (optional、default $null)。
+    - profile 有りの場合のみ form 高さを 510 → 534 に拡張 (+24px)、title
+      label の直下に lavender accent 色のバナー「LAN 移行 profile:
+      <profileName>」を 1 行追加
+    - profile 無しの場合は v0.22.x と完全に同じレイアウト・高さ (副作用ゼロ)
+    - [backuper/main.ps1](backuper/main.ps1) からの呼出しに
+      `-MigrationProfile $script:MigrationProfile` を追加
+  - **[unc_connect_dialog.ps1](backuper/lib/ui/unc_connect_dialog.ps1)**:
+    `Show-UncConnectDialog` に `-InitialUsername` パラメータを追加。
+    - `-InitialPath` と `-InitialUsername` の両方が non-empty の場合のみ
+      `Add_Shown` イベントで focus を password 欄に移す (= operator は
+      password だけ入力すれば良い)。片方しか preset されない場合は
+      従来通り path 欄 default focus
+    - 既存パラメータ `-InitialPath` のシグネチャは不変、後方互換
+  - **[backup_view.ps1](backuper/lib/ui/backup_view.ps1)**:
+    - 「保存先ルート」テキストボックスのデフォルト値を
+      `$script:MigrationProfile.backuper.backupRootUnc` から取得 (profile
+      無しなら従来通り `Join-Path $script:BackuperRoot 'Backup'`)
+    - 「UNC 接続...」ボタンの click ハンドラから
+      `Show-UncConnectDialog -InitialUsername` に profile の uncUsername を
+      forward
+  - **[restore_view.ps1](backuper/lib/ui/restore_view.ps1)**:
+    - 「UNC 接続...」ボタンの click ハンドラから
+      `Show-UncConnectDialog -InitialPath -InitialUsername` の両方を
+      profile から forward (restore は source としての UNC を読みに行く
+      ため、backupRootUnc がそのまま使える)
+  - **profile schema 連携点**:
+    - `backuper.backupRootUnc` → backup_view の保存先デフォルト / UNC dialog
+      の path preset
+    - `backuper.uncUsername` → UNC dialog の username preset
+    - `profileName` → session_form のバナー文言
+    - `backuper.autoConnectOnLaunch` は schema には存在するが S3 では未使用
+      (S4 以降で起動直後 auto-mount を検討)
+  - **不変**:
+    - section interface / manifest schema 不変
+    - section script (printer / userdata / outlook_pop / credentials /
+      msime_dict の backup/restore) には一切手を入れていない
+    - fabriq main への書き込みなし
+    - profile を手動で書き換え可能 (UI 上の preset は変更可能なテキスト)
+  - **検証方法**:
+    1. profile **無し** で起動 → session form にバナー無く v0.22.x と同じ
+       UI 動作
+    2. profile **有り** で起動 → session form にバナー、backup_view の
+       「保存先ルート」が backupRootUnc に、UNC dialog で path/user 自動入力 +
+       focus が password 欄
+    3. profile に `password` キーを混入 → 起動時 FATAL で阻止
+    4. profile schemaVersion=99 等 → warning 出して通常起動
+    5. 既存の backup / restore フロー (printer / userdata / outlook_pop /
+       credentials / msime_dict) が手入力でも引き続き動作
+
+- backuper v0.23.0: **LAN 直結移行用 prep tool (`tools/lan_prep/`) を新設** —
+  移行元 PC・移行先 PC それぞれで 1 コマンド実行するだけで、移行に必要な
+  ネットワーク構成 (static IP / Network Category Private / File and Printer
+  Sharing rule) を入れ、移行先 PC では SMB 共有 (`Everyone:Full`) まで
+  自動作成する。設定値は profile JSON で一元管理し、backuper 本体側の
+  バックアップ宛先プリセットにも将来流用する (S3 で別途実装)。
+  - **新規 `tools\lan_prep\Prepare-LanMigration.ps1`** — `-Role source|target`
+    で動作分岐:
+    - source role: rollback snapshot 取得 → static IP 適用 → (任意) Network
+      Category Private 化 / firewall rule 有効化
+    - target role: 上記に加えて `New-SmbShare` + NTFS ACL 付与
+    - 操作 UX は console + 1 回の Y/N 確認プロンプトのみ。`-Force` で
+      バッチ化可能。
+    - 異常系: profile 不在 / schemaVersion 不一致 / profile に `password` 文字列
+      混入 / 管理者権限不足 → 即時 `exit 1` で fail-fast。
+  - **新規 `tools\lan_prep\Revert-LanMigration.ps1`** — `-SnapshotPath` で
+    指定された snapshot を読み、DHCP / Static / DNS / Network Category を
+    取得時点に復元。target role で `rollback.removeShare=true` なら
+    `Remove-SmbShare`。`localPath` のフォルダ自体は削除しない (バックアップ
+    実体が残っている可能性、operator 手動判断)。
+  - **新規 lib 群**:
+    - `lib\network_config.ps1` : `Set-MigrationNetworkConfig` /
+      `Set-MigrationNetworkCategoryPrivate` / `Restore-MigrationNetworkConfig`。
+      **IPv4 設定は netsh.exe ベース** (`netsh interface ipv4 set address
+      source=static address=<ip> mask=<mask> gateway=<gw|none>` +
+      `set dnsservers ... source=static address=<dns> validate=no` +
+      連番 `add dnsservers index=N`)。
+      - **netsh を採用した理由**: NetTCPIP cmdlet (`New-NetIPAddress` 等) は
+        media disconnected (LAN ケーブル未接続) な NIC では failure する
+        (`"Inaccessible boot device"` 系エラー)。LAN_PREP の主要シナリオ
+        「kitting 中の任意タイミング、LAN 未接続状態で先に IP を仕込んでおく」
+        が動かなくなるため、レジストリに値を書いて link up 時に適用する
+        枯れた netsh API に統一。
+      - 読み出し側 (`Get-NetIPAddress` / `Get-NetIPInterface` /
+        `Get-NetRoute` / `Get-DnsClientServerAddress`) は disconnected でも
+        列挙が動くため、snapshot 取得は引き続き PowerShell cmdlet を使用。
+      - `Invoke-NetshIpv4` ラッパが `Start-Process -RedirectStandardOutput`
+        で `netsh` を起動し `ExitCode` を捕捉 → 非ゼロは throw (一部だけ
+        `-AllowFailure` で warn に降格、例: DNS のセカンダリ追加失敗)。
+      - subnet mask は `ConvertTo-Ipv4Mask` で prefix 長から bitmask 文字列を
+        生成 (32-bit 文字列 → 8 bit ごとに `[Convert]::ToInt32(_, 2)`)。
+      - **Network Category Private 化** だけは connection profile が必要な
+        ため netsh では設定できず、Get/Set-NetConnectionProfile を継続使用。
+        link down 時は profile が存在しないので warning + skip (operator が
+        LAN 接続後に再実行 or Windows の通常 prompt に任せる)。
+    - `lib\share_setup.ps1` : `New-MigrationShare` / `Remove-MigrationShare`。
+      `smbPermissions` 配列を `Full/Change/Read` の 3 種に振り分けて
+      `New-SmbShare -FullAccess/-ChangeAccess/-ReadAccess` の引数を組み立て、
+      NTFS ACL は `System.Security.AccessControl.FileSystemAccessRule` を
+      `ContainerInherit, ObjectInherit` で付与。
+    - `lib\firewall.ps1` : `Enable-FileAndPrinterSharingRule`。英語 OS 用
+      DisplayGroup `'File and Printer Sharing'` と日本語 OS 用
+      `'ファイルとプリンターの共有'` を両方試行して locale-independent に
+      対応。
+    - `lib\rollback_snapshot.ps1` : `New-RollbackSnapshot` /
+      `Save-RollbackSnapshot` / `Read-RollbackSnapshot`。snapshot JSON は
+      UTF-8 without BOM で `[System.IO.File]::WriteAllText` 経由 (PS5.1 の
+      `Set-Content -Encoding UTF8` が BOM 付き UTF-8 になる仕様を回避、
+      project 規約 5 に準拠)。
+  - **新規 `backuper\data\migration_profile.sample.json`** (schemaVersion=1):
+    - `network.source` / `network.target` : 各 PC の interfaceAlias / IP /
+      prefix / gateway / DNS
+    - `network.setNetworkCategoryPrivate` / `enableFileAndPrinterSharing` :
+      LAN 直結時に SMB を通すための運用必須項目を flag 化
+    - `share` : hostRole / shareName / localPath / smbPermissions /
+      ntfsPermissions (一旦 Everyone:Full + Modify 固定で出力)
+    - `backuper` : backupRootUnc / uncUsername / autoConnectOnLaunch
+      (S3 で backuper 本体から読む予定)。
+      **backupRootUnc は LAN_PREP が作る共有のルートそのもの** (例:
+      `\\<target>\FabriqMigration`) を指すこと。深い sub-path
+      (`\\<target>\FabriqMigration\Backup` 等) を書くと、backup 開始時の
+      [unc_helper.ps1](backuper/lib/ui/unc_helper.ps1) `Test-UncPath` が
+      存在チェック (`Get-Item`) で fail し、「保存先に接続できません」
+      エラーになる ([engine.ps1](backuper/lib/engine.ps1) は
+      `<destRoot>/<OldPCname>/<ts>/` を `-Force` で auto-mkdir するが、
+      その前段の reachability チェックは destRoot 自体の存在を要求する)。
+    - `rollback` : snapshotPath / revertNetwork / removeShare
+  - **疎通確認の責務分担**: LAN_PREP は両 PC が同時に LAN 直結されている
+    保証がない (kitting タイミングがずれる) ため、ping / `Test-NetConnection`
+    の類は **意図的に実施しない**。SMB レイヤの疎通確認は既存の
+    [unc_helper.ps1](backuper/lib/ui/unc_helper.ps1) `Test-UncPath` /
+    `Connect-UncWithCredentials` で、両 PC 接続完了後の backuper UNC 接続
+    試行時に一括で扱う。
+  - **backuper 本体は無変更** (common.ps1 / sections / main.ps1 / lib/ui に
+    一切手を入れていない)。section interface / manifest schema / fabriq main
+    への書き込みなし。backuper の起動経路にも影響なし。
+  - **profile 設計上の禁則**: `password` キーは JSON に書かないことを
+    `Prepare-LanMigration.ps1` の起動時 regex チェックで強制 (`"password"`
+    文字列を見つけた時点で fail-fast)。UNC 接続パスワードは backuper 既存
+    [unc_connect_dialog.ps1](backuper/lib/ui/unc_connect_dialog.ps1) で
+    operator が入力する運用に振る (S3 で username はプリセット予定)。
+  - **検証方法**: 仮想環境 (Hyper-V 2 VM) で先行確認可能:
+    1. `migration_profile.sample.json` を `migration_profile.json` に rename
+       し interfaceAlias / IP を環境に合わせて編集
+    2. source VM で `Prepare-LanMigration.ps1 -Role source` を実行 →
+       snapshot 取得 + IP 変更 + revert コマンドが案内されること
+    3. target VM で `Prepare-LanMigration.ps1 -Role target` を実行 → 共有
+       `\\<target>\FabriqMigration` が作成されていること (`Get-SmbShare` で
+       確認)
+    4. 両 VM を LAN 接続後、source から `\\<target>\FabriqMigration\Backup`
+       に手動アクセスできること
+    5. 両 VM で `Revert-LanMigration.ps1 -SnapshotPath <snapshot.json>` →
+       元の DHCP / Static / 共有削除が反映されること
+  - **配備方針**: `E:\fabriq_backuper\` を再配置すると即時利用可。
+    backuper 本体は無変更のため、既存運用への影響なし。
+
+- backuper v0.23.0: **outlook_pop backup 前に Outlook 起動検知 → graceful close
+  ポップアップ** を追加 ([backup_view.ps1](backuper/lib/ui/backup_view.ps1) /
+  [common.ps1](backuper/common.ps1))。OUTLOOK.EXE が source user で起動したまま
+  バックアップを取ると PST ファイル / レジストリ profile が握られたままで
+  整合性が崩れる事象を構造的に回避。
+  - **新規 helper** [common.ps1](backuper/common.ps1):
+    - `Test-OutlookRunningForSource [-SourceUserSid <string>]`:
+      `Get-CimInstance Win32_Process` で `Name='OUTLOOK.EXE'` を列挙し、
+      `Invoke-CimMethod -MethodName GetOwnerSid` で各プロセス所有者の SID を
+      取得して source user SID と一致するもののみを返す。SID 省略時は
+      `Resolve-HkcuRoot` の SID (admin 異ユーザ昇格時) → 現在 process の
+      `WindowsIdentity` SID の順で自動解決。
+    - `Stop-OutlookForSource [-SourceUserSid <string>] [-GracefulWaitSeconds <int>=5]`:
+      検出した OUTLOOK.EXE に `Process.CloseMainWindow()` (WM_CLOSE 相当) を
+      送って graceful exit を試行 → 最大 5 秒 poll → タイムアウトしたら
+      `Stop-Process -Force` で残存 PID を force kill → settling sleep 1s。
+      `@{ Result='NoneRunning'|'KilledGraceful'|'KilledForce'; AttemptedIds;
+      ForceKilledIds }` を返す。
+    - **SID scope 必須の理由**: backuper を admin 異ユーザ昇格で動かす運用
+      ケースで、操作者 admin 自身が別 Outlook を開いていてもそれを巻き込まない
+      ようにする。`GetOwnerSid` の戻り値で厳密に絞る。
+  - **[backup_view.ps1](backuper/lib/ui/backup_view.ps1) `Invoke-BackupStart`**:
+    バックアップ確認ダイアログを通過した直後、Progress view へ切り替える
+    直前に検知ロジックを挿入。発火条件は **`outlook_pop` セクションが
+    今回の run で選択されているとき限定** (printer のみ等の partial backup では
+    popup を出さない)。
+    - 起動中 Outlook を検出した場合: WinForms MessageBox (YesNo + Warning icon)
+      で「[はい] 閉じて続行」「[いいえ] 中止」を提示。escape hatch (「そのまま
+      続行」) は意図的に出さない (壊れたバックアップを取らせないため)。
+    - 「はい」選択時のみ `Stop-OutlookForSource` を実行。結果サマリは
+      `$outlookCloseSummary` に組み立て、Switch-View 後の Add-ProgressLog で
+      progress 画面 + 実行ログに残す。
+    - 「いいえ」選択時は `return` で `Invoke-BackupStart` を抜ける (section
+      view に戻り、operator が手動で閉じてからやり直し)。
+  - **`common.ps1` の vendoring 規約**: 上記 2 関数は kernel/common.ps1 由来の
+    vendored 関数ではなく **本 repo 独自の追加機能**。関数頭コメントで
+    deviation を明示。
+  - **動作不変**: section interface / manifest schema / backup section script
+    群 / restore 経路 / fabriq main への書込なし。Outlook 未起動環境および
+    outlook_pop 未選択の backup は一切影響を受けない。
+
 - backuper v0.22.0: **新規 section `msime_dict` を追加** — Microsoft IME
   のユーザ辞書 (`imjp15cu.dic` + auto-backup) をバックアップ／リストア
   する。OS / IME 種別の分岐を operator に判断させない設計。

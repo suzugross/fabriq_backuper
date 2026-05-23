@@ -7,7 +7,13 @@
 # ============================================================
 
 function Show-UncConnectDialog {
-    param([string]$InitialPath = "")
+    param(
+        [string]$InitialPath = "",
+        # v0.23.0: optional preset for the Username field. When supplied
+        # along with InitialPath, focus is moved to the password field on
+        # dialog show so the operator only needs to type the password.
+        [string]$InitialUsername = ""
+    )
 
     $script:_uncConnectResult = $null
 
@@ -39,6 +45,7 @@ function Show-UncConnectDialog {
     $txtUser.Location = New-Object System.Drawing.Point(140, 82)
     $txtUser.Size = New-Object System.Drawing.Size(370, 24)
     Set-TextBoxStyle -TextBox $txtUser
+    $txtUser.Text = $InitialUsername
     $dialog.Controls.Add($txtUser)
 
     $userHint = New-StyledLabel -Text "書式: DOMAIN\user  または  user@domain" `
@@ -126,6 +133,14 @@ function Show-UncConnectDialog {
         $dialog.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
         $dialog.Close()
     })
+
+    # v0.23.0: when both path and username are pre-filled (typical when
+    # a migration profile is loaded), jump focus straight to the password
+    # field so the operator can immediately type credentials.
+    if (-not [string]::IsNullOrWhiteSpace($InitialPath) -and `
+        -not [string]::IsNullOrWhiteSpace($InitialUsername)) {
+        $dialog.Add_Shown({ $txtPwd.Focus() })
+    }
 
     [void]$dialog.ShowDialog()
 
