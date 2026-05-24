@@ -71,6 +71,19 @@ if ($SectionParams.ContainsKey('IncludeTargets') -and `
     foreach ($t in $includeArr) { [void]$includeTargetSet.Add([string]$t) }
 }
 
+# v0.25.0: optional OperatorHandoffSubdir. When provided (non-empty),
+# deploy directly into <Desktop>\<date>_<host>_BK\01_資格情報\ instead of
+# <Documents>\FabriqCredentialsBackup_<host>_<ts>\. The parent date+host
+# folder name already encodes the date, so no per-restore timestamp
+# suffix is appended on the handoff path. Absent / null / empty = legacy
+# Documents path (v0.24.5 compatible).
+$operatorHandoffSubdir = if ($SectionParams.ContainsKey('OperatorHandoffSubdir') -and `
+    -not [string]::IsNullOrWhiteSpace($SectionParams['OperatorHandoffSubdir'])) {
+    "$($SectionParams['OperatorHandoffSubdir'])"
+} else {
+    $null
+}
+
 if (-not (Test-Path $targetUserProfilePath)) {
     return [PSCustomObject]@{
         Status               = 'Failed'
@@ -150,27 +163,37 @@ foreach ($p in @($payloadPs1, $payloadBat, $payloadReadme)) {
 
 # ----------------------------------------------------------
 # Determine deploy destination
+# v0.25.0: Two-path resolution.
+#   - OperatorHandoffSubdir provided -> deploy into the handoff subdir
+#     directly (no timestamp suffix; parent <date>_<host>_BK already
+#     encodes the date). New-Item -Force handles missing parents.
+#   - Absent -> legacy Documents\FabriqCredentialsBackup_<host>_<ts>\
+#     path (v0.19.x .. v0.24.5 behaviour). Documents dir is created
+#     on demand for users whose profile lacks a Documents folder.
 # ----------------------------------------------------------
-$documentsDir = Join-Path $targetUserProfilePath 'Documents'
-if (-not (Test-Path $documentsDir)) {
-    try {
-        $null = New-Item -ItemType Directory -Path $documentsDir -Force -ErrorAction Stop
-    } catch {
-        return [PSCustomObject]@{
-            Status               = 'Failed'
-            ElapsedMs            = [int]$sw.ElapsedMilliseconds
-            Summary              = [ordered]@{}
-            Warnings             = @("Could not create Documents dir at $documentsDir : $($_.Exception.Message)")
-            ExternalOutputDir    = $null
-            ExternalManifestPath = $null
-            InternalSectionDir   = $null
-            InternalManifestPath = $null
+if ($null -ne $operatorHandoffSubdir) {
+    $deployDir = $operatorHandoffSubdir
+} else {
+    $documentsDir = Join-Path $targetUserProfilePath 'Documents'
+    if (-not (Test-Path $documentsDir)) {
+        try {
+            $null = New-Item -ItemType Directory -Path $documentsDir -Force -ErrorAction Stop
+        } catch {
+            return [PSCustomObject]@{
+                Status               = 'Failed'
+                ElapsedMs            = [int]$sw.ElapsedMilliseconds
+                Summary              = [ordered]@{}
+                Warnings             = @("Could not create Documents dir at $documentsDir : $($_.Exception.Message)")
+                ExternalOutputDir    = $null
+                ExternalManifestPath = $null
+                InternalSectionDir   = $null
+                InternalManifestPath = $null
+            }
         }
     }
+    $stamp     = (Get-Date).ToString('yyyy_MM_dd_HHmmss')
+    $deployDir = Join-Path $documentsDir ("FabriqCredentialsBackup_{0}_{1}" -f $OldPcName, $stamp)
 }
-
-$stamp     = (Get-Date).ToString('yyyy_MM_dd_HHmmss')
-$deployDir = Join-Path $documentsDir ("FabriqCredentialsBackup_{0}_{1}" -f $OldPcName, $stamp)
 
 try {
     $null = New-Item -ItemType Directory -Path $deployDir -Force -ErrorAction Stop

@@ -15,6 +15,79 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.25.0 (work-in-progress, Phase A): **operator handoff folder の
+  基盤を追加** —
+  [backuper/common.ps1](backuper/common.ps1) /
+  [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1)。
+  - **目的**: 資格情報 / Outlook アカウント情報 等の operator-facing
+    artifact が Documents 配下 + 各 PST フォルダ + backup-source sectionDir
+    に散らばっていた問題への対応。リストア時にチェックボックスを ON に
+    すると、Desktop 配下に `<yyyy_MM_dd>_<OldPCname>_BK\` フォルダを 1 つ作り、
+    番号付きサブフォルダ (`01_資格情報` / `02_outlook_アカウント情報`) に
+    集約する。
+  - **Phase A (今回)**: 基盤のみ。実際の deploy 経路切替は Phase B/C で
+    section script を修正する。Phase A 単独では:
+    - common.ps1 に新規 helper `Resolve-OperatorHandoffRoot` /
+      `Resolve-OperatorHandoffSectionDir` + section -> 日本語 subdir 名の
+      固定 mapping `$script:OperatorHandoffSubdirs` を追加
+    - restore_view.ps1 に新規 checkbox「operator 用ファイル (資格情報 /
+      Outlook 設定) をデスクトップに統合 (推奨)」を追加 (default ON、
+      Y=232 に新行挿入)。既存の Outlook 追加オプション以下と printer
+      grid + 開始ボタンを **全て Y +30px シフト**
+    - `Invoke-RestoreStart` で checkbox ON + targetUserProfilePath あり時に
+      `Resolve-OperatorHandoffRoot` で path を計算し、`Resolve-OperatorHandoffSectionDir`
+      で section ごとの subdir path を組み立てて SectionParams.credentials /
+      .outlook_pop に新規 key `OperatorHandoffSubdir` として forward
+    - confirm 後・engine 起動前に handoff root の mkdir + UTF-8 BOM 付き
+      README.txt 生成。失敗時は warning + SectionParams から key を削除
+      して legacy 経路にフォールバック
+  - **動作不変** (Phase A 単独):
+    - section script (credentials/restore.ps1, outlook_pop/restore.ps1) は
+      無変更 → 新 SectionParam を **受け取っても無視** = 実 deploy は
+      v0.24.5 と完全同じ (Documents 配下 + 各 PST フォルダ)
+    - checkbox OFF 時は handoff root も作られない (= v0.24.5 と完全同等)
+    - manifest schema / section interface / fabriq main への書込みなし
+  - **Phase A 完了時の検証**:
+    1. checkbox **OFF** で restore → v0.24.5 と完全同等の挙動、Desktop に
+       handoff folder は作られない
+    2. checkbox **ON** で restore → Desktop に
+       `<yyyy_MM_dd>_<OldPCname>_BK\README.txt` が作られる。中身に「01_資格情報」
+       「02_outlook_アカウント情報」「PST 本体は Documents\Outlook ファイル\
+       に残置」の案内あり。subdir (01_/02_) はまだ作られない (Phase B/C で
+       section が必要に応じて mkdir する設計)
+    3. credentials / outlook_pop の deploy 先は **両 case とも Documents
+       配下** (= section が SectionParam を無視している証拠)
+  - **Phase B (完了)**: [credentials/restore.ps1](backuper/lib/sections/credentials/restore.ps1)
+    が `SectionParams['OperatorHandoffSubdir']` を受け取り、非空時は
+    deploy 先を `<HandoffRoot>\01_資格情報\` に切替え (timestamp suffix
+    なし、Documents 経路完全 skip)。SectionParams 解析を if-else
+    expression にまとめて `PSUseDeclaredVarsMoreThanAssignments` 誤検知も
+    回避。manifest schema / restore_manifest.json のフィールド名は不変
+    (`deployDir` 値だけが新 path を反映)。
+  - **Phase C (完了)**: [outlook_pop/restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1)
+    が `SectionParams['OperatorHandoffSubdir']` を受け取り、非空時は:
+    - **Stage 5b** (Strategy A fallback): `RESTORE_INSTRUCTIONS.txt` を
+      `<HandoffRoot>\02_outlook_アカウント情報\` に書く (従来は backup
+      取得元の `$sectionDir` 配下に書いており operator がアクセス困難
+      だった)。subdir mkdir 失敗時は warning + legacy path にフォールバック
+    - **Stage 5.5** (常時 _account_settings.txt): per-PST-フォルダの
+      `foreach` ループを skip し、`<HandoffRoot>\02_outlook_アカウント情報\
+      _account_settings.txt` 1 ファイル固定で書く。`ProfileFilter` を
+      省略するので **全 profile × 全 account を含む単一ファイル** に
+      集約 (1 profile 環境では既存と内容同等、複数 profile 環境
+      [想定外] では従来の per-PST 散布が consolidated 1 ファイルに統合)
+    - **popup body** の文言を分岐: 統合 ON 時は「同じフォルダに
+      _account_settings.txt も配置」、OFF 時は従来「各 PST 配置先の
+      フォルダにも _account_settings.txt が併設」
+    - **不変**: PST 本体は Documents\Outlook ファイル\ に残置
+      (Outlook プロファイル設定が指す場所のため移動不可)。rule-clear
+      shortcut も Desktop 直置きのまま (頻繁にダブルクリックされる
+      ICON なので統合フォルダ内に埋めない)。`New-OutlookAccountInfoText`
+      関数本体には一切手を入れていない
+  - **VERSION**: 0.24.5 → **0.25.0** (MINOR、operator handoff folder 機能完成)
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映。EXE は無変更
+
 ### Changed
 - backuper v0.24.5: **target ホスト上では UNC ではなくローカルパスを優先** —
   [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1) の

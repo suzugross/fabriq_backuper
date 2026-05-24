@@ -589,3 +589,61 @@ function global:Find-FabriqRoot {
     # Tier 2: structural marker only (rescues renamed fabriq dirs)
     return $structural
 }
+
+# ============================================================
+# Operator Handoff Folder helpers (v0.25.0)
+#
+# Builds a single per-restore Desktop folder that consolidates
+# operator-facing artifacts (credential payload, Outlook account
+# settings text) instead of scattering them across Documents and
+# per-PST folders.
+#
+# Layout:
+#   <TargetUserProfile>\Desktop\<yyyy_MM_dd>_<OldPCname>_BK\
+#     README.txt                            (handoff folder guide)
+#     01_資格情報\                           (credentials section)
+#     02_outlook_アカウント情報\              (outlook_pop section)
+#
+# Section -> subdir name mapping is fixed across releases so
+# operator runbooks don't drift. Sections without operator-facing
+# files (printer, userdata, msime_dict) are intentionally absent.
+#
+# The handoff is opt-in via a checkbox in restore_view.ps1
+# (default ON when invoked). When OFF, sections emit to their
+# legacy locations (Documents\FabriqCredentialsBackup_*, PST
+# folders, backup-source sectionDir) -- 100% v0.24.x behaviour
+# preserved.
+# ============================================================
+
+$script:OperatorHandoffSubdirs = [ordered]@{
+    'credentials' = '01_資格情報'
+    'outlook_pop' = '02_outlook_アカウント情報'
+}
+
+function global:Resolve-OperatorHandoffRoot {
+    # Returns <TargetUserProfile>\Desktop\<yyyy_MM_dd>_<OldPCname>_BK
+    # without creating the directory. Caller mkdir's + writes README.
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetUserProfilePath,
+        [Parameter(Mandatory = $true)][string]$OldPcName
+    )
+    $desktop = Join-Path $TargetUserProfilePath 'Desktop'
+    $date    = Get-Date -Format 'yyyy_MM_dd'
+    return (Join-Path $desktop ("{0}_{1}_BK" -f $date, $OldPcName))
+}
+
+function global:Resolve-OperatorHandoffSectionDir {
+    # Returns the per-section subdir path under a handoff root, or $null
+    # if the section has no operator-facing files (= not registered in
+    # $script:OperatorHandoffSubdirs). Caller does the mkdir lazily when
+    # actually deploying.
+    param(
+        [Parameter(Mandatory = $true)][string]$HandoffRoot,
+        [Parameter(Mandatory = $true)][string]$SectionName
+    )
+    if (-not $script:OperatorHandoffSubdirs.Contains($SectionName)) {
+        return $null
+    }
+    return (Join-Path $HandoffRoot $script:OperatorHandoffSubdirs[$SectionName])
+}
+

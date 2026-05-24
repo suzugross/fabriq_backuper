@@ -806,6 +806,22 @@ if ($SectionParams.ContainsKey('AttemptStrategyB')) {
     $attemptStrategyB = [bool]$SectionParams['AttemptStrategyB']
 }
 
+# v0.25.0: optional OperatorHandoffSubdir. When non-empty:
+#   - Stage 5b RESTORE_INSTRUCTIONS.txt is written into the handoff
+#     subdir instead of $sectionDir (backup-source folder).
+#   - Stage 5.5 per-PST-folder _account_settings.txt loop is REPLACED
+#     by a single _account_settings.txt at the handoff subdir
+#     (ProfileFilter omitted, so the file contains every account in
+#     every profile - acceptable because the realistic case is 1
+#     profile and the operator wants one consolidated view anyway).
+# Absent / null / empty = legacy behaviour (v0.24.5 compatible).
+$operatorHandoffSubdir = if ($SectionParams.ContainsKey('OperatorHandoffSubdir') -and `
+    -not [string]::IsNullOrWhiteSpace($SectionParams['OperatorHandoffSubdir'])) {
+    "$($SectionParams['OperatorHandoffSubdir'])"
+} else {
+    $null
+}
+
 # ----------------------------------------------------------
 # Stage 1: read backup manifest, flatten plannedAccounts
 # ----------------------------------------------------------
@@ -1496,7 +1512,28 @@ if ($strategyBSucceeded) {
     # v0.18.3: file content is account-data only now (procedures moved
     # out of this repo); the filename is preserved for backward
     # compatibility with operator-facing tooling that references it.
-    $instructionsPath = Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
+    # v0.25.0: when OperatorHandoffSubdir is provided, write into the
+    # handoff subdir (Desktop\<date>_<host>_BK\02_outlook_アカウント情報\)
+    # instead of the backup-source $sectionDir (which is hard for
+    # operators to navigate to). Subdir mkdir failure -> warn + fall
+    # back to the legacy path.
+    if ($null -ne $operatorHandoffSubdir) {
+        if (-not (Test-Path -LiteralPath $operatorHandoffSubdir)) {
+            try {
+                $null = New-Item -ItemType Directory -Path $operatorHandoffSubdir -Force -ErrorAction Stop
+            } catch {
+                $warnings += "Could not create operator handoff subdir '$operatorHandoffSubdir' (falling back to legacy path): $($_.Exception.Message)"
+                Show-Warning ("Operator handoff subdir creation failed; falling back to legacy: " + $_.Exception.Message)
+            }
+        }
+        $instructionsPath = if (Test-Path -LiteralPath $operatorHandoffSubdir) {
+            Join-Path $operatorHandoffSubdir 'RESTORE_INSTRUCTIONS.txt'
+        } else {
+            Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
+        }
+    } else {
+        $instructionsPath = Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
+    }
     try {
         $instructionsText = New-OutlookAccountInfoText `
             -Manifest $manifest `
@@ -1521,6 +1558,15 @@ if ($strategyBSucceeded) {
         } else {
             'Outlook POP - 手動セットアップが必要'
         }
+        # v0.25.0: settings-file callout differs by handoff mode.
+        # Handoff ON  -> single _account_settings.txt sits next to the
+        #                instructions file in the same subdir.
+        # Handoff OFF -> per-PST-folder copies in Documents\Outlook ファイル\.
+        $settingsCallout = if ($null -ne $operatorHandoffSubdir) {
+            "同じフォルダに _account_settings.txt (同内容) も配置されています。"
+        } else {
+            "各 PST 配置先のフォルダにも _account_settings.txt が併設されています。"
+        }
         $popupBody = if (-not $attemptStrategyB) {
             "PST ファイルは移行先パスに配置済みです。$($plannedAccounts.Count) 件のアカウントを" +
             "Outlook で手動で追加してください。`r`n`r`n" +
@@ -1530,7 +1576,7 @@ if ($strategyBSucceeded) {
             "  3. データファイルを求められたら、配置済みの <email>.pst を選択`r`n" +
             "  4. パスワードは初回送受信時に入力`r`n`r`n" +
             "詳細手順書 (アカウントごとのサーバ設定・PST パスを記載):`r`n$instructionsPath`r`n`r`n" +
-            "各 PST 配置先のフォルダにも _account_settings.txt が併設されています。"
+            $settingsCallout
         } else {
             "$($plannedAccounts.Count) 件の Outlook アカウント (POP / IMAP) で手動セットアップが必要です。`r`n`r`n" +
             "PST ファイルは移行先パスに配置済みです。操作者が一致するメールアドレスでアカウントを" +
@@ -1563,35 +1609,67 @@ if ($strategyBSucceeded) {
 # ----------------------------------------------------------
 $targetSettingsWritten = @()
 try {
-    $profileDirMap = @{}
-    foreach ($r in $resultsByAccount) {
-        if ([string]::IsNullOrWhiteSpace($r.targetPstPath)) { continue }
-        if ($r.status -ne 'Success') { continue }
-        $dir = Split-Path -Path $r.targetPstPath -Parent
-        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
-        if (-not $profileDirMap.ContainsKey($r.profile)) {
-            $profileDirMap[$r.profile] = $dir
+    if ($null -ne $operatorHandoffSubdir) {
+        # v0.25.0: handoff mode - write a single _account_settings.txt at
+        # the handoff subdir. ProfileFilter is intentionally omitted, so
+        # the file contains every account in every profile. Realistic
+        # environments have 1 Outlook profile, so the resulting file is
+        # identical in scope to the legacy per-profile copies. Multi-
+        # profile environments (officially unsupported) get a single
+        # consolidated view rather than scattered per-PST copies.
+        # Subdir was mkdir'd by Stage 5b, but re-check defensively in
+        # case Stage 5b path resolution was taken on the legacy branch.
+        if (-not (Test-Path -LiteralPath $operatorHandoffSubdir)) {
+            try {
+                $null = New-Item -ItemType Directory -Path $operatorHandoffSubdir -Force -ErrorAction Stop
+            } catch {
+                $warnings += "Could not create handoff subdir for _account_settings.txt: $($_.Exception.Message)"
+            }
         }
-    }
-    foreach ($profName in $profileDirMap.Keys) {
-        $dir = $profileDirMap[$profName]
-        if (-not (Test-Path -LiteralPath $dir)) {
-            $warnings += "target dir missing for profile '$profName': $dir - skipping settings file"
-            continue
+        if (Test-Path -LiteralPath $operatorHandoffSubdir) {
+            $settingsPath = Join-Path $operatorHandoffSubdir '_account_settings.txt'
+            $settingsText = New-OutlookAccountInfoText `
+                -Manifest $manifest `
+                -TargetUserProfilePath $targetUserProfilePath `
+                -PlannedAccounts $plannedAccounts `
+                -ResultsByAccount $resultsByAccount
+            $settingsText | Out-File -FilePath $settingsPath -Encoding UTF8 -Force
+            $targetSettingsWritten += $settingsPath
+            Show-Info "Wrote consolidated settings file: $settingsPath"
         }
-        $settingsPath = Join-Path $dir '_account_settings.txt'
-        # v0.18.3: account-data only. The per-profile B-light status that
-        # this caller used to compute and pass via $StrategyBSucceeded is
-        # no longer rendered in the file body, so it isn't forwarded.
-        $settingsText = New-OutlookAccountInfoText `
-            -Manifest $manifest `
-            -TargetUserProfilePath $targetUserProfilePath `
-            -PlannedAccounts $plannedAccounts `
-            -ResultsByAccount $resultsByAccount `
-            -ProfileFilter $profName
-        $settingsText | Out-File -FilePath $settingsPath -Encoding UTF8 -Force
-        $targetSettingsWritten += $settingsPath
-        Show-Info "Wrote target settings file: $settingsPath"
+    } else {
+        # Legacy: per-profile + per-PST-folder copies (v0.24.5 behaviour).
+        # The leading underscore sorts the file above the PST in Explorer.
+        $profileDirMap = @{}
+        foreach ($r in $resultsByAccount) {
+            if ([string]::IsNullOrWhiteSpace($r.targetPstPath)) { continue }
+            if ($r.status -ne 'Success') { continue }
+            $dir = Split-Path -Path $r.targetPstPath -Parent
+            if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+            if (-not $profileDirMap.ContainsKey($r.profile)) {
+                $profileDirMap[$r.profile] = $dir
+            }
+        }
+        foreach ($profName in $profileDirMap.Keys) {
+            $dir = $profileDirMap[$profName]
+            if (-not (Test-Path -LiteralPath $dir)) {
+                $warnings += "target dir missing for profile '$profName': $dir - skipping settings file"
+                continue
+            }
+            $settingsPath = Join-Path $dir '_account_settings.txt'
+            # v0.18.3: account-data only. The per-profile B-light status that
+            # this caller used to compute and pass via $StrategyBSucceeded is
+            # no longer rendered in the file body, so it isn't forwarded.
+            $settingsText = New-OutlookAccountInfoText `
+                -Manifest $manifest `
+                -TargetUserProfilePath $targetUserProfilePath `
+                -PlannedAccounts $plannedAccounts `
+                -ResultsByAccount $resultsByAccount `
+                -ProfileFilter $profName
+            $settingsText | Out-File -FilePath $settingsPath -Encoding UTF8 -Force
+            $targetSettingsWritten += $settingsPath
+            Show-Info "Wrote target settings file: $settingsPath"
+        }
     }
 } catch {
     $warnings += "Failed to write target settings file(s): $($_.Exception.Message)"
