@@ -15,6 +15,69 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.27.0: **リストア画面のバックアップ候補解決を multi-root 化 + UX
+  改善** — [backuper/lib/engine.ps1](backuper/lib/engine.ps1) /
+  [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1)。
+  migration_profile が読み込まれている時、リストア画面の日時プルダウンが
+  ローカル `Backup\` だけでなく `share.localPath` と `backupRootUnc` 配下も
+  併せて走査し、優先順位 (Local > ShareLocal > UNC) で重複排除して並べる。
+  - **Fix 1 (Phase A): multi-root timestamp discovery** —
+    `Get-BackupTimestamps` の signature を拡張:
+    - 戻り値: `string[]` → `PSCustomObject[]` (`Name` / `FullPath` / `Source`)
+    - 新規 param `-AdditionalRoots [string[]]` で profile 経由の追加 root を渡す
+    - root 走査は priority 順 (Local > ShareLocal > UNC)、同 Name は最優先のみ
+      保持して de-dup
+    - `Source` 判定: path が `\\` で始まれば `'UNC'`、それ以外で AdditionalRoots
+      由来なら `'ShareLocal'` (= 通常 target PC 上の SMB 共有元 dir、NTFS 直
+      アクセスで最速)
+    - combo の表示は `"<Name>  [<Source>]"` 形式で source を明示。operator は
+      「ローカル直か / SMB 越しか」を一目で判別できる
+  - **engine の path 解決を ExplicitAggregateDir 一本化** —
+    `Invoke-BackuperRestoreCore` から `PickedTimestamp` parameter を **削除**。
+    UI 側が常に FullPath を解決して `ExplicitAggregateDir` で渡す設計に統一。
+    breaking change だがテスト段階方針につき後方互換は不要 ([CLAUDE.md] 規約)。
+  - **restore_view 側の対応**:
+    - 新規 `$script:RestoreTimestampEntries` で combo index と FullPath を紐付け
+    - 新規 `$script:RestoreBrowseMode` フラグで Browse / timestamp 2 mode 判別
+      (旧 `$useExplicit` は削除)
+    - combo SelectedIndexChanged handler は ExplicitDir 解決のみに責任を限定
+      (BrowseMode のライフサイクル管理は Show-RestoreView と Invoke-RestoreBrowse
+      の 2 箇所のみで操作する設計に整理、副作用の無い state machine)
+  - **Fix 2 (Phase B): Browse mode の視覚的明示** —
+    [Invoke-RestoreBrowse](backuper/lib/ui/restore_view.ps1) の成功 path で
+    combo を再構成 + 強調表示:
+    - combo.Items.Clear() → `(参照: <leaf>)` を 1 item だけ追加 → SelectedIndex=0
+      → combo.Enabled = $false (grey-out で操作不可化)
+    - BrowseLabel を `$script:fontBold` + `$script:bgAccent` (lavender) で
+      強調、Text に full path を表示
+    - 「何を選んでいるかわからない」「プルダウンが空」だった v0.26.0 までの
+      紛らわしさを解消
+    - timestamp mode への復帰経路は session_form 経由 (< 戻る) で
+      Show-RestoreView 再呼出し。冒頭で BrowseMode / combo.Enabled / BrowseLabel
+      style を normal にリセット
+  - **Fix 3 (Phase C): バックアップ参照 button click 〜 dialog 起動の遅延を
+    解消** — `Invoke-RestoreBrowse` の SelectedPath プリセット部から
+    `Test-Path -LiteralPath` を呼ぶ candidate loop を **完全削除**。
+    - 旧: 未認証 UNC に Test-Path を逐次実行 → SMB 認証 challenge 3-5 秒/件 ×
+      最大 4 候補 = 20+ 秒の待ち時間 (operator から「資格情報的な処理が走って
+      いる?」と観察された遅延)
+    - 新: 最初の非空 candidate を **無条件** に `$dlg.SelectedPath` にセット。
+      Windows の `FolderBrowserDialog` は存在しない path を渡されても closest
+      existing parent にフォールバック表示する標準挙動なので UX 上問題なし
+    - target-host detection (`Get-SmbShare -Name`) はローカル share 列挙で
+      副作用ゼロ、これは維持
+  - **既知の限界 (本リリースでは許容)**:
+    `Get-BackupTimestamps` 内にも `Test-Path -LiteralPath $hostBackupRoot` が
+    残存しており、UNC root が AdditionalRoots に含まれていると session_form
+    → restore 画面遷移時に同パターンの 3-5 秒遅延が発生する。operator 承認の
+    上で本リリースでは許容、将来の patch で `Get-SmbConnection` ベースの
+    pre-check で対処予定 (案 a)
+  - **不変**: section interface / manifest schema / sections.csv /
+    backup_view / engine の backup 経路 / fabriq main への書込みなし
+  - **VERSION**: 0.26.0 → **0.27.0** (MINOR、internal API 変更 + UX 改善 + 機能拡張)
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映 (EXE 無変更)
+
 ### Added
 - backuper v0.26.0: **新規 section `system_evidence` を追加** — 移行元 PC の
   構成情報 (PC基本情報 / ネットワーク / プリンタ / シリアル / インストール済アプリ /

@@ -7,12 +7,24 @@
 # ============================================================
 
 $script:RestoreTimestampCombo  = $null
+# v0.27.0: parallel array to RestoreTimestampCombo.Items. Index N in
+# RestoreTimestampEntries holds the {Name, FullPath, Source} object for
+# the item rendered as "<Name>  [<Source>]" at the same index. Browse-mode
+# adds a synthetic "(参照: <leaf>)" item; in that mode the entry list is
+# replaced with a single-element array carrying the chosen FullPath.
+$script:RestoreTimestampEntries = @()
 $script:RestoreSectionChecks   = @{}
 $script:RestoreManifestLabel   = $null
 $script:RestoreSectionContainer = $null
 $script:RestorePrinterGrid     = $null
 $script:RestoreCurrentManifest = $null
 $script:RestoreExplicitDir     = $null
+# v0.27.0: explicit Browse-mode flag (previously inferred from whether
+# RestoreExplicitDir was set; now ExplicitDir is *always* set even in
+# timestamp mode because the engine takes a single ExplicitAggregateDir
+# parameter, so we need a separate signal to render "Browse:" vs
+# "Hostlist:" in sourceLabel).
+$script:RestoreBrowseMode      = $false
 $script:RestoreBrowseLabel     = $null
 $script:RestoreUserCombo       = $null
 $script:RestoreUserList        = @()
@@ -61,8 +73,20 @@ function New-RestoreView {
 
     $combo = New-StyledComboBox -X 24 -Y 66 -Width 460 -Height 24
     $combo.Add_SelectedIndexChanged({
-        $script:RestoreExplicitDir = $null
-        if ($null -ne $script:RestoreBrowseLabel) { $script:RestoreBrowseLabel.Text = "" }
+        # v0.27.0: resolve the picked entry's FullPath to RestoreExplicitDir
+        # so the engine call site is uniform across timestamp / Browse
+        # modes. RestoreBrowseMode is intentionally NOT touched here -- its
+        # lifecycle is owned by exactly two places: Show-RestoreView (sets
+        # it to $false when initialising/returning to timestamp mode) and
+        # Invoke-RestoreBrowse's success path (sets it to $true). The combo
+        # itself is Enabled=$false in Browse mode so this handler does not
+        # fire from operator action there.
+        $idx = $script:RestoreTimestampCombo.SelectedIndex
+        if ($idx -ge 0 -and $idx -lt $script:RestoreTimestampEntries.Count) {
+            $script:RestoreExplicitDir = $script:RestoreTimestampEntries[$idx].FullPath
+        } else {
+            $script:RestoreExplicitDir = $null
+        }
         # v0.20.0: credentials selection is per-source; reset on source change
         $script:RestoreCredentialsIncludeTargets = $null
         $script:RestoreCredentialsLastSource     = $null
@@ -256,12 +280,53 @@ function Show-RestoreView {
         return
     }
 
+    # v0.27.0: multi-root timestamp discovery. The combo is now populated
+    # from local Backup\ AND any roots declared in migration_profile.json
+    # (share.localPath + backuper.backupRootUnc). Same-named timestamps
+    # are de-duplicated by Get-BackupTimestamps (priority: Local >
+    # ShareLocal > UNC). Each item is rendered as "<Name>  [<Source>]"
+    # so operators see which storage the entry came from.
+    #
+    # Re-entering Show-RestoreView is also the canonical "return from
+    # Browse mode to timestamp mode" path (operator: < 戻る -> session_form
+    # -> restore). Reset BrowseMode and the BrowseLabel style here so the
+    # form starts in a clean timestamp-mode state regardless of how the
+    # previous session ended.
     $combo = $script:RestoreTimestampCombo
     $combo.Items.Clear()
-    $timestamps = Get-BackupTimestamps -BackuperRoot $script:BackuperRoot -OldPcName $script:CurrentHost.OldPCname
-    foreach ($ts in $timestamps) { [void]$combo.Items.Add($ts) }
-    if ($timestamps.Count -gt 0) { $combo.SelectedIndex = 0 }
-    else { $script:RestoreManifestLabel.Text = "($($script:CurrentHost.OldPCname) のローカルバックアップが見つかりません。別の場所にある場合は [バックアップを参照] を使用してください)" }
+    $combo.Enabled = $true
+    $script:RestoreBrowseMode = $false
+    if ($null -ne $script:RestoreBrowseLabel) {
+        $script:RestoreBrowseLabel.Text      = ""
+        $script:RestoreBrowseLabel.Font      = $script:fontNormal
+        $script:RestoreBrowseLabel.ForeColor = $script:fgDim
+    }
+
+    $additionalRoots = @()
+    if ($null -ne $script:MigrationProfile) {
+        if ($null -ne $script:MigrationProfile.share -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.share.localPath)) {
+            $additionalRoots += $script:MigrationProfile.share.localPath
+        }
+        if ($null -ne $script:MigrationProfile.backuper -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.backupRootUnc)) {
+            $additionalRoots += $script:MigrationProfile.backuper.backupRootUnc
+        }
+    }
+
+    $entries = @(Get-BackupTimestamps `
+        -BackuperRoot $script:BackuperRoot `
+        -OldPcName    $script:CurrentHost.OldPCname `
+        -AdditionalRoots $additionalRoots)
+    $script:RestoreTimestampEntries = $entries
+    foreach ($e in $entries) {
+        [void]$combo.Items.Add("$($e.Name)  [$($e.Source)]")
+    }
+    if ($entries.Count -gt 0) {
+        $combo.SelectedIndex = 0
+    } else {
+        $script:RestoreManifestLabel.Text = "($($script:CurrentHost.OldPCname) のバックアップが見つかりません (local / share / UNC のいずれにも存在せず)。別の場所にある場合は [バックアップを参照] を使用してください)"
+    }
 
     $cont = $script:RestoreSectionContainer
     $cont.Controls.Clear()
@@ -364,8 +429,18 @@ function Invoke-RestoreBrowse {
             $candidates += (Join-Path $shareRoot $hostName)
             $candidates += $shareRoot
         }
+        # v0.27.0 Phase C: previously this loop called Test-Path -LiteralPath
+        # on each candidate to pick the first existing one. For UNC candidates
+        # without a pre-established SMB session, Test-Path triggers a credential
+        # broker challenge that blocks for 3-5 seconds per candidate -- with up
+        # to 4 candidates that turned button-click into a ~20-second wait
+        # before the dialog even appeared (the "資格情報的な処理が走っている?"
+        # symptom). We now pick the first non-empty candidate unconditionally.
+        # If the path does not exist, FolderBrowserDialog gracefully drops to
+        # its closest existing parent on open, so the UX is preserved while the
+        # network round-trip is eliminated.
         foreach ($c in $candidates) {
-            if (-not [string]::IsNullOrWhiteSpace($c) -and (Test-Path -LiteralPath $c)) {
+            if (-not [string]::IsNullOrWhiteSpace($c)) {
                 $dlg.SelectedPath = $c
                 break
             }
@@ -408,20 +483,47 @@ function Invoke-RestoreBrowse {
         return
     }
 
-    # Phase 2.7.2: clear the combo FIRST so its SelectedIndexChanged side
-    # effect (which resets RestoreExplicitDir / BrowseLabel / ManifestLabel
-    # and clears the printer grid) runs before we install Browse-mode state.
-    # The previous ordering put $script:RestoreExplicitDir = $chosen above
-    # this line, which the event handler immediately wiped to $null when the
-    # combo was previously at index 0 (local backups present).
+    # v0.27.0 Phase B: install Browse mode atomically.
+    #   Step 1: SelectedIndex=-1 so the existing handler runs once and
+    #           clears RestoreExplicitDir (so it can't leak across modes).
+    #   Step 2: replace RestoreTimestampEntries with a single synthetic
+    #           entry pointing at $chosen, marked Source='Browse'.
+    #   Step 3: clear combo Items + add a single "(参照: <leaf>)" entry.
+    #   Step 4: SelectedIndex=0 -- handler runs and resolves
+    #           RestoreExplicitDir to entries[0].FullPath = $chosen.
+    #   Step 5: Combo.Enabled=$false locks the new state in. The handler
+    #           cannot fire from operator action while Enabled=$false, so
+    #           the synthetic entry stays put until the next
+    #           Show-RestoreView (= return-to-timestamp-mode path).
+    #   Step 6: BrowseMode = $true, BrowseLabel switches to bold+accent.
     $script:RestoreTimestampCombo.SelectedIndex = -1
 
-    $script:RestoreExplicitDir = $chosen
-    $script:RestoreBrowseLabel.Text = "Browse mode: $chosen"
+    $leaf = Split-Path -Leaf $chosen
+    if ([string]::IsNullOrWhiteSpace($leaf)) { $leaf = $chosen }
+    $script:RestoreTimestampEntries = @(
+        [PSCustomObject]@{
+            Name     = $leaf
+            FullPath = $chosen
+            Source   = 'Browse'
+        }
+    )
+
+    $script:RestoreTimestampCombo.Items.Clear()
+    [void]$script:RestoreTimestampCombo.Items.Add("(参照: $leaf)")
+    $script:RestoreTimestampCombo.SelectedIndex = 0
+    # handler has now set RestoreExplicitDir = $chosen via entries[0].FullPath
+
+    $script:RestoreTimestampCombo.Enabled = $false
+    $script:RestoreBrowseMode = $true
+    $script:RestoreBrowseLabel.Text      = "Browse mode: $chosen"
+    $script:RestoreBrowseLabel.Font      = $script:fontBold
+    $script:RestoreBrowseLabel.ForeColor = $script:bgAccent
+
     # v0.20.0: source changed via Browse - reset credentials selection
     $script:RestoreCredentialsIncludeTargets = $null
     $script:RestoreCredentialsLastSource     = $null
     Update-RestoreCredentialsStatusLabel
+
     $sz = if ($agg.summary.totalBytes) { [math]::Round([long]$agg.summary.totalBytes / 1MB, 1) } else { 0 }
     $secCount = if ($agg.summary.sectionCount) { [int]$agg.summary.sectionCount } else { 0 }
     $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  oldPcName=$($agg.oldPcName)  |  sections=$secCount  |  totalBytes=$sz MB"
@@ -502,19 +604,27 @@ function Update-RestoreSelection {
         }
         return
     }
-    $ts = $script:RestoreTimestampCombo.SelectedItem
-    $aggregateDir = Join-Path (Join-Path (Join-Path $script:BackuperRoot 'Backup') $script:CurrentHost.OldPCname) $ts
+    # v0.27.0: resolve to FullPath via RestoreTimestampEntries (the combo
+    # text now includes a [<Source>] suffix and is no longer a valid
+    # timestamp string by itself).
+    $idx = $script:RestoreTimestampCombo.SelectedIndex
+    $entry = $script:RestoreTimestampEntries[$idx]
+    if ($null -eq $entry) {
+        $script:RestoreManifestLabel.Text = ""
+        return
+    }
+    $aggregateDir  = $entry.FullPath
     $aggregatePath = Join-Path $aggregateDir 'manifest.json'
 
     if (-not (Test-Path $aggregatePath)) {
-        $script:RestoreManifestLabel.Text = "($ts に manifest.json が見つかりません)"
+        $script:RestoreManifestLabel.Text = "($($entry.Name) [$($entry.Source)] に manifest.json が見つかりません)"
         return
     }
     try {
         $agg = Get-Content -Path $aggregatePath -Raw | ConvertFrom-Json
         $sz = if ($agg.summary.totalBytes) { [math]::Round([long]$agg.summary.totalBytes / 1MB, 1) } else { 0 }
         $secCount = if ($agg.summary.sectionCount) { [int]$agg.summary.sectionCount } else { 0 }
-        $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  sections=$secCount  |  totalBytes=$sz MB"
+        $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  sections=$secCount  |  totalBytes=$sz MB  |  source=$($entry.Source)"
     }
     catch {
         $script:RestoreManifestLabel.Text = "aggregate manifest parse failed: $($_.Exception.Message)"
@@ -537,9 +647,11 @@ function Get-RestoreCurrentAggregateDir {
         $script:RestoreTimestampCombo.SelectedIndex -lt 0) {
         return $null
     }
-    $ts = $script:RestoreTimestampCombo.SelectedItem
-    return (Join-Path (Join-Path (Join-Path $script:BackuperRoot 'Backup') `
-        $script:CurrentHost.OldPCname) $ts)
+    # v0.27.0: resolve via RestoreTimestampEntries (multi-root aware)
+    $idx = $script:RestoreTimestampCombo.SelectedIndex
+    $entry = $script:RestoreTimestampEntries[$idx]
+    if ($null -eq $entry) { return $null }
+    return $entry.FullPath
 }
 
 function Update-RestoreCredentialsStatusLabel {
@@ -620,15 +732,17 @@ function Invoke-RestoreCredentialsSelect {
 }
 
 function Invoke-RestoreStart {
-    $useExplicit = -not [string]::IsNullOrWhiteSpace($script:RestoreExplicitDir)
-    if (-not $useExplicit) {
+    # v0.27.0: RestoreExplicitDir is the single source of truth for the
+    # target aggregate dir (the combo handler resolves to FullPath in
+    # timestamp mode, Invoke-RestoreBrowse sets it in Browse mode). The
+    # RestoreBrowseMode flag tells us which mode we are in, for label /
+    # host resolution purposes.
+    if ([string]::IsNullOrWhiteSpace($script:RestoreExplicitDir)) {
         if ($null -eq $script:CurrentHost) { return }
-        if ($null -eq $script:RestoreTimestampCombo -or $script:RestoreTimestampCombo.SelectedIndex -lt 0) {
-            [System.Windows.Forms.MessageBox]::Show("バックアップ日時を選択するか [バックアップを参照...] を使用してください。", "Fabriq BackUper",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-            return
-        }
+        [System.Windows.Forms.MessageBox]::Show("バックアップ日時を選択するか [バックアップを参照...] を使用してください。", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
     }
 
     $picked = @()
@@ -708,7 +822,10 @@ function Invoke-RestoreStart {
 
     $hostForEngine = $script:CurrentHost
     $sourceLabel = ""
-    if ($useExplicit) {
+    if ($script:RestoreBrowseMode) {
+        # Browse mode: trust the chosen folder's manifest for OldPCname,
+        # since session_form's host selection may not match the folder
+        # the operator just picked.
         $aggMfPath = Join-Path $script:RestoreExplicitDir 'manifest.json'
         try {
             $agg = Get-Content -Path $aggMfPath -Raw | ConvertFrom-Json
@@ -718,8 +835,17 @@ function Invoke-RestoreStart {
         }
         $sourceLabel = "Browse: $($script:RestoreExplicitDir)"
     } else {
-        $ts = $script:RestoreTimestampCombo.SelectedItem
-        $sourceLabel = "Hostlist: $($script:CurrentHost.OldPCname) / $ts"
+        # Timestamp mode: use the session_form host and the picked entry's
+        # display info (Name + Source) for the label.
+        $idx = $script:RestoreTimestampCombo.SelectedIndex
+        $entry = if ($idx -ge 0 -and $idx -lt $script:RestoreTimestampEntries.Count) {
+            $script:RestoreTimestampEntries[$idx]
+        } else { $null }
+        if ($null -ne $entry) {
+            $sourceLabel = "Hostlist: $($script:CurrentHost.OldPCname) / $($entry.Name) [$($entry.Source)]"
+        } else {
+            $sourceLabel = "Hostlist: $($script:CurrentHost.OldPCname)"
+        }
     }
 
     # v0.25.0: Operator handoff folder path resolution (Phase A).
@@ -850,11 +976,10 @@ operator-facing な設定情報が番号順に集約されています。
         FabriqRoot = $script:FabriqRoot
         SectionParamsBySection = $sectionParams
     }
-    if ($useExplicit) {
-        $coreArgs.ExplicitAggregateDir = $script:RestoreExplicitDir
-    } else {
-        $coreArgs.PickedTimestamp = $script:RestoreTimestampCombo.SelectedItem
-    }
+    # v0.27.0: always pass ExplicitAggregateDir (engine no longer accepts
+    # PickedTimestamp; the combo handler / Browse handler has already
+    # resolved any timestamp selection to a FullPath).
+    $coreArgs.ExplicitAggregateDir = $script:RestoreExplicitDir
     $result = Invoke-BackuperRestoreCore @coreArgs
 
     $overallSw.Stop()

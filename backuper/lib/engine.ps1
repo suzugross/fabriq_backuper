@@ -122,14 +122,65 @@ function Set-SelectedHostEnvVars {
 }
 
 function Get-BackupTimestamps {
+    # v0.27.0: now returns objects with Name + FullPath + Source so the
+    # restore UI can resolve a chosen timestamp to its actual aggregate
+    # directory (which may live on the local disk, a local SMB share, or
+    # a UNC mount). Multi-root search is driven by AdditionalRoots so the
+    # migration_profile (backuper.backupRootUnc / share.localPath) can
+    # contribute candidates without the engine knowing about the profile.
+    #
+    # Search roots (in priority order, highest first):
+    #   1. Local : <BackuperRoot>\Backup\<OldPcName>             (Source='Local')
+    #   2..N    : <each AdditionalRoot>\<OldPcName>              (Source='ShareLocal' for local-style paths,
+    #                                                              Source='UNC' for paths starting with \\)
+    #
+    # Same Name (= same timestamp folder name) across multiple roots is
+    # de-duplicated by keeping the FIRST occurrence (= highest-priority root).
+    # Within a single Name, results are ordered by Name descending so the
+    # newest timestamp is on top.
     param(
         [Parameter(Mandatory = $true)][string]$BackuperRoot,
-        [Parameter(Mandatory = $true)][string]$OldPcName
+        [Parameter(Mandatory = $true)][string]$OldPcName,
+        [string[]]$AdditionalRoots = @()
     )
-    $hostBackupRoot = Join-Path (Join-Path $BackuperRoot 'Backup') $OldPcName
-    if (-not (Test-Path $hostBackupRoot)) { return @() }
-    return @(Get-ChildItem -Path $hostBackupRoot -Directory -ErrorAction SilentlyContinue |
-             Sort-Object Name -Descending | ForEach-Object { $_.Name })
+
+    function Get-RootSource {
+        param([string]$RootPath)
+        if ([string]::IsNullOrWhiteSpace($RootPath)) { return 'Unknown' }
+        if ($RootPath -match '^\\\\') { return 'UNC' }
+        return 'ShareLocal'
+    }
+
+    $rootsOrdered = @()
+    $rootsOrdered += @{ Root = (Join-Path $BackuperRoot 'Backup'); Source = 'Local' }
+    foreach ($ar in $AdditionalRoots) {
+        if (-not [string]::IsNullOrWhiteSpace($ar)) {
+            $rootsOrdered += @{ Root = $ar; Source = (Get-RootSource $ar) }
+        }
+    }
+
+    $seen = @{}
+    $entries = @()
+    foreach ($rootInfo in $rootsOrdered) {
+        $hostBackupRoot = Join-Path $rootInfo.Root $OldPcName
+        if (-not (Test-Path -LiteralPath $hostBackupRoot)) { continue }
+        try {
+            $dirs = @(Get-ChildItem -LiteralPath $hostBackupRoot -Directory -ErrorAction SilentlyContinue)
+        } catch {
+            continue
+        }
+        foreach ($d in $dirs) {
+            if ($seen.ContainsKey($d.Name)) { continue }
+            $seen[$d.Name] = $true
+            $entries += [PSCustomObject]@{
+                Name     = $d.Name
+                FullPath = $d.FullName
+                Source   = $rootInfo.Source
+            }
+        }
+    }
+
+    return @($entries | Sort-Object -Property @{Expression='Name'; Descending=$true})
 }
 
 function Invoke-BackuperBackupCore {
@@ -239,27 +290,28 @@ function Invoke-BackuperBackupCore {
 }
 
 function Invoke-BackuperRestoreCore {
+    # v0.27.0: ExplicitAggregateDir is now the ONLY way the restore UI
+    # passes a target backup directory. The old PickedTimestamp parameter
+    # has been removed; the UI resolves a chosen timestamp to a full path
+    # via Get-BackupTimestamps (multi-root) and forwards that path here.
+    # This eliminates the hard-coded "<BackuperRoot>\Backup\..." assumption
+    # and lets a single restore session pick from local / share / UNC roots
+    # uniformly.
     param(
         [Parameter(Mandatory = $true)]$SelectedHost,
         [Parameter(Mandatory = $true)][array]$PickedSections,
-        [string]$PickedTimestamp = $null,
         [Parameter(Mandatory = $true)][string]$BackuperRoot,
         [Parameter(Mandatory = $true)][string]$FabriqRoot,
         [hashtable]$SectionParamsBySection = @{},
-        # Phase 2.4: explicit backup folder path. If specified, this exact
-        # folder is used as the aggregate directory (Browse mode).
-        # Otherwise the engine builds it from $BackuperRoot\Backup\<OldPCname>\$PickedTimestamp
-        # (hostlist-driven default). Can be UNC.
-        [string]$ExplicitAggregateDir = $null
+        # Explicit backup folder path (local / UNC). The UI always supplies
+        # this in v0.27.0+ (the multi-root combo or Browse dialog has
+        # already resolved it). The engine just validates and uses it.
+        [Parameter(Mandatory = $true)][string]$ExplicitAggregateDir
     )
 
     Set-SelectedHostEnvVars -SelectedHost $SelectedHost
 
-    $aggregateDir = if (-not [string]::IsNullOrWhiteSpace($ExplicitAggregateDir)) {
-        $ExplicitAggregateDir
-    } else {
-        Join-Path (Join-Path (Join-Path $BackuperRoot 'Backup') $SelectedHost.OldPCname) $PickedTimestamp
-    }
+    $aggregateDir = $ExplicitAggregateDir
     if (-not (Test-Path $aggregateDir)) {
         return [PSCustomObject]@{
             Status = 'Failed'
