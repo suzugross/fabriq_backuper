@@ -616,8 +616,9 @@ function global:Find-FabriqRoot {
 # ============================================================
 
 $script:OperatorHandoffSubdirs = [ordered]@{
-    'credentials' = '01_資格情報'
-    'outlook_pop' = '02_outlook_アカウント情報'
+    'credentials'     = '01_資格情報'
+    'outlook_pop'     = '02_outlook_アカウント情報'
+    'system_evidence' = '03_移行元PC情報'
 }
 
 function global:Resolve-OperatorHandoffRoot {

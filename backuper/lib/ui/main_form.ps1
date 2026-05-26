@@ -90,12 +90,14 @@ function Start-FabriqBackuperGui {
 
     # Build main form (Phase 2.7.1: 900 -> 780, compact layout).
     # Inner content area = Height - title bar (~30) - borders (~16) - header dock (44).
-    # 780 - 30 - 16 - 44 = ~690 px usable, fits Start button at Y=632 + 44 = 676.
-    # The 900-tall form clipped the Start button on smaller laptop screens
-    # (visible area ~800 after taskbar); the compact layout below trims the
-    # printer / userdata grids to fit comfortably.
+    # v0.26.0: Height 780 -> 810 to accommodate the +30 Y shift on backup/restore
+    # views caused by the new two-row section grid (system_evidence added). The
+    # restore view's Start button (now Y=684 + H=44 = bottom 728) was being
+    # clipped at the previous 780-tall window; 810 gives inner area ~720 with
+    # an 8-12 px safety margin depending on OS chrome. Still well below a
+    # laptop's ~800px visible area after taskbar.
     $form = New-Object System.Windows.Forms.Form
-    Set-FormStyle -Form $form -Title "Fabriq BackUper v$BackuperVersion" -Width 960 -Height 780
+    Set-FormStyle -Form $form -Title "Fabriq BackUper v$BackuperVersion" -Width 960 -Height 810
     $script:MainForm = $form
 
     # Header bar (dark stripe with title + host indicator)

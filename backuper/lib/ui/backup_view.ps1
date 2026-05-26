@@ -117,29 +117,31 @@ function New-BackupView {
     $panel.Controls.Add($sectionGroupLbl)
     $script:BackupSectionContainer = New-Object System.Windows.Forms.Panel
     $script:BackupSectionContainer.Location = New-Object System.Drawing.Point(24, 122)
-    $script:BackupSectionContainer.Size = New-Object System.Drawing.Size(880, 26)
+    # v0.26.0: Height raised 26 -> 56 for two-row section grid (3 sections per
+    # row x 2 rows = 6 slots). Widgets below this container were shifted Y +30.
+    $script:BackupSectionContainer.Size = New-Object System.Drawing.Size(880, 56)
     $script:BackupSectionContainer.BackColor = [System.Drawing.Color]::Transparent
     $panel.Controls.Add($script:BackupSectionContainer)
 
-    # ---- Printer list row ---------------------------------
+    # ---- Printer list row (Y +30 shifted by v0.26.0 for 2-row sections) ----
     $pLbl = New-StyledLabel -Text "この PC のプリンタ (除外するチェックを外す)" `
-        -X 24 -Y 156 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 186 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($pLbl)
 
-    $btnSelectAll = New-StyledButton -Text "全選択" -X 620 -Y 152 -Width 96 -Height 24
+    $btnSelectAll = New-StyledButton -Text "全選択" -X 620 -Y 182 -Width 96 -Height 24
     $btnSelectAll.Add_Click({ Set-AllPrinterChecks $true })
     $panel.Controls.Add($btnSelectAll)
 
-    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 152 -Width 80 -Height 24
+    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 182 -Width 80 -Height 24
     $btnNone.Add_Click({ Set-AllPrinterChecks $false })
     $panel.Controls.Add($btnNone)
 
-    $btnRefresh = New-StyledButton -Text "更新" -X 808 -Y 152 -Width 96 -Height 24
+    $btnRefresh = New-StyledButton -Text "更新" -X 808 -Y 182 -Width 96 -Height 24
     $btnRefresh.Add_Click({ Update-BackupPrinterGrid })
     $panel.Controls.Add($btnRefresh)
 
     $grid = New-Object System.Windows.Forms.DataGridView
-    $grid.Location = New-Object System.Drawing.Point(24, 182)
+    $grid.Location = New-Object System.Drawing.Point(24, 212)
     $grid.Size = New-Object System.Drawing.Size(880, 140)
     Set-GridStyle -Grid $grid
     $grid.ReadOnly = $false
@@ -165,29 +167,29 @@ function New-BackupView {
     $panel.Controls.Add($grid)
     $script:BackupPrinterGrid = $grid
 
-    # ---- User Data row: title + source user combo ---------
+    # ---- User Data row: title + source user combo (Y +30 by v0.26.0) ----
     $entryLbl = New-StyledLabel -Text "ユーザデータ (チェック切替=今回のみ、追加/編集/削除/保存で永続化)" `
-        -X 24 -Y 336 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 366 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($entryLbl)
 
     $userLbl = New-StyledLabel -Text "取得元ユーザ:" `
-        -X 568 -Y 336 -Width 80 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 568 -Y 366 -Width 80 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($userLbl)
-    $userCombo = New-StyledComboBox -X 650 -Y 332 -Width 254 -Height 24
+    $userCombo = New-StyledComboBox -X 650 -Y 362 -Width 254 -Height 24
     $script:BackupUserCombo = $userCombo
     $panel.Controls.Add($userCombo)
 
-    # ---- User Data row: editor buttons --------------------
-    $btnEntryAdd = New-StyledButton -Text "追加" -X 24 -Y 362 -Width 80 -Height 26 -BgColor $script:bgAdd
+    # ---- User Data row: editor buttons (Y +30 by v0.26.0) ----
+    $btnEntryAdd = New-StyledButton -Text "追加" -X 24 -Y 392 -Width 80 -Height 26 -BgColor $script:bgAdd
     $btnEntryAdd.ForeColor = $script:fgWhite
     $btnEntryAdd.Add_Click({ Invoke-EntryAdd })
     $panel.Controls.Add($btnEntryAdd)
 
-    $btnEntryEdit = New-StyledButton -Text "編集" -X 108 -Y 362 -Width 80 -Height 26
+    $btnEntryEdit = New-StyledButton -Text "編集" -X 108 -Y 392 -Width 80 -Height 26
     $btnEntryEdit.Add_Click({ Invoke-EntryEdit })
     $panel.Controls.Add($btnEntryEdit)
 
-    $btnEntryDel = New-StyledButton -Text "削除" -X 192 -Y 362 -Width 80 -Height 26 -BgColor $script:bgDelete
+    $btnEntryDel = New-StyledButton -Text "削除" -X 192 -Y 392 -Width 80 -Height 26 -BgColor $script:bgDelete
     $btnEntryDel.ForeColor = $script:fgWhite
     $btnEntryDel.Add_Click({ Invoke-EntryDelete })
     $panel.Controls.Add($btnEntryDel)
@@ -196,22 +198,22 @@ function New-BackupView {
     # neighbor and persist to CSV immediately (same .bak rotation as
     # Add/Edit/Delete). The new order propagates to future backups'
     # manifest.items.entries[] which determines restore execution order.
-    $btnEntryUp = New-StyledButton -Text "上へ" -X 280 -Y 362 -Width 50 -Height 26
+    $btnEntryUp = New-StyledButton -Text "上へ" -X 280 -Y 392 -Width 50 -Height 26
     $btnEntryUp.Add_Click({ Invoke-EntryMoveUp })
     $panel.Controls.Add($btnEntryUp)
 
-    $btnEntryDown = New-StyledButton -Text "下へ" -X 336 -Y 362 -Width 50 -Height 26
+    $btnEntryDown = New-StyledButton -Text "下へ" -X 336 -Y 392 -Width 50 -Height 26
     $btnEntryDown.Add_Click({ Invoke-EntryMoveDown })
     $panel.Controls.Add($btnEntryDown)
 
-    $btnEntrySave = New-StyledButton -Text "変更を保存" -X 400 -Y 362 -Width 124 -Height 26 -BgColor $script:bgAccent
+    $btnEntrySave = New-StyledButton -Text "変更を保存" -X 400 -Y 392 -Width 124 -Height 26 -BgColor $script:bgAccent
     $btnEntrySave.Font = $script:fontBold
     $btnEntrySave.Add_Click({ Invoke-EntrySaveAll })
     $panel.Controls.Add($btnEntrySave)
 
-    # ---- User Data grid -----------------------------------
+    # ---- User Data grid (Y +30 by v0.26.0) -----------------------------
     $eGrid = New-Object System.Windows.Forms.DataGridView
-    $eGrid.Location = New-Object System.Drawing.Point(24, 396)
+    $eGrid.Location = New-Object System.Drawing.Point(24, 426)
     $eGrid.Size = New-Object System.Drawing.Size(880, 218)
     Set-GridStyle -Grid $eGrid
     $eGrid.ReadOnly = $false
@@ -247,8 +249,8 @@ function New-BackupView {
     $panel.Controls.Add($eGrid)
     $script:BackupEntryGrid = $eGrid
 
-    # ---- Start button -------------------------------------
-    $btnStart = New-StyledButton -Text "バックアップ開始" -X 700 -Y 624 -Width 204 -Height 44 -BgColor $script:bgAccent
+    # ---- Start button (Y +30 by v0.26.0) ----------------
+    $btnStart = New-StyledButton -Text "バックアップ開始" -X 700 -Y 654 -Width 204 -Height 44 -BgColor $script:bgAccent
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-BackupStart })
     $panel.Controls.Add($btnStart)
@@ -438,16 +440,34 @@ function Show-BackupView {
     #            container.
     #   v0.19.1: width 200 + stride 215 -> 4 sections fit (max X=845).
     #   v0.22.0: width 168 + stride 178 -> 5 sections fit (max X=880
-    #            exactly) so msime_dict joins the row. The longest
-    #            DisplayName today ("Printer Environment", 19 chars)
-    #            still renders cleanly at this width with Segoe UI 9pt.
-    $x = 0
+    #            exactly) so msime_dict joins the row.
+    #   v0.26.0: 6th section (system_evidence) added. Single-row width-
+    #            compression would crowd "Printer Environment" (19 chars),
+    #            so the layout switched to TWO ROWS x 3 columns. The
+    #            container Height was raised 26 -> 56 and widgets below
+    #            were shifted Y +30 to clear the new row.
+    #   Slot math (v0.26.0): width=280 / stride_x=300 / stride_y=30
+    #     row 0 (Y=4 ):  printer        / userdata    / outlook_pop
+    #     row 1 (Y=34):  credentials    / msime_dict  / system_evidence
+    # system_evidence is forced (CheckBox is grey-out + Checked fixed) so
+    # operator cannot uncheck it - migration evidence is always captured.
+    $i = 0
     foreach ($s in $script:SectionList) {
-        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 168 -Height 22 -Checked ($s.Enabled -eq "1")
+        $col = $i % 3
+        $row = [Math]::Floor($i / 3)
+        $cb = New-StyledCheckBox -Text $s.DisplayName `
+            -X ($col * 300) -Y (4 + $row * 30) -Width 280 -Height 22 `
+            -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
+        if ($s.SectionName -eq 'system_evidence') {
+            $cb.Checked = $true
+            $cb.Enabled = $false
+            $_tt = New-Object System.Windows.Forms.ToolTip
+            $_tt.SetToolTip($cb, "移行証跡として必須。選択不可。")
+        }
         $cont.Controls.Add($cb)
         $script:BackupSectionChecks[$s.SectionName] = $cb
-        $x += 178
+        $i++
     }
 
     Update-BackupPrinterGrid
@@ -524,6 +544,16 @@ function Invoke-BackupStart {
         # the only knob needed.
         msime_dict = @{
             SourceUserProfilePath = $sourceUserProfilePath
+        }
+        # v0.26.0: system_evidence section. Captures PC configuration
+        # evidence (§01/06/07/10/11/16/27 from fabriq evidence_config) for
+        # operator reference at restore time. MigrationProfile is forwarded
+        # so Phase 2's Step 0 can harvest rollback.snapshotPath (records
+        # the pre-lanprep IP/Gateway/DNS, since §06 captures the temporary
+        # lanprep IP instead).
+        system_evidence = @{
+            SourceUserProfilePath = $sourceUserProfilePath
+            MigrationProfile      = $script:MigrationProfile
         }
     }
 

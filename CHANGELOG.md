@@ -16,6 +16,91 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.26.0: **新規 section `system_evidence` を追加** — 移行元 PC の
+  構成情報 (PC基本情報 / ネットワーク / プリンタ / シリアル / インストール済アプリ /
+  Wi-Fi profile / 環境変数) を採取し、リストア時に operator handoff folder の
+  `03_移行元PC情報\` 配下に展開する。CLAUDE.md vendoring 規約に従い fabriq
+  `modules/standard/evidence_config` 1.7.0 から必要 7 セクションのみを転記
+  (重い PnP / GPO / Battery / Office License 等は実行しない、所要時間 30-60 秒)。
+  - **採取セクション** (fabriq evidence_config の section 番号と互換):
+    - §01 System Basic Info (OS / CPU / Memory / TimeZone / Locale)
+    - §06 Network Settings (CSV、ipconfig /all 相当)
+    - §07 Printers / Ports List (CSV)
+    - §10 PC Serial Number (multi-source + validation)
+    - §11 Installed Software (Desktop + Store)
+    - §16 Wi-Fi Profiles (**PSK は含めない** = `netsh wlan show profile name=<n>` を
+      key=clear なしで実行 + parse 後の deny regex 二段ガード)
+    - §27 Environment Variables (Machine + User scopes)
+  - **Step 0: lan-prep snapshot harvest**
+    ([backup.ps1](backuper/lib/sections/system_evidence/backup.ps1)):
+    `$script:MigrationProfile.rollback.snapshotPath` を直接読み、source PC の
+    本来の network 設定 (lan-prep 適用前) を `_OriginalNetworkConfig.json` +
+    `_OriginalNetworkConfig.txt` に出力。LAN 直結移行で §06 NetworkConfig.csv に
+    一時 IP (192.168.250.x 等) が記録される問題を補完する。snapshot 不在は
+    Section status=Success のまま注記のみ (USB-only / 通常 backup ケースを normal
+    とみなす)。
+  - **§11 per-user 走査**: HKLM + HKLM\WOW6432Node に加え、
+    `Resolve-HkcuRoot` 経由で **HKU:\<source-sid>\SOFTWARE\\... + WOW6432Node**
+    を走査し、異ユーザ admin 昇格運用でも target user 視点の per-user install
+    (Just-me インストール) を拾う。CSV に `Scope` 列 (Machine x64 / Machine x86 /
+    User x64 / User x86) を additive 追加。
+    Store Apps は引き続き current admin の `Get-AppxPackage` で割り切り (= 異ユーザ
+    admin では admin 側 Appx しか拾えないが、「管理者推奨アプリ」として運用上許容、
+    operator 判断)。
+  - **restore = operator handoff folder への deploy**
+    ([restore.ps1](backuper/lib/sections/system_evidence/restore.ps1)):
+    target PC では evidence 再採取はせず (operator 方針「二度採りしない」)、
+    backup 側 `sections\system_evidence\` の成果物を
+    `<TargetDesktop>\<yyyy_MM_dd>_<OldPCname>_BK\03_移行元PC情報\` へ Copy。
+    backuper internal の `manifest.json` のみ除外。handoff folder の README は
+    [restore_view.ps1](backuper/lib/ui/restore_view.ps1) 側で既存統合 README に
+    「03_移行元PC情報\」セクションを追記する形で生成 (重複させない設計)。
+    `_restore_manifest.json` (`fabriq-system-evidence-restore` schemaVersion=1) を
+    handoff subdir 配下に出力。
+  - **強制取得**: section CheckBox は **Disabled + Checked 固定** + tooltip
+    「移行証跡として必須。選択不可。」で表示 ([backup_view.ps1](backuper/lib/ui/backup_view.ps1) /
+    [restore_view.ps1](backuper/lib/ui/restore_view.ps1))。operator が UI から
+    OFF にすることは不可。sections.csv は Enabled=1 固定。
+  - **section CheckBox レイアウト**: 6 sections 目を追加するため、v0.22.0 で
+    1 行 880px ぴったり (width=168 / stride=178) に詰めた構成を **二段 wrap
+    (3 sections × 2 行、width=280 / stride=300 / stride_y=30)** に再構成。
+    Container Height 26 → 56、下方 widget (Printer / User Data / handoff /
+    Outlook extras / 開始ボタン等) を全て Y +30 シフト。Form Height は
+    780 → 810 に拡張して restore Start button の見切れを回避。
+  - **operator handoff subdir mapping**: [common.ps1](backuper/common.ps1) の
+    `$script:OperatorHandoffSubdirs` に `'system_evidence' = '03_移行元PC情報'`
+    を追加 (既存の 01_資格情報 / 02_outlook_アカウント情報 と同じ構造)。
+  - **encoding 制約**: backup.ps1 / restore.ps1 は Write tool 経由で生成する都合、
+    BOM なし UTF-8 で保存される。PS5.1 が BOM なし日本語を ANSI 誤解釈する
+    (project rule 5) ため、両ファイルは **ASCII only で記述**。operator-facing な
+    日本語コンテンツは BOM 付きで保存される [restore_view.ps1](backuper/lib/ui/restore_view.ps1) /
+    [common.ps1](backuper/common.ps1) 側で生成する役割分離を採用。
+  - **manifest schema**: `fabriq-system-evidence-backup` schemaVersion=1 + 既存の
+    `fabriq-evidence-manifest` 1.7.0 の sections[] 配列を踏襲しつつ、
+    `lanPrepSnapshot.{harvested, snapshotPath, originalNetwork}` を additive 拡張。
+    `fabriq-system-evidence-restore` schemaVersion=1 を restore manifest として新設。
+  - **既存 section / engine / manifest aggregator**: 不変。section interface
+    シグネチャ厳守 ([engine.ps1](backuper/lib/engine.ps1) の標準入出力)。
+  - **fabriq main への書込み**: なし。fabriq の `modules/standard/evidence_config` は
+    spawn / 参照 / 改変いずれも行わない (vendoring 路線、CLAUDE.md ルール 1 / 2 準拠)。
+  - **後方互換**: pre-v0.26.0 backup を v0.26.0 で restore すると、system_evidence
+    section は backup 側 dir 不在を検知して Status=Skipped (reason="likely a
+    pre-v0.26.0 backup") を返す。他 5 sections の restore は通常通り動作。
+  - **検証**:
+    1. lanprep snapshot あり (LAN 直結) で backup → `_OriginalNetworkConfig.txt` に
+       移行前の本来 IP/Gateway/DNS、`06_NetworkConfig.csv` に一時 IP が記録される
+       対比が成立すること
+    2. 異ユーザ admin 昇格運用で backup → `11_DesktopApps.csv` の Scope 列に
+       "User (x64)" / "User (x86)" のエントリが存在 = HKU\<source-sid> 走査機能
+    3. `16_WiFiProfiles.txt` に PSK / Key Content / Security key を含む行が
+       存在しないこと
+    4. restore (handoff ON) → target user Desktop の
+       `<date>_<host>_BK\03_移行元PC情報\` に上記成果物 + `_restore_manifest.json`
+       が deploy される
+    5. restore (handoff OFF) → 03_移行元PC情報 は作られず、section status=Skipped
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映。EXE は無変更 (再ビルド不要)。
+
+### Added
 - backuper v0.25.0 (work-in-progress, Phase A): **operator handoff folder の
   基盤を追加** —
   [backuper/common.ps1](backuper/common.ps1) /

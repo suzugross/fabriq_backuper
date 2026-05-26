@@ -114,33 +114,35 @@ function New-RestoreView {
     $panel.Controls.Add($sectionLbl)
     $script:RestoreSectionContainer = New-Object System.Windows.Forms.Panel
     $script:RestoreSectionContainer.Location = New-Object System.Drawing.Point(24, 172)
-    $script:RestoreSectionContainer.Size = New-Object System.Drawing.Size(880, 26)
+    # v0.26.0: Height raised 26 -> 56 for two-row section grid (3 sections per
+    # row x 2 rows = 6 slots). Widgets below this container were shifted Y +30.
+    $script:RestoreSectionContainer.Size = New-Object System.Drawing.Size(880, 56)
     $script:RestoreSectionContainer.BackColor = [System.Drawing.Color]::Transparent
     $panel.Controls.Add($script:RestoreSectionContainer)
 
-    # ---- Target user row ----------------------------------
+    # ---- Target user row (Y +30 by v0.26.0) ----------------
     $userLbl = New-StyledLabel -Text "対象ユーザ (リストア時の %USERPROFILE% 等を解決):" `
-        -X 24 -Y 206 -Width 360 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 236 -Width 360 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($userLbl)
-    $userCombo = New-StyledComboBox -X 386 -Y 202 -Width 260 -Height 24
+    $userCombo = New-StyledComboBox -X 386 -Y 232 -Width 260 -Height 24
     $script:RestoreUserCombo = $userCombo
     $panel.Controls.Add($userCombo)
 
-    # ---- Credentials selection button (v0.20.0) -----------
+    # ---- Credentials selection button (v0.20.0, Y +30 by v0.26.0) ----
     # Lives on the same Y as the target-user combo; lets operator open a
     # modal grid to (de)select which credentials to actually re-register
     # at restore time. Default ($script:RestoreCredentialsIncludeTargets
     # = $null) means "include all", same as v0.19.x behavior.
     $script:RestoreCredentialsButton = New-StyledButton `
-        -Text "資格情報の選択..." -X 660 -Y 202 -Width 150 -Height 26
+        -Text "資格情報の選択..." -X 660 -Y 232 -Width 150 -Height 26
     $script:RestoreCredentialsButton.Add_Click({ Invoke-RestoreCredentialsSelect })
     $panel.Controls.Add($script:RestoreCredentialsButton)
 
     $script:RestoreCredentialsStatusLabel = New-StyledLabel `
-        -Text "(未選択 = 全件)" -X 816 -Y 206 -Width 90 -Height 18 -FgColor $script:fgDim
+        -Text "(未選択 = 全件)" -X 816 -Y 236 -Width 90 -Height 18 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreCredentialsStatusLabel)
 
-    # ---- Operator handoff row (v0.25.0) -------------------
+    # ---- Operator handoff row (v0.25.0, Y +30 by v0.26.0) ----
     # Checkbox controlling whether credentials + outlook_pop emit their
     # operator-facing artifacts (登録.bat / register_credentials.ps1 /
     # RESTORE_INSTRUCTIONS.txt / _account_settings.txt) into a single
@@ -148,62 +150,62 @@ function New-RestoreView {
     # across Documents and PST folders. Default ON. OFF = full v0.24.5
     # legacy behaviour (no handoff folder ever created).
     $handoffCheck = New-StyledCheckBox `
-        -Text "operator 用ファイル (資格情報 / Outlook 設定) をデスクトップに統合 (推奨)" `
-        -X 24 -Y 232 -Width 700 -Height 22 -Checked $true
+        -Text "operator 用ファイル (資格情報 / Outlook 設定 / 移行元PC情報) をデスクトップに統合 (推奨)" `
+        -X 24 -Y 262 -Width 760 -Height 22 -Checked $true
     $script:RestoreOperatorHandoffCheck = $handoffCheck
     $panel.Controls.Add($handoffCheck)
 
-    # ---- Outlook extras row (Phase 0.15.0 + v0.17.0 + Y shift v0.25.0) ----
+    # ---- Outlook extras row (Phase 0.15.0 + v0.17.0 + Y shift v0.25.0 + v0.26.0) ----
     # 2 つのチェックボックスを縦並びで配置:
     #   1. 初回起動用ショートカット (rule-clear) - default OFF (v0.17 変更)
     #   2. レジストリ自動再構築 (Strategy B-light) - default OFF (v0.17 新規)
     # どちらも opt-in 形式。デフォルトは "operator 手動セットアップが主軸" の運用。
     # v0.25.0: Y を +30 シフトして、上の operator handoff checkbox を新行で挿入。
+    # v0.26.0: 更に Y を +30 シフトして、section 領域を 2 行 (system_evidence 追加分) に拡張。
     $outlookExtrasLbl = New-StyledLabel -Text "Outlook 追加オプション (どちらも opt-in、通常は OFF のまま)" `
-        -X 24 -Y 264 -Width 600 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 294 -Width 600 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($outlookExtrasLbl)
 
     # v0.17.0: rule-clear shortcut, default OFF
     $shortcutCheck = New-StyledCheckBox `
         -Text "初回起動用ショートカットを生成 (壊れた仕分けルールをクリア)" `
-        -X 24 -Y 284 -Width 500 -Height 22 -Checked $false
+        -X 24 -Y 314 -Width 500 -Height 22 -Checked $false
     $script:RestoreOutlookShortcutCheck = $shortcutCheck
     $panel.Controls.Add($shortcutCheck)
 
     $shortcutHint = New-StyledLabel `
         -Text "ルールが壊れている場合の対処用。通常は不要 (ルール 1 回手動実行で復活するため)" `
-        -X 44 -Y 306 -Width 860 -Height 16 -FgColor $script:fgDim
+        -X 44 -Y 336 -Width 860 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($shortcutHint)
 
     # v0.17.0: NEW - Strategy B-light opt-in, default OFF
     $strategyBCheck = New-StyledCheckBox `
         -Text "レジストリ自動再構築 (実験的、通常は使用しない)" `
-        -X 24 -Y 326 -Width 500 -Height 22 -Checked $false
+        -X 24 -Y 356 -Width 500 -Height 22 -Checked $false
     $script:RestoreOutlookAttemptStrategyBCheck = $strategyBCheck
     $panel.Controls.Add($strategyBCheck)
 
     $strategyBHint = New-StyledLabel `
         -Text "MAPI registry transform 経由で自動再構築。不安定なため operator 手動セットアップを推奨" `
-        -X 44 -Y 348 -Width 860 -Height 16 -FgColor $script:fgDim
+        -X 44 -Y 378 -Width 860 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($strategyBHint)
 
-    # ---- Printer list row (Y shifted +30 by v0.25.0 for handoff checkbox row) ----
+    # ---- Printer list row (Y +30 by v0.26.0 again, total +60 from v0.24.5) ----
     $pLbl = New-StyledLabel -Text "このバックアップ内のプリンタ (除外するチェックを外す)" `
-        -X 24 -Y 374 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 404 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($pLbl)
 
-    $btnSelAll = New-StyledButton -Text "全選択" -X 620 -Y 370 -Width 96 -Height 24
+    $btnSelAll = New-StyledButton -Text "全選択" -X 620 -Y 400 -Width 96 -Height 24
     $btnSelAll.Add_Click({ Set-AllRestorePrinterChecks $true })
     $panel.Controls.Add($btnSelAll)
-    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 370 -Width 80 -Height 24
+    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 400 -Width 80 -Height 24
     $btnNone.Add_Click({ Set-AllRestorePrinterChecks $false })
     $panel.Controls.Add($btnNone)
 
-    # Grid: Y shifted +30 to Y=400 by v0.25.0 (handoff row insertion).
-    # Height kept at 244, so Y+H = 644 (was 614 in v0.24.5). Still fits
-    # comfortably inside the ~736px panel height.
+    # Grid: Y shifted further +30 to Y=430 by v0.26.0 (2-row sections).
+    # Height kept at 244, so Y+H = 674. Still fits the panel.
     $grid = New-Object System.Windows.Forms.DataGridView
-    $grid.Location = New-Object System.Drawing.Point(24, 400)
+    $grid.Location = New-Object System.Drawing.Point(24, 430)
     $grid.Size = New-Object System.Drawing.Size(880, 244)
     Set-GridStyle -Grid $grid
     $grid.ReadOnly = $false
@@ -224,8 +226,8 @@ function New-RestoreView {
     $panel.Controls.Add($grid)
     $script:RestorePrinterGrid = $grid
 
-    # ---- Start button (Y shifted +30 by v0.25.0) ----------
-    $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 654 -Width 204 -Height 44 -BgColor $script:bgAdd
+    # ---- Start button (Y shifted +30 by v0.25.0 + further +30 by v0.26.0) ----
+    $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 684 -Width 204 -Height 44 -BgColor $script:bgAdd
     $btnStart.ForeColor = $script:fgWhite
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-RestoreStart })
@@ -264,15 +266,26 @@ function Show-RestoreView {
     $cont = $script:RestoreSectionContainer
     $cont.Controls.Clear()
     $script:RestoreSectionChecks = @{}
-    # v0.22.0: width 168 + stride 178 fits 5 sections (msime_dict added).
-    # See backup_view.ps1 for the layout history.
-    $x = 0
+    # v0.26.0: Two-row grid (3 sections per row x 2 rows). system_evidence
+    # is forced (grey-out + Checked fixed). See backup_view.ps1 for full
+    # layout history.
+    $i = 0
     foreach ($s in $script:SectionList) {
-        $cb = New-StyledCheckBox -Text $s.DisplayName -X $x -Y 4 -Width 168 -Height 22 -Checked ($s.Enabled -eq "1")
+        $col = $i % 3
+        $row = [Math]::Floor($i / 3)
+        $cb = New-StyledCheckBox -Text $s.DisplayName `
+            -X ($col * 300) -Y (4 + $row * 30) -Width 280 -Height 22 `
+            -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
+        if ($s.SectionName -eq 'system_evidence') {
+            $cb.Checked = $true
+            $cb.Enabled = $false
+            $_tt = New-Object System.Windows.Forms.ToolTip
+            $_tt.SetToolTip($cb, "移行証跡として必須。選択不可。")
+        }
         $cont.Controls.Add($cb)
         $script:RestoreSectionChecks[$s.SectionName] = $cb
-        $x += 178
+        $i++
     }
 
     # Target user combo (default = logged-on interactive user)
@@ -684,6 +697,13 @@ function Invoke-RestoreStart {
         msime_dict = @{
             TargetUserProfilePath = $targetUserProfilePath
         }
+        # v0.26.0: system_evidence section. Restore-time copy of the
+        # source-PC evidence into the handoff folder for operator
+        # reference. OperatorHandoffSubdir is filled in below (after
+        # handoff folder resolution); without it the section is a no-op.
+        system_evidence = @{
+            TargetUserProfilePath = $targetUserProfilePath
+        }
     }
 
     $hostForEngine = $script:CurrentHost
@@ -721,12 +741,16 @@ function Invoke-RestoreStart {
             -OldPcName             $oldPcForHandoff
         $script:RestoreHandoffOldPc = $oldPcForHandoff
         $script:RestoreHandoffEnabled = $true
-        $credSubdir    = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'credentials'
-        $outlookSubdir = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'outlook_pop'
+        $credSubdir       = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'credentials'
+        $outlookSubdir    = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'outlook_pop'
+        $sysEvidenceSubdir = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'system_evidence'
         if (-not $sectionParams['credentials']) { $sectionParams['credentials'] = @{} }
         $sectionParams['credentials']['OperatorHandoffSubdir'] = $credSubdir
         if (-not $sectionParams['outlook_pop']) { $sectionParams['outlook_pop'] = @{} }
         $sectionParams['outlook_pop']['OperatorHandoffSubdir'] = $outlookSubdir
+        # v0.26.0
+        if (-not $sectionParams['system_evidence']) { $sectionParams['system_evidence'] = @{} }
+        $sectionParams['system_evidence']['OperatorHandoffSubdir'] = $sysEvidenceSubdir
     }
 
     $userSummary = if ([string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
@@ -773,6 +797,14 @@ operator-facing な設定情報が番号順に集約されています。
   → PST ファイル本体は Documents\Outlook ファイル\ に展開されています
     (Outlook プロファイル設定が指す場所のため、ここには移していません)。
 
+03_移行元PC情報\
+  移行元 PC の構成情報スナップショット (ネットワーク / プリンタ / シリアル /
+  インストール済アプリ / Wi-Fi プロファイル / 環境変数 など)。
+  → 移行先 PC で各設定を手動再現する際の参照資料としてご利用ください。
+  → 採取時の本来のネットワーク設定は _OriginalNetworkConfig.txt をご覧ください
+    (LAN 直結移行で一時 IP に変更している場合、06_NetworkConfig.csv は
+     一時 IP を記録しています)。
+
 このフォルダは作業完了後に削除して構いません。
 
 リストア実行日時 : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
@@ -791,6 +823,9 @@ operator-facing な設定情報が番号順に集約されています。
             }
             if ($sectionParams.ContainsKey('outlook_pop')) {
                 $sectionParams['outlook_pop'].Remove('OperatorHandoffSubdir') | Out-Null
+            }
+            if ($sectionParams.ContainsKey('system_evidence')) {
+                $sectionParams['system_evidence'].Remove('OperatorHandoffSubdir') | Out-Null
             }
             $script:RestoreHandoffEnabled = $false
         }
