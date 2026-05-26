@@ -16,6 +16,42 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.27.1: **section 実行順を再配置** —
+  [backuper/data/sections.csv](backuper/data/sections.csv) の行順を変更し、
+  printer を末尾、userdata を先頭に並べ替え。backup / restore 双方で同順序
+  ([engine.ps1:Get-RegisteredSections](backuper/lib/engine.ps1) が
+  `Import-Csv` した結果を順に process するため)。
+  - **新しい実行順 (1 → 6)**:
+    1. userdata
+    2. outlook_pop
+    3. credentials
+    4. msime_dict
+    5. system_evidence
+    6. printer
+  - **意図**:
+    - 大きい userdata robocopy を先頭で走らせて全体時間を読みやすくする
+    - printer driver install / WSD 解決 / port 作成は所要時間が読めない
+      ため末尾に置き、他 section が確定完了してから余裕を使う
+    - handoff folder (credentials / outlook_pop / system_evidence) は
+      printer より先に完了 → operator は printer 再起動を促される前に
+      handoff folder を確認できる
+  - **不変**:
+    - section interface / manifest schema / SectionParams forward
+    - 各 section の backup/restore ロジック自体
+    - aggregate manifest の sections[] は実行順で並ぶが consumer 側に
+      順序前提はなく、order-independent に判定可能
+    - CheckBox の二段 wrap layout (上段: userdata / outlook_pop /
+      credentials、下段: msime_dict / system_evidence / printer)
+    - fabriq main への書込み なし
+  - **副作用ゼロ**: 各 section の restore I/O は互いに独立 (printer driver
+    install ↔ userdata の Desktop 展開 / outlook_pop の PST 配置 /
+    credentials の Documents deploy / msime_dict の %APPDATA% 配置 /
+    system_evidence の handoff Copy はいずれも他 section に依存しない)。
+    動作上の問題は発生しない。
+  - **VERSION**: 0.27.0 → **0.27.1** (PATCH、internal config 調整)
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映 (EXE 無変更)
+
+### Changed
 - backuper v0.27.0: **リストア画面のバックアップ候補解決を multi-root 化 + UX
   改善** — [backuper/lib/engine.ps1](backuper/lib/engine.ps1) /
   [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1)。
