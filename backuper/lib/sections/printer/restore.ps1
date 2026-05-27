@@ -25,26 +25,48 @@ param(
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $warnings = @()
 
-function _Get-Param {
-    param($Key, $Default)
-    if ($SectionParams.ContainsKey($Key)) { return $SectionParams[$Key] }
-    return $Default
-}
-
-$includePrinters       = $null
+# v0.29.0: SectionParams.
+#   IncludePrinters       : optional string[] -- printer-grid selection
+#                           from restore_view. Empty/null = all printers.
+#   OperatorHandoffSubdir : <handoff>\04_プリンタ. Required (handoff is the
+#                           sole restore path from v0.29.0; if missing the
+#                           section returns Skipped). restore_view always
+#                           provides this when the operator handoff folder
+#                           checkbox is ON; turning the checkbox OFF means
+#                           the printer install simply does not happen,
+#                           consistent with credentials / outlook_pop.
+$includePrinters = $null
 if ($SectionParams.ContainsKey('IncludePrinters') -and `
     $null -ne $SectionParams['IncludePrinters'] -and `
     @($SectionParams['IncludePrinters']).Count -gt 0) {
     $includePrinters = @($SectionParams['IncludePrinters'])
 }
-$strictOsVersion       = [bool](_Get-Param 'StrictOsVersion'       $false)
-$reuseInboxDrivers     = [bool](_Get-Param 'ReuseInboxDrivers'     $true)
-$onConflict            = [string](_Get-Param 'OnConflict'          'skip').ToLower()
-$restoreDefaultPrinter = [bool](_Get-Param 'RestoreDefaultPrinter' $true)
-$skipVirtualPrinters   = [bool](_Get-Param 'SkipVirtualPrinters'   $true)
-$restoreHardwareConfig = [bool](_Get-Param 'RestoreHardwareConfig' $true)
+$handoffSubdir = $null
+if ($SectionParams.ContainsKey('OperatorHandoffSubdir') -and `
+    -not [string]::IsNullOrWhiteSpace($SectionParams['OperatorHandoffSubdir'])) {
+    $handoffSubdir = "$($SectionParams['OperatorHandoffSubdir'])"
+    Show-Info "printer: OperatorHandoffSubdir = $handoffSubdir"
+}
 
-if ($onConflict -ne 'skip' -and $onConflict -ne 'replace') { $onConflict = 'skip' }
+# v0.29.0 Phase 5: handoff-only restore path. If the handoff folder is
+# disabled (checkbox OFF in restore_view), there is no operator-facing
+# target for the printer payload, so the section returns Skipped without
+# touching the local system. This matches the credentials / outlook_pop
+# / system_evidence pattern: turning the handoff checkbox OFF means the
+# operator handles all artifacts manually.
+if ([string]::IsNullOrWhiteSpace($handoffSubdir)) {
+    Show-Skip "printer: handoff folder disabled, restore skipped (printers will NOT be installed)"
+    return [PSCustomObject]@{
+        Status               = 'Skipped'
+        ElapsedMs            = [int]$sw.ElapsedMilliseconds
+        Summary              = [ordered]@{
+            reason = 'Operator handoff folder feature is disabled'
+        }
+        Warnings             = @()
+        ExternalOutputDir    = $null
+        ExternalManifestPath = $null
+    }
+}
 
 # ----------------------------------------------------------
 # Prerequisites
@@ -87,364 +109,395 @@ if ([int]$manifest.schemaVersion -ne 1) {
 }
 
 # ----------------------------------------------------------
-# Compatibility check (osArch hard, osVersion soft)
-# ----------------------------------------------------------
-$targetArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' }
-              elseif ([Environment]::Is64BitOperatingSystem) { 'amd64' }
-              else { 'x86' }
-if ($manifest.osArch -ne $targetArch) {
-    return [PSCustomObject]@{
-        Status = 'Failed'; ElapsedMs = [int]$sw.ElapsedMilliseconds
-        Summary = [ordered]@{}; Warnings = @("Architecture mismatch: backup=$($manifest.osArch), target=$targetArch")
-    }
-}
-$targetOsVersion = [System.Environment]::OSVersion.Version.ToString()
-$osMatches = ($manifest.osVersion -eq $targetOsVersion)
-if (-not $osMatches) {
-    if ($strictOsVersion) {
-        return [PSCustomObject]@{
-            Status = 'Failed'; ElapsedMs = [int]$sw.ElapsedMilliseconds
-            Summary = [ordered]@{}; Warnings = @("osVersion mismatch (strict): backup=$($manifest.osVersion), target=$targetOsVersion")
+# v0.29.0 Phase 2: deploy backup section dir into the operator handoff
+# folder so Phase 3-4 (Install-Printers.ps1 + Install-Printers.bat +
+# README.txt + _printer_settings.txt) have a self-contained payload to
+# drive.
+#
+# v0.29.0 Phase 5a: deploy into a "_data" subdirectory rather than the
+# handoff root, so the operator sees only the small operator-facing
+# fileset (Install-Printers.bat / README.txt / _printer_settings.txt)
+# when they open 04_プリンタ\. The full payload (manifest.json,
+# drivers/, printsettings/, Install-Printers.ps1, etc.) lives under
+# _data\ which the operator does not need to touch. Install-Printers.bat
+# references _data\Install-Printers.ps1 by relative path so the layout
+# is self-contained.
+$handoffDataDir = Join-Path $handoffSubdir '_data'
+$handoffDeployedFiles = 0
+$handoffDeployBytes   = 0L
+if ($handoffSubdir) {
+    try {
+        if (-not (Test-Path -LiteralPath $handoffSubdir)) {
+            $null = New-Item -ItemType Directory -Path $handoffSubdir -Force -ErrorAction Stop
         }
-    }
-    $warnings += "osVersion mismatch: backup=$($manifest.osVersion), target=$targetOsVersion (permissive)"
-}
-
-# ----------------------------------------------------------
-# Filters: RDP redirect + virtual + IncludePrinters
-# ----------------------------------------------------------
-$virtualDriverPatterns = @('Microsoft Print To PDF','Microsoft XPS Document Writer','Microsoft Shared Fax Driver','Microsoft OpenXPS Class Driver','OneNote')
-$virtualPortPatterns   = @('PORTPROMPT:','XPSPort:','FAX:','nul:','SHRFAX:')
-
-function Test-IsRdpRedirect {
-    param($P)
-    if ($P.driverName -eq 'Remote Desktop Easy Print') { return $true }
-    if ($P.portName -match '^TS\d+$') { return $true }
-    return $false
-}
-function Test-IsVirtualPrinter {
-    param($P)
-    foreach ($pat in $virtualDriverPatterns) { if ($P.driverName -like "*$pat*") { return $true } }
-    foreach ($pat in $virtualPortPatterns)   { if ($P.portName -like "*$pat*")   { return $true } }
-    if ($P.portName -like 'OneNote*') { return $true }
-    return $false
-}
-
-$allPrinters = @($manifest.items.printers)
-$plannedPrinters = @()
-$skippedRdp = 0
-$skippedVirtual = 0
-$skippedFilter = 0
-foreach ($p in $allPrinters) {
-    if (Test-IsRdpRedirect -P $p) { $skippedRdp++; continue }
-    if ($skipVirtualPrinters -and (Test-IsVirtualPrinter -P $p)) { $skippedVirtual++; continue }
-    if ($null -ne $includePrinters -and ($p.name -notin $includePrinters)) { $skippedFilter++; continue }
-    $plannedPrinters += $p
-}
-
-if ($plannedPrinters.Count -eq 0) {
-    $sw.Stop()
-    return [PSCustomObject]@{
-        Status = 'Skipped'; ElapsedMs = [int]$sw.ElapsedMilliseconds
-        Summary = [ordered]@{
-            note='no printers to restore'
-            skippedRdp=$skippedRdp; skippedVirtual=$skippedVirtual; skippedFilter=$skippedFilter
+        if (-not (Test-Path -LiteralPath $handoffDataDir)) {
+            $null = New-Item -ItemType Directory -Path $handoffDataDir -Force -ErrorAction Stop
         }
-        Warnings = @($warnings)
+        # Copy every file/dir under sections/printer/ into the handoff
+        # _data subdir. Using -Recurse + wildcard so the destination
+        # keeps the same internal layout under _data\ (manifest.json at
+        # _data root, drivers/, etc.) -- Install-Printers.ps1 resolves
+        # all its sub-paths relative to $PSScriptRoot, which becomes
+        # _data\ once we put the script there.
+        Show-Info "printer: deploying section payload to $handoffDataDir"
+        Copy-Item -Path (Join-Path $sectionDir '*') -Destination $handoffDataDir -Recurse -Force -ErrorAction Stop
+        $deployed = @(Get-ChildItem -LiteralPath $handoffDataDir -Recurse -File -ErrorAction SilentlyContinue)
+        $handoffDeployedFiles = $deployed.Count
+        $handoffDeployBytes   = ($deployed | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+        if ($null -eq $handoffDeployBytes) { $handoffDeployBytes = 0L }
+        Show-Success ("printer: handoff payload deployed ({0} files, {1:N1} MB)" -f $handoffDeployedFiles, ($handoffDeployBytes / 1MB))
+    } catch {
+        $msg = "Handoff Copy failed: $($_.Exception.Message)"
+        $warnings += $msg
+        Show-Warning "printer: $msg"
     }
-}
 
-Show-Info "Restoring $($plannedPrinters.Count) printer(s) (skipped: RDP=$skippedRdp, virtual=$skippedVirtual, filter=$skippedFilter)"
+    # v0.29.0 Phase 3: emit Install-Printers.ps1 alongside the copied
+    # payload. The script faithfully mirrors the legacy auto-install
+    # path's Phase A-E (driver install / port create / printer add /
+    # Spooler restart + HKLM hwconfig + HKCU DEVMODE / default printer)
+    # so the operator gets identical results from running 登録.bat as
+    # they would from the in-engine auto-install. Resolve-HkcuRoot is
+    # inlined because the batch is a standalone script and cannot
+    # dot-source backuper/common.ps1.
+    #
+    # Encoding: this restore.ps1 file is BOM-tagged so the here-string
+    # below can carry Japanese console messages safely. We write the
+    # output with UTF8Encoding($true) so PS5.1 in the operator's
+    # admin-elevated session decodes it correctly.
+    # ASCII-only here-string (CLAUDE.md rule 5): this restore.ps1 has
+    # been observed without a UTF-8 BOM on operator machines. Any
+    # Japanese inside this here-string would be ANSI-mis-decoded by
+    # PS5.1 and the resulting Install-Printers.ps1 would carry mojibake.
+    # All operator-visible messages are therefore plain English. The
+    # README.txt and _printer_settings.txt next to this script provide
+    # the same information in Japanese.
+    $installPs1 = @'
+# ============================================================
+# Fabriq Printer Restore - Install-Printers.ps1
+#
+# Launched by Install-Printers.bat (in the parent folder) via UAC
+# elevation. Reads the source PC manifest.json from the same _data
+# folder and replays Phase A-E (driver / port / printer / DEVMODE /
+# default printer).
+#
+# Requirements:
+#   * Run while logged on as the restore-target user. DEVMODE is a
+#     per-user HKCU setting; the script auto-redirects to HKU\<SID>
+#     when running under cross-user admin elevation, but running as
+#     the target user is the safest path.
+#   * Internet access lets Windows Update auto-fill missing inbox
+#     drivers if needed.
+# ============================================================
 
-# v0.21.0: WSD-port rewrite map. Filled while building ports below
-# (and via backward-compat IPv4 mining from printer.location for
-# manifests produced by v0.20.x or earlier). After that loop, each
-# planned printer's portName is rewritten via this map before Add-Printer.
-$portNameRewrites = @{}
-function Get-IPv4FromLocationCompat {
-    param([string]$Location)
-    if ([string]::IsNullOrWhiteSpace($Location)) { return $null }
-    $m = [System.Text.RegularExpressions.Regex]::Match(
-        $Location,
-        '(?<!\d)((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?!\d)')
-    if ($m.Success) { return $m.Groups[1].Value }
-    return $null
-}
-function Resolve-WsdHost {
-    param($PortEntry, $PlannedPrinters)
-    if ($PortEntry.PSObject.Properties.Name -contains 'wsdResolvedHost' -and `
-        -not [string]::IsNullOrWhiteSpace($PortEntry.wsdResolvedHost)) {
-        return [string]$PortEntry.wsdResolvedHost
-    }
-    # Backward-compat for manifests written by v0.20.x and earlier.
-    $referringPrinter = @($PlannedPrinters | Where-Object { $_.portName -eq $PortEntry.name } | Select-Object -First 1)
-    if ($referringPrinter.Count -gt 0) {
-        return (Get-IPv4FromLocationCompat -Location $referringPrinter[0].location)
-    }
-    return $null
-}
+$ErrorActionPreference = 'Continue'
 
-# Conflict snapshot
-$existingPrinters = @{}
-foreach ($e in @(Get-Printer -ErrorAction SilentlyContinue)) { $existingPrinters[$e.Name] = $e }
-$existingPorts = @{}
-foreach ($e in @(Get-PrinterPort -ErrorAction SilentlyContinue)) { $existingPorts[$e.Name] = $e }
-$existingDriverNames = @{}
-foreach ($e in @(Get-PrinterDriver -ErrorAction SilentlyContinue)) { $existingDriverNames[$e.Name] = $true }
-
-$referencedPortNames = @($plannedPrinters | ForEach-Object { $_.portName } | Sort-Object -Unique)
-$referencedDriverNames = @($plannedPrinters | ForEach-Object { $_.driverName } | Sort-Object -Unique)
-$plannedPorts = @($manifest.items.ports | Where-Object { $_.name -in $referencedPortNames })
-$plannedDrivers = @($manifest.items.drivers | Where-Object { $_.driverName -in $referencedDriverNames })
+# Force console output to UTF-8 so Japanese printer names render
+# correctly in Write-Host even when the host console codepage is
+# CP932. PS5.1's internal strings are UTF-16, but Write-Host
+# encodes via [Console]::OutputEncoding before writing -- setting
+# this to UTF-8 keeps non-ASCII characters intact end-to-end.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 # ----------------------------------------------------------
-# Phase A: Drivers
+# A0: Self-Elevate (UAC)
 # ----------------------------------------------------------
-$driverSuccess = 0; $driverSkip = 0; $driverFail = 0
-$payloadGroups = @{}
-foreach ($d in $plannedDrivers) {
-    $key = if ($d.backupFolder) { $d.backupFolder } else { '__no_payload__' }
-    if (-not $payloadGroups.ContainsKey($key)) { $payloadGroups[$key] = @() }
-    $payloadGroups[$key] += $d
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host ""
+    Write-Host "  Administrator privileges required. Relaunching via UAC..." -ForegroundColor Yellow
+    Start-Process -FilePath PowerShell.exe -Verb RunAs `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    exit
 }
 
-foreach ($key in @($payloadGroups.Keys)) {
-    $drivers = $payloadGroups[$key]
-    $firstDriver = $drivers[0]
-    $useExisting = $false
-    if ($key -eq '__no_payload__') { $useExisting = $true }
-    elseif ($reuseInboxDrivers -and ($firstDriver.isInboxDriver -or $firstDriver.manufacturer -eq 'Microsoft')) {
-        $useExisting = $true
-    }
+# ----------------------------------------------------------
+# A1: Banner + Prerequisites
+# ----------------------------------------------------------
+Clear-Host
+Write-Host ""
+Write-Host "  ============================================================" -ForegroundColor Cyan
+Write-Host "    Fabriq Printer Restore" -ForegroundColor Cyan
+Write-Host "  ============================================================" -ForegroundColor Cyan
+Write-Host ""
 
-    $storeInfPath = $null
-    if (-not $useExisting) {
-        $payloadDir = Join-Path $sectionDir $firstDriver.backupFolder
-        if (-not (Test-Path $payloadDir)) {
-            $warnings += "Driver payload missing: $($firstDriver.backupFolder)"
-            $useExisting = $true
+try {
+    $spooler = Get-Service -Name Spooler -ErrorAction Stop
+    if ($spooler.Status -ne 'Running') {
+        Write-Host "  [FATAL] Print Spooler service is not running (Status=$($spooler.Status))." -ForegroundColor Red
+        Write-Host "          Start the Spooler service via services.msc and try again." -ForegroundColor Red
+        Read-Host "  Press Enter to close"
+        exit 1
+    }
+} catch {
+    Write-Host "  [FATAL] Spooler check failed: $($_.Exception.Message)" -ForegroundColor Red
+    Read-Host "  Press Enter to close"
+    exit 1
+}
+
+# ----------------------------------------------------------
+# A2: manifest.json
+# ----------------------------------------------------------
+$baseDir      = $PSScriptRoot
+$manifestPath = Join-Path $baseDir 'manifest.json'
+if (-not (Test-Path -LiteralPath $manifestPath)) {
+    Write-Host "  [FATAL] manifest.json not found: $manifestPath" -ForegroundColor Red
+    Read-Host "  Press Enter to close"
+    exit 1
+}
+try {
+    # -Encoding UTF8 ensures Japanese printer names decode correctly
+    # regardless of whether the manifest carries a BOM. PS5.1's default
+    # Get-Content falls back to ANSI (CP932 on JP locales) for BOM-less
+    # files, which would mojibake non-ASCII printer names.
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+} catch {
+    Write-Host "  [FATAL] manifest.json parse failed: $($_.Exception.Message)" -ForegroundColor Red
+    Read-Host "  Press Enter to close"
+    exit 1
+}
+if ($manifest.manifestType -ne 'fabriq-printer-backup') {
+    Write-Host "  [FATAL] Unexpected manifestType: $($manifest.manifestType)" -ForegroundColor Red
+    Read-Host "  Press Enter to close"
+    exit 1
+}
+
+Write-Host "  manifest   : $manifestPath"
+Write-Host "  Source PC  : $($manifest.computerName)  (captured: $($manifest.collectedAt))"
+Write-Host "  Counts     : $($manifest.counts.printer) printer(s) / $($manifest.counts.port) port(s) / $($manifest.counts.driverRegistered) driver(s)"
+Write-Host ""
+
+$warnings    = @()
+$successList = @()
+$failureList = @()
+$skipList    = @()
+
+# ----------------------------------------------------------
+# Phase A: Driver install (pnputil + Add-PrinterDriver)
+# ----------------------------------------------------------
+Write-Host "  ----- Phase A: Driver install -----" -ForegroundColor Cyan
+$drivers = @($manifest.items.drivers)
+foreach ($drv in $drivers) {
+    $name = $drv.driverName
+    try {
+        if ($drv.isInboxDriver) {
+            Write-Host "    [INBOX] $name  ... " -NoNewline
+            Add-PrinterDriver -Name $name -ErrorAction Stop
+            Write-Host "OK" -ForegroundColor Green
         } else {
-            $infFile = @(Get-ChildItem -Path $payloadDir -Filter *.inf -File -ErrorAction SilentlyContinue) | Select-Object -First 1
-            if ($null -eq $infFile) {
-                $warnings += "No .inf in $payloadDir"
-                $useExisting = $true
-            } else {
-                $null = & pnputil /add-driver $infFile.FullName /install 2>&1
-                $infBase = [System.IO.Path]::GetFileNameWithoutExtension($infFile.Name).ToLower()
-                $repo = 'C:\Windows\System32\DriverStore\FileRepository'
-                $storeDir = @(Get-ChildItem -Path $repo -Directory -Filter "${infBase}.inf_${targetArch}_*" -ErrorAction SilentlyContinue |
-                              Sort-Object LastWriteTime -Descending) | Select-Object -First 1
-                if ($null -eq $storeDir) {
-                    $warnings += "DriverStore folder not found for $infBase"
-                    $useExisting = $true
-                } else {
-                    $storeInfPath = Join-Path $storeDir.FullName $infFile.Name
-                    if (-not (Test-Path $storeInfPath)) {
-                        $warnings += "Store INF not found: $storeInfPath"
-                        $useExisting = $true
+            $driverDir = Join-Path $baseDir $drv.backupFolder
+            if (-not (Test-Path -LiteralPath $driverDir)) {
+                throw "driver folder not found: $driverDir"
+            }
+            $infFile = Get-ChildItem -LiteralPath $driverDir -Filter *.inf -File -ErrorAction Stop | Select-Object -First 1
+            if (-not $infFile) { throw "inf not found in $driverDir" }
+            Write-Host "    [OEM]   $name  ($($infFile.Name))  ... " -NoNewline
+            $pnputilOut = & pnputil.exe /add-driver $infFile.FullName /install 2>&1
+            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 259) {
+                # 259 = ERROR_NO_MORE_ITEMS (driver already in store)
+                Write-Host "pnputil exit=$LASTEXITCODE" -ForegroundColor Yellow
+                $warnings += "pnputil $name exit=$LASTEXITCODE : $pnputilOut"
+            }
+            Add-PrinterDriver -Name $name -ErrorAction Stop
+            Write-Host "OK" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "FAIL: $($_.Exception.Message)" -ForegroundColor Red
+        $warnings += "driver '$name': $($_.Exception.Message)"
+    }
+}
+Write-Host ""
+
+# ----------------------------------------------------------
+# Phase B: Port creation (+ WSD rescue map)
+# ----------------------------------------------------------
+Write-Host "  ----- Phase B: Port creation -----" -ForegroundColor Cyan
+$portRewriteMap = @{}
+$ports = @($manifest.items.ports)
+foreach ($port in $ports) {
+    $pname = $port.name
+    if (Get-PrinterPort -Name $pname -ErrorAction SilentlyContinue) {
+        Write-Host "    [SKIP]  $pname (exists)"
+        continue
+    }
+    try {
+        switch -Regex ($port.portType) {
+            '^TCPIP$' {
+                $addArgs = @{
+                    Name               = $pname
+                    PrinterHostAddress = $port.printerHostAddress
+                }
+                if ($port.portNumber)  { $addArgs['PortNumber']    = [int]$port.portNumber }
+                if ($port.snmpEnabled) { $addArgs['SNMP']          = 1; $addArgs['SNMPCommunity'] = $port.snmpCommunity }
+                Add-PrinterPort @addArgs -ErrorAction Stop
+                $hostInfo = "$($port.printerHostAddress) port $($port.portNumber)"
+                Write-Host "    [TCPIP] $pname -> $hostInfo" -ForegroundColor Green
+            }
+            '^LPR$' {
+                Add-PrinterPort -Name $pname -LprHostAddress $port.lprHostName `
+                    -LprQueueName $port.lprQueueName -ErrorAction Stop
+                Write-Host "    [LPR]   $pname -> $($port.lprHostName) queue=$($port.lprQueueName)" -ForegroundColor Green
+            }
+            '^WSD$' {
+                if (-not [string]::IsNullOrWhiteSpace($port.wsdResolvedHost)) {
+                    $newName = "IP_$($port.wsdResolvedHost)"
+                    if (-not (Get-PrinterPort -Name $newName -ErrorAction SilentlyContinue)) {
+                        Add-PrinterPort -Name $newName -PrinterHostAddress $port.wsdResolvedHost `
+                            -PortNumber 9100 -ErrorAction Stop
                     }
+                    $portRewriteMap[$pname] = $newName
+                    Write-Host "    [WSD->TCPIP] $pname -> $newName  (host=$($port.wsdResolvedHost) port 9100)" -ForegroundColor Green
+                } else {
+                    Write-Host "    [WSD]   $pname (no wsdResolvedHost; manual re-add required)" -ForegroundColor Yellow
+                    $warnings += "WSD port '$pname' has no wsdResolvedHost; needs manual re-add"
                 }
             }
-        }
-    }
-
-    foreach ($d in $drivers) {
-        if ($existingDriverNames.ContainsKey($d.driverName)) {
-            Show-Skip "Driver already registered: $($d.driverName)"
-            $driverSkip++
-            continue
-        }
-        if ($useExisting) {
-            try {
-                Add-PrinterDriver -Name $d.driverName -ErrorAction Stop
-                Show-Success "Driver registered (inbox): $($d.driverName)"
-                $driverSuccess++
-            } catch {
-                $warnings += "Add-PrinterDriver inbox failed for '$($d.driverName)': $($_.Exception.Message)"
-                $driverFail++
+            '^Local$' {
+                Write-Host "    [LOCAL] $pname (Spooler internal, skipped)"
             }
-            continue
+            default {
+                Write-Host "    [Other] $pname (type=$($port.portType), skipped)" -ForegroundColor Yellow
+                $warnings += "port '$pname' has unsupported type $($port.portType)"
+            }
         }
-        try {
-            Add-PrinterDriver -Name $d.driverName -InfPath $storeInfPath -ErrorAction Stop
-            Show-Success "Driver registered: $($d.driverName)"
-            $driverSuccess++
-        } catch {
-            $warnings += "Add-PrinterDriver failed for '$($d.driverName)': $($_.Exception.Message)"
-            $driverFail++
-        }
+    } catch {
+        Write-Host "    [FAIL]  $pname : $($_.Exception.Message)" -ForegroundColor Red
+        $warnings += "port '$pname': $($_.Exception.Message)"
     }
 }
+Write-Host ""
 
 # ----------------------------------------------------------
-# Phase B: Ports
+# Phase C: Printer add + Properties
 # ----------------------------------------------------------
-$portSuccess = 0; $portSkip = 0; $portFail = 0
-foreach ($port in $plannedPorts) {
-    if ($existingPorts.ContainsKey($port.name)) {
-        Show-Skip "Port exists: $($port.name)"; $portSkip++; continue
-    }
-    switch ($port.portType) {
-        'TCPIP' {
-            if ([string]::IsNullOrWhiteSpace($port.printerHostAddress)) { $warnings += "TCPIP port missing host: $($port.name)"; $portFail++; break }
-            try {
-                $p = @{ Name = $port.name; PrinterHostAddress = $port.printerHostAddress; ErrorAction = 'Stop' }
-                if ($port.portNumber) { $p['PortNumber'] = [int]$port.portNumber }
-                Add-PrinterPort @p
-                Show-Success "TCPIP port: $($port.name)"; $portSuccess++
-            } catch { $warnings += "TCPIP port failed $($port.name): $($_.Exception.Message)"; $portFail++ }
-        }
-        'LPR' {
-            if ([string]::IsNullOrWhiteSpace($port.lprHostName)) { $warnings += "LPR port missing host: $($port.name)"; $portFail++; break }
-            try {
-                Add-PrinterPort -Name $port.name -LprHostName $port.lprHostName -LprQueueName $port.lprQueueName -ErrorAction Stop
-                Show-Success "LPR port: $($port.name)"; $portSuccess++
-            } catch { $warnings += "LPR port failed $($port.name): $($_.Exception.Message)"; $portFail++ }
-        }
-        'Local'   { $portSkip++ }
-        'WSD'     {
-            # v0.21.0: WSD ports cannot be re-created via Add-PrinterPort
-            # (PnP-X / WS-Discovery is required, and the source UUID is
-            # rarely reproducible on the target PC). Mine the IPv4 we
-            # saved at backup time (wsdResolvedHost) - falling back to
-            # the referring printer's Location URL for legacy manifests -
-            # and create a TCP/IP standard port (RAW 9100) in its place.
-            $wsdHost = Resolve-WsdHost -PortEntry $port -PlannedPrinters $plannedPrinters
-            if ([string]::IsNullOrWhiteSpace($wsdHost)) {
-                $warnings += "WSD port '$($port.name)': no IPv4 resolvable, port skipped (referring printers will fail)"
-                $portSkip++
-                break
-            }
-            $rewriteName = "IP_$wsdHost"
-            if ($existingPorts.ContainsKey($rewriteName)) {
-                Show-Skip "WSD->TCPIP rewrite target exists: $rewriteName (reusing for $($port.name))"
-                $portNameRewrites[$port.name] = $rewriteName
-                $portSkip++
-                break
-            }
-            try {
-                Add-PrinterPort -Name $rewriteName -PrinterHostAddress $wsdHost -PortNumber 9100 -ErrorAction Stop
-                $portNameRewrites[$port.name] = $rewriteName
-                Show-Success "WSD->TCPIP rewrite: '$($port.name)' -> '$rewriteName' (host=$wsdHost, port=9100)"
-                $portSuccess++
-            } catch {
-                $warnings += "WSD->TCPIP rewrite failed for '$($port.name)' (host=$wsdHost): $($_.Exception.Message)"
-                $portFail++
-            }
-        }
-        'Bonjour' { $warnings += "Bonjour port skipped: $($port.name)"; $portSkip++ }
-        default   { $warnings += "Unsupported port type '$($port.portType)': $($port.name)"; $portSkip++ }
-    }
-}
-
-# ----------------------------------------------------------
-# Phase C: Printers + Set-PrintConfiguration (PrintTicket + explicit fields)
-# ----------------------------------------------------------
-$printerSuccess = 0; $printerSkip = 0; $printerFail = 0
+Write-Host "  ----- Phase C: Printer add -----" -ForegroundColor Cyan
+$printers = @($manifest.items.printers)
 $restoredPrinterNames = @()
-$settingsSuccess = 0; $settingsSkip = 0; $settingsFail = 0
-
-foreach ($p in $plannedPrinters) {
-    if ($existingPrinters.ContainsKey($p.name)) {
-        if ($onConflict -eq 'skip') { Show-Skip "Printer exists (skip): $($p.name)"; $printerSkip++; continue }
-        try { Remove-Printer -Name $p.name -ErrorAction Stop; Show-Info "Removed (replace): $($p.name)" }
-        catch { $warnings += "Replace failed for $($p.name): $($_.Exception.Message)"; $printerFail++; continue }
+foreach ($p in $printers) {
+    $pname = $p.name
+    if (Get-Printer -Name $pname -ErrorAction SilentlyContinue) {
+        Write-Host "    [SKIP] $pname (exists)"
+        $skipList += $pname
+        continue
     }
-    # v0.21.0: apply WSD->TCPIP port-name rewrite to this printer's
-    # portName. If the WSD port was successfully (or pre-existently)
-    # rewritten in Phase B, use the new name; otherwise the original
-    # name is kept and Add-Printer will fail honestly.
-    $effectivePortName = if ($portNameRewrites.ContainsKey($p.portName)) {
-        $portNameRewrites[$p.portName]
+    $effectivePort = if ($portRewriteMap.ContainsKey($p.portName)) {
+        $portRewriteMap[$p.portName]
     } else { $p.portName }
-    if ($effectivePortName -ne $p.portName) {
-        Show-Info "Printer '$($p.name)': portName '$($p.portName)' -> '$effectivePortName' (WSD->TCPIP)"
-    }
 
     try {
-        Add-Printer -Name $p.name -DriverName $p.driverName -PortName $effectivePortName -ErrorAction Stop
-        Show-Success "Printer: $($p.name)"
-        $printerSuccess++
-        $restoredPrinterNames += $p.name
-
-        try {
-            if ($p.shared -and -not [string]::IsNullOrWhiteSpace($p.shareName)) { Set-Printer -Name $p.name -Shared $true -ShareName $p.shareName -ErrorAction Stop }
-            if (-not [string]::IsNullOrWhiteSpace($p.comment))  { Set-Printer -Name $p.name -Comment $p.comment -ErrorAction SilentlyContinue }
-            if (-not [string]::IsNullOrWhiteSpace($p.location)) { Set-Printer -Name $p.name -Location $p.location -ErrorAction SilentlyContinue }
-        } catch { $warnings += "Set-Printer attr failed for $($p.name): $($_.Exception.Message)" }
+        $addArgs = @{
+            Name       = $pname
+            DriverName = $p.driverName
+            PortName   = $effectivePort
+        }
+        if ($p.shared -and -not [string]::IsNullOrWhiteSpace($p.shareName)) {
+            $addArgs['Shared']    = $true
+            $addArgs['ShareName'] = $p.shareName
+        }
+        if (-not [string]::IsNullOrWhiteSpace($p.comment))  { $addArgs['Comment']  = $p.comment }
+        if (-not [string]::IsNullOrWhiteSpace($p.location)) { $addArgs['Location'] = $p.location }
+        if ($p.published) { $addArgs['Published'] = $true }
+        Add-Printer @addArgs -ErrorAction Stop
+        $portLabel = "port=$effectivePort driver=$($p.driverName)"
+        Write-Host "    [OK] $pname  ($portLabel)" -ForegroundColor Green
+        $successList += $pname
+        $restoredPrinterNames += $pname
     } catch {
-        $warnings += "Add-Printer failed for $($p.name): $($_.Exception.Message)"
-        $printerFail++
+        Write-Host "    [FAIL] $pname : $($_.Exception.Message)" -ForegroundColor Red
+        $failureList += $pname
+        $warnings += "printer '$pname' add: $($_.Exception.Message)"
         continue
     }
 
-    # Apply PrintTicketXML + explicit fields (color etc.)
-    if (-not [string]::IsNullOrWhiteSpace($p.printSettingsFile)) {
-        $xmlPath = Join-Path $sectionDir $p.printSettingsFile
-        if (Test-Path $xmlPath) {
-            try {
-                $cfgObj = Import-Clixml -Path $xmlPath -ErrorAction Stop
-                if (-not [string]::IsNullOrWhiteSpace($cfgObj.PrintTicketXML)) {
-                    Set-PrintConfiguration -PrinterName $p.name -PrintTicketXml $cfgObj.PrintTicketXML -ErrorAction Stop
-                    $settingsSuccess++
-                }
-                foreach ($field in @('Color','Collate','DuplexingMode','PaperSize','PaperSource','PrintQuality')) {
-                    $raw = $cfgObj.$field
-                    if ($null -eq $raw -or "$raw" -eq '') { continue }
-                    try {
-                        $val = if ($field -in @('Color','Collate')) { [System.Convert]::ToBoolean($raw) } else { "$raw" }
-                        $params = @{ PrinterName = $p.name; $field = $val; ErrorAction = 'Stop' }
-                        Set-PrintConfiguration @params
-                    } catch { $warnings += "Set-PrintConfiguration -$field failed for $($p.name): $($_.Exception.Message)" }
-                }
-            } catch { $warnings += "Set-PrintConfiguration failed for $($p.name): $($_.Exception.Message)"; $settingsFail++ }
-        }
-    }
+    # properties
     if (-not [string]::IsNullOrWhiteSpace($p.propertiesFile)) {
-        $propPath = Join-Path $sectionDir $p.propertiesFile
-        if (Test-Path $propPath) {
+        $propPath = Join-Path $baseDir $p.propertiesFile
+        if (Test-Path -LiteralPath $propPath) {
             try {
-                $props = Get-Content -Path $propPath -Raw | ConvertFrom-Json
+                $props = Get-Content -LiteralPath $propPath -Raw -Encoding UTF8 | ConvertFrom-Json
                 foreach ($prop in @($props)) {
+                    if ($null -eq $prop) { continue }
                     if ([string]::IsNullOrWhiteSpace($prop.PropertyName)) { continue }
-                    try { Set-PrinterProperty -PrinterName $p.name -PropertyName $prop.PropertyName -Value $prop.Value -ErrorAction Stop } catch { }
+                    try {
+                        Set-PrinterProperty -PrinterName $pname `
+                            -PropertyName $prop.PropertyName -Value $prop.Value -ErrorAction Stop
+                    } catch { }
                 }
             } catch { }
         }
     }
 }
+Write-Host ""
 
 # ----------------------------------------------------------
-# Phase D: Spooler restart (if hw config will be restored)
+# Phase D: Spooler restart + HKLM hwconfig + HKCU DEVMODE
 # ----------------------------------------------------------
-$hwConfigRestoredCount = 0
-$anyHwConfigPlanned = $restoreHardwareConfig -and @($plannedPrinters | Where-Object { -not [string]::IsNullOrWhiteSpace($_.hwConfigFile) }).Count -gt 0
-$anyDevModePlanned  = @($plannedPrinters | Where-Object { -not [string]::IsNullOrWhiteSpace($_.devModeFile) }).Count -gt 0
+$anyHwConfig = @($printers | Where-Object { -not [string]::IsNullOrWhiteSpace($_.hwConfigFile) }).Count -gt 0
+$anyDevMode  = @($printers | Where-Object { -not [string]::IsNullOrWhiteSpace($_.devModeFile)  }).Count -gt 0
 
-if ($anyHwConfigPlanned -or $anyDevModePlanned) {
-    Show-Info "Restarting Spooler before HW config / DEVMODE writes..."
+if ($anyHwConfig -or $anyDevMode) {
+    Write-Host "  ----- Phase D: Settings (DEVMODE / hwconfig) -----" -ForegroundColor Cyan
+    Write-Host "    Restarting Spooler..."
     try {
         Restart-Service -Name Spooler -Force -ErrorAction Stop
         Start-Sleep -Seconds 2
-        Show-Success "Spooler restarted"
-    } catch { $warnings += "Spooler restart failed: $($_.Exception.Message)" }
+        Write-Host "    Spooler restarted OK" -ForegroundColor Green
+    } catch {
+        Write-Host "    Spooler restart failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        $warnings += "Spooler restart: $($_.Exception.Message)"
+    }
 }
 
-# Pass 2 (after Spooler restart): HKLM hwconfig + HKCU DevModePerUser
-$hkcuInfo = Resolve-HkcuRoot
-if ($hkcuInfo.Redirected) { Show-Info "Per-user DEVMODE target: $($hkcuInfo.Label) [SID=$($hkcuInfo.SID)]" }
-$devModeKey = $hkcuInfo.PsDrivePath + '\Printers\DevModePerUser'
-
-foreach ($p in $plannedPrinters) {
-    if ($p.name -notin $restoredPrinterNames -and -not $existingPrinters.ContainsKey($p.name)) { continue }
-
-    # HKLM PrinterDriverData
-    if ($restoreHardwareConfig -and -not [string]::IsNullOrWhiteSpace($p.hwConfigFile)) {
-        $hwConfigPath = Join-Path $sectionDir $p.hwConfigFile
-        if (Test-Path $hwConfigPath) {
-            $hwRegPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers\$($p.name)\PrinterDriverData"
+# Resolve-HkcuRoot inline: prefer the interactive logged-on user's HKU
+# hive when running under cross-user admin elevation (mirrors backuper/
+# common.ps1 Resolve-HkcuRoot). Falls back to HKCU: when current user
+# is the interactive user.
+function Get-HandoffHkcuRoot {
+    $currentSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $loggedSid  = $null
+    try {
+        $explorer = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop |
+                    Select-Object -First 1
+        if ($explorer) {
+            $owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwner -ErrorAction Stop
+            if ($owner.User -and $owner.Domain) {
+                $nt = New-Object Security.Principal.NTAccount($owner.Domain, $owner.User)
+                $loggedSid = ($nt.Translate([Security.Principal.SecurityIdentifier])).Value
+            }
+        }
+    } catch {}
+    if ($loggedSid -and $loggedSid -ne $currentSid) {
+        if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
             try {
-                $hwDump = Get-Content -Path $hwConfigPath -Raw | ConvertFrom-Json
+                $null = New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS -Scope Global -ErrorAction Stop
+            } catch { return @{ PsDrivePath = 'HKCU:'; Redirected = $false; SID = $currentSid } }
+        }
+        if (Test-Path "HKU:\$loggedSid") {
+            return @{ PsDrivePath = "HKU:\$loggedSid"; Redirected = $true; SID = $loggedSid }
+        }
+    }
+    return @{ PsDrivePath = 'HKCU:'; Redirected = $false; SID = $currentSid }
+}
+
+$hkcuInfo   = Get-HandoffHkcuRoot
+$devModeKey = "$($hkcuInfo.PsDrivePath)\Printers\DevModePerUser"
+if ($hkcuInfo.Redirected) {
+    Write-Host "    DEVMODE target: $($hkcuInfo.PsDrivePath) (SID=$($hkcuInfo.SID))"
+}
+
+foreach ($p in $printers) {
+    $pname = $p.name
+    if ($pname -notin $restoredPrinterNames -and -not (Get-Printer -Name $pname -ErrorAction SilentlyContinue)) {
+        continue
+    }
+    # HKLM hwconfig
+    if (-not [string]::IsNullOrWhiteSpace($p.hwConfigFile)) {
+        $hwConfigPath = Join-Path $baseDir $p.hwConfigFile
+        if (Test-Path -LiteralPath $hwConfigPath) {
+            $hwRegPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers\$pname\PrinterDriverData"
+            try {
+                $hwDump = Get-Content -LiteralPath $hwConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
                 if (-not (Test-Path $hwRegPath)) { $null = New-Item -Path $hwRegPath -Force -ErrorAction Stop }
                 $restoredValues = 0
                 foreach ($prop in $hwDump.PSObject.Properties) {
@@ -462,68 +515,225 @@ foreach ($p in $plannedPrinters) {
                         }
                         $null = New-ItemProperty -Path $hwRegPath -Name $vname -Value $decoded -PropertyType $info.Type -Force -ErrorAction Stop
                         $restoredValues++
-                    } catch { $warnings += "HwConfig value '$vname' on '$($p.name)' failed: $($_.Exception.Message)" }
+                    } catch {
+                        $warnings += "hwconfig '$vname' on '$pname': $($_.Exception.Message)"
+                    }
                 }
                 if ($restoredValues -gt 0) {
-                    Show-Success "HW config restored: $($p.name) ($restoredValues values)"
-                    $hwConfigRestoredCount++
+                    Write-Host "    [hwconfig] $pname : $restoredValues values" -ForegroundColor Green
                 }
-            } catch { $warnings += "HwConfig restore failed for '$($p.name)': $($_.Exception.Message)" }
+            } catch {
+                $warnings += "hwconfig '$pname': $($_.Exception.Message)"
+            }
         }
     }
-
-    # HKCU DevModePerUser
+    # HKCU DEVMODE
     if (-not [string]::IsNullOrWhiteSpace($p.devModeFile)) {
-        $devModePath = Join-Path $sectionDir $p.devModeFile
-        if (Test-Path $devModePath) {
+        $devModePath = Join-Path $baseDir $p.devModeFile
+        if (Test-Path -LiteralPath $devModePath) {
             try {
-                $b64 = (Get-Content -Path $devModePath -Raw -ErrorAction Stop).Trim()
+                $b64 = (Get-Content -LiteralPath $devModePath -Raw -ErrorAction Stop).Trim()
                 if (-not [string]::IsNullOrWhiteSpace($b64)) {
                     $blob = [Convert]::FromBase64String($b64)
                     if (-not (Test-Path $devModeKey)) { $null = New-Item -Path $devModeKey -Force -ErrorAction Stop }
-                    $null = New-ItemProperty -Path $devModeKey -Name $p.name -Value $blob -PropertyType Binary -Force -ErrorAction Stop
-                    Show-Success "DEVMODE restored: $($p.name)"
+                    $null = New-ItemProperty -Path $devModeKey -Name $pname -Value $blob -PropertyType Binary -Force -ErrorAction Stop
+                    Write-Host "    [DEVMODE]  $pname" -ForegroundColor Green
                 }
-            } catch { $warnings += "DEVMODE restore failed for '$($p.name)': $($_.Exception.Message)" }
+            } catch {
+                $warnings += "DEVMODE '$pname': $($_.Exception.Message)"
+            }
         }
     }
 }
+Write-Host ""
 
 # ----------------------------------------------------------
 # Phase E: Default printer
 # ----------------------------------------------------------
-if ($restoreDefaultPrinter -and -not [string]::IsNullOrWhiteSpace($manifest.defaultPrinter)) {
+if (-not [string]::IsNullOrWhiteSpace($manifest.defaultPrinter)) {
     $defName = $manifest.defaultPrinter
-    $wasPlanned = @($plannedPrinters | Where-Object { $_.name -eq $defName }).Count -gt 0
-    if ($wasPlanned) {
-        $defExists = $null -ne (Get-Printer -Name $defName -ErrorAction SilentlyContinue)
-        if ($defExists) {
-            try {
-                $shell = New-Object -ComObject WScript.Network
-                $shell.SetDefaultPrinter($defName)
-                Show-Success "Default printer set: $defName"
-            } catch { $warnings += "SetDefaultPrinter failed: $($_.Exception.Message)" }
+    Write-Host "  ----- Phase E: Default printer -----" -ForegroundColor Cyan
+    if (Get-Printer -Name $defName -ErrorAction SilentlyContinue) {
+        try {
+            (New-Object -ComObject WScript.Network).SetDefaultPrinter($defName)
+            Write-Host "    [OK] Default printer: $defName" -ForegroundColor Green
+        } catch {
+            Write-Host "    [WARN] Default printer set failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            $warnings += "default printer '$defName': $($_.Exception.Message)"
+        }
+    } else {
+        Write-Host "    [SKIP] Default printer '$defName' is not installed" -ForegroundColor Yellow
+    }
+    Write-Host ""
+}
+
+# ----------------------------------------------------------
+# Summary
+# ----------------------------------------------------------
+Write-Host "  ============================================================" -ForegroundColor Cyan
+Write-Host "    Done" -ForegroundColor Cyan
+Write-Host "  ============================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "    Success : $($successList.Count)"
+foreach ($n in $successList) { Write-Host "        - $n" -ForegroundColor Green }
+if ($skipList.Count -gt 0) {
+    Write-Host "    Skipped : $($skipList.Count) (already exist)"
+    foreach ($n in $skipList) { Write-Host "        - $n" -ForegroundColor DarkGray }
+}
+if ($failureList.Count -gt 0) {
+    Write-Host "    FAIL    : $($failureList.Count)" -ForegroundColor Red
+    foreach ($n in $failureList) { Write-Host "        - $n" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "    >>> Manually re-add any failed printers: <<<" -ForegroundColor Yellow
+    Write-Host "        Control Panel -> Devices and Printers -> Add a printer" -ForegroundColor Yellow
+    Write-Host "        IP and driver info is in _printer_settings.txt." -ForegroundColor Yellow
+}
+if ($warnings.Count -gt 0) {
+    Write-Host ""
+    Write-Host "    Warnings: $($warnings.Count)" -ForegroundColor Yellow
+    foreach ($w in $warnings) { Write-Host "        - $w" -ForegroundColor DarkYellow }
+}
+Write-Host ""
+Read-Host "  Press Enter to close"
+'@
+
+    # v0.29.0 Phase 5a: Install-Printers.ps1 lives under _data\ so it is
+    # not visible alongside the operator-facing files in 04_プリンタ\.
+    # All sub-paths it resolves (manifest.json / drivers/ / printsettings/)
+    # are relative to $PSScriptRoot, which now equals _data\, so no
+    # internal path change is needed in the here-string above.
+    $installPs1Path = Join-Path $handoffDataDir 'Install-Printers.ps1'
+    try {
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText($installPs1Path, $installPs1, $utf8Bom)
+        Show-Success "printer: Install-Printers.ps1 emitted to $installPs1Path"
+    } catch {
+        $msg = "Install-Printers.ps1 emit failed: $($_.Exception.Message)"
+        $warnings += $msg
+        Show-Warning "printer: $msg"
+    }
+
+    # v0.29.0 Phase 4: Install-Printers.bat + README.txt +
+    # _printer_settings.txt. All string literals in this block are
+    # ASCII-only so this restore.ps1 can be saved without a UTF-8 BOM
+    # without triggering PS5.1 ANSI mis-decoding (CLAUDE.md rule 5).
+    # Operator-facing messages are in plain English that Japanese
+    # readers can scan; that matches the KeepAwake utility pattern.
+
+    # Install-Printers.bat: cmd -> powershell wrapper. Self-elevate is
+    # done inside the .ps1 so the batch is just title + invoke.
+    # v0.29.0 Phase 5a: invoke the .ps1 from _data\ relative to the bat.
+    $registerBat = @'
+@echo off
+title Fabriq Printer Restore
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0_data\Install-Printers.ps1"
+'@
+    $registerBatPath = Join-Path $handoffSubdir 'Install-Printers.bat'
+    try {
+        $asciiNoBom = New-Object System.Text.ASCIIEncoding
+        [System.IO.File]::WriteAllText($registerBatPath, $registerBat, $asciiNoBom)
+        Show-Success "printer: Install-Printers.bat emitted"
+    } catch {
+        $warnings += "Install-Printers.bat emit failed: $($_.Exception.Message)"
+        Show-Warning "printer: Install-Printers.bat emit failed: $($_.Exception.Message)"
+    }
+
+    # README.txt and _printer_settings.txt content is composed in
+    # backuper/common.ps1 (BOM-tagged UTF-8) by New-PrinterHandoffReadme
+    # and New-PrinterSettingsText. Keeping the Japanese literals out of
+    # this file is intentional: this restore.ps1 has been observed
+    # without a UTF-8 BOM on operator machines, and PS5.1 would then
+    # ANSI-decode embedded Japanese into mojibake. By only forwarding
+    # the resulting strings to WriteAllText we preserve handoff Japanese
+    # content while keeping this file ASCII-only.
+    $readmePath = Join-Path $handoffSubdir 'README.txt'
+    try {
+        $readmeText = New-PrinterHandoffReadme -Manifest $manifest
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText($readmePath, $readmeText, $utf8Bom)
+        Show-Success "printer: README.txt emitted"
+    } catch {
+        $warnings += "README.txt emit failed: $($_.Exception.Message)"
+        Show-Warning "printer: README.txt emit failed: $($_.Exception.Message)"
+    }
+
+    $settingsPath = Join-Path $handoffSubdir '_printer_settings.txt'
+    try {
+        $settingsText = New-PrinterSettingsText -Manifest $manifest
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText($settingsPath, $settingsText, $utf8Bom)
+        Show-Success "printer: _printer_settings.txt emitted ($($manifest.counts.printer) printers summarized)"
+    } catch {
+        $warnings += "_printer_settings.txt emit failed: $($_.Exception.Message)"
+        Show-Warning "printer: _printer_settings.txt emit failed: $($_.Exception.Message)"
+    }
+}
+
+# ----------------------------------------------------------
+# v0.29.0 Phase 5: handoff manifest filter
+# ----------------------------------------------------------
+# restore_view's printer grid lets operator deselect printers. The
+# legacy auto-install path applied this via $includePrinters; now that
+# Install-Printers.bat reads handoff/04_プリンタ/_data/manifest.json
+# verbatim (Phase 5a moved the payload into _data\), rewrite that
+# manifest to contain only the selected printers (and their referenced
+# ports / drivers). The original sections/printer/manifest.json stays
+# untouched, so the full source-PC inventory is still recoverable.
+if ($null -ne $includePrinters -and $includePrinters.Count -gt 0) {
+    $handoffManifestPath = Join-Path $handoffDataDir 'manifest.json'
+    if (Test-Path -LiteralPath $handoffManifestPath) {
+        try {
+            # Force UTF-8 read so Japanese printer names round-trip cleanly
+            # (the source manifest is BOM-tagged UTF-8 from backup.ps1, but
+            # we explicit the encoding for safety in case the Copy or upstream
+            # tooling ever strips the BOM).
+            $h = Get-Content -LiteralPath $handoffManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $h.items.printers = @($h.items.printers | Where-Object { $_.name -in $includePrinters })
+            $remainPortNames   = @($h.items.printers | ForEach-Object { $_.portName }   | Sort-Object -Unique)
+            $remainDriverNames = @($h.items.printers | ForEach-Object { $_.driverName } | Sort-Object -Unique)
+            $h.items.ports   = @($h.items.ports   | Where-Object { $_.name -in $remainPortNames })
+            $h.items.drivers = @($h.items.drivers | Where-Object { $_.driverName -in $remainDriverNames })
+            $h.counts.printer          = @($h.items.printers).Count
+            $h.counts.port             = @($h.items.ports).Count
+            $h.counts.driverRegistered = @($h.items.drivers).Count
+            $json = $h | ConvertTo-Json -Depth 12
+            # Write with UTF-8 BOM so PS5.1's default Get-Content (which
+            # otherwise falls back to ANSI/CP932 when reading a BOM-less
+            # file) decodes Japanese printer names correctly when
+            # Install-Printers.ps1 reads this manifest back.
+            $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+            [System.IO.File]::WriteAllText($handoffManifestPath, $json, $utf8Bom)
+            Show-Info "printer: handoff manifest filtered to $($h.counts.printer) printer(s) per IncludePrinters"
+        } catch {
+            $warnings += "handoff manifest filter failed: $($_.Exception.Message)"
+            Show-Warning "printer: handoff manifest filter failed: $($_.Exception.Message)"
         }
     }
 }
 
+# ----------------------------------------------------------
+# Final return: handoff-only path
+# ----------------------------------------------------------
 $sw.Stop()
 
-$status = 'Success'
-if ($printerFail -gt 0 -or $driverFail -gt 0) { $status = 'Partial' }
-if ($printerSuccess -eq 0 -and $printerFail -gt 0) { $status = 'Failed' }
+$handoffManifestPath = Join-Path $handoffDataDir 'manifest.json'
+$status = if ($warnings.Count -gt 0) { 'Partial' } else { 'Success' }
 
 return [PSCustomObject]@{
-    Status   = $status
-    ElapsedMs = [int]$sw.ElapsedMilliseconds
-    Summary  = [ordered]@{
-        driverSuccess = $driverSuccess; driverSkip = $driverSkip; driverFail = $driverFail
-        portSuccess   = $portSuccess;   portSkip   = $portSkip;   portFail   = $portFail
-        printerSuccess = $printerSuccess; printerSkip = $printerSkip; printerFail = $printerFail
-        settingsSuccess = $settingsSuccess; settingsFail = $settingsFail
-        hwConfigRestored = $hwConfigRestoredCount
-        skippedRdp = $skippedRdp; skippedVirtual = $skippedVirtual; skippedFilter = $skippedFilter
-        wsdRewrites = $portNameRewrites.Count
+    Status               = $status
+    ElapsedMs            = [int]$sw.ElapsedMilliseconds
+    Summary              = [ordered]@{
+        handoffSubdir         = $handoffSubdir
+        backupSectionDir      = $sectionDir
+        handoffDeployedFiles  = $handoffDeployedFiles
+        handoffDeployBytes    = $handoffDeployBytes
+        sourcePrinterCount    = $manifest.counts.printer
+        includePrintersCount  = if ($null -ne $includePrinters) { @($includePrinters).Count } else { $null }
+        defaultPrinter        = $manifest.defaultPrinter
     }
-    Warnings = $warnings
+    Warnings             = $warnings
+    ExternalOutputDir    = $handoffSubdir
+    ExternalManifestPath = $handoffManifestPath
+    InternalSectionDir   = $null
+    InternalManifestPath = $null
 }

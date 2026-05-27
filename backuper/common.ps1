@@ -619,6 +619,7 @@ $script:OperatorHandoffSubdirs = [ordered]@{
     'credentials'     = '01_資格情報'
     'outlook_pop'     = '02_outlook_アカウント情報'
     'system_evidence' = '03_移行元PC情報'
+    'printer'         = '04_プリンタ'
 }
 
 function global:Resolve-OperatorHandoffRoot {
@@ -646,5 +647,179 @@ function global:Resolve-OperatorHandoffSectionDir {
         return $null
     }
     return (Join-Path $HandoffRoot $script:OperatorHandoffSubdirs[$SectionName])
+}
+
+# ============================================================
+# v0.29.0 Phase 4a: printer section handoff text generators
+#
+# These two helpers exist in common.ps1 (BOM-tagged UTF-8) so the
+# Japanese string literals they emit are NOT subject to the
+# CLAUDE.md rule 5 PS5.1 ANSI mis-decode issue that affects
+# backuper/lib/sections/printer/restore.ps1 (which is ASCII-only).
+# restore.ps1 calls these helpers and then writes the returned
+# strings via [System.IO.File]::WriteAllText with UTF8Encoding($true)
+# so the .txt files arrive on the operator's Desktop in BOM-tagged
+# UTF-8 with intact Japanese content.
+# ============================================================
+
+function global:New-PrinterHandoffReadme {
+    # Returns the operator-facing README.txt body for the printer
+    # handoff folder. Caller decides where to write it and which
+    # encoding (BOM-tagged UTF-8 is required for Notepad to display
+    # Japanese without mojibake).
+    param(
+        [Parameter(Mandatory = $true)]$Manifest
+    )
+
+    $computerName = if ($null -ne $Manifest.computerName) { $Manifest.computerName } else { '(unknown)' }
+    $collectedAt  = if ($null -ne $Manifest.collectedAt)  { $Manifest.collectedAt  } else { '(unknown)' }
+
+    @"
+============================================================
+  Fabriq プリンタリストア - はじめに
+============================================================
+
+このフォルダには、移行元 PC のプリンタ環境を移行先 PC に再現する
+ためのファイル一式が入っています。
+
+【使い方】
+  1. 復元対象ユーザ (= このフォルダのあるユーザ) でログインして
+     ください。
+  2. 「Install-Printers.bat」をダブルクリックしてください。
+  3. UAC ダイアログが出たら「はい」をクリックしてください。
+  4. PowerShell ウィンドウが開き、プリンタの登録が進みます。
+  5. 「完了」表示まで待ち、Enter キーで閉じてください。
+
+【失敗時】
+  - 「失敗」と表示されたプリンタは手動で再追加してください。
+    コントロールパネル → デバイスとプリンター → プリンターの追加
+  - プリンタ名 / IP アドレス / ドライバ名は _printer_settings.txt
+    をご覧ください。
+
+【印刷設定について】
+  _printer_settings.txt に、移行元 PC のプリンタ一覧と採取できた
+  設定情報のサマリがあります。Install-Printers.bat 実行で DEVMODE
+  binary や hwconfig が採取できていたプリンタは自動で印刷設定
+  (用紙サイズ / 給紙 / カラー / 両面 等) が復元されます。
+  採取できていない項目は driver の初期値が使われるので、必要に
+  応じて移行先 PC で「印刷設定」から手動で変更してください。
+
+【WSD ポートのプリンタ】
+  WSD ポート (Web Services for Devices) を使うプリンタは、自動で
+  TCP/IP 標準ポート (RAW 9100) に救済されます。それでも認識しない
+  場合は、コントロールパネルから手動でプリンタを追加してください。
+
+【共有プリンタ】
+  \\server\printer 形式の共有プリンタは自動再追加されません。
+  「ネットワーク上のプリンターを参照」から手動で再追加してください。
+
+このフォルダは作業完了後に削除して構いません。
+
+移行元 PC : $computerName
+採取日時  : $collectedAt
+============================================================
+"@
+}
+
+function global:New-PrinterSettingsText {
+    # Returns the body of _printer_settings.txt - a human-readable
+    # summary of each printer in the manifest plus which capture
+    # artifacts are present (DEVMODE / hwconfig / properties /
+    # PrintConfiguration). Paper / color / duplex transcription is
+    # NOT attempted because Get-PrintConfiguration / Get-PrinterProperty
+    # are unreliable on real hardware (observed empty/null on
+    # production data).
+    param(
+        [Parameter(Mandatory = $true)]$Manifest
+    )
+
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add("============================================================")
+    [void]$lines.Add("  移行元 PC のプリンタ情報 (Fabriq BackUper)")
+    [void]$lines.Add("============================================================")
+    [void]$lines.Add("  移行元 PC      : $($Manifest.computerName)")
+    [void]$lines.Add("  採取日時       : $($Manifest.collectedAt)")
+    [void]$lines.Add("  プリンタ件数   : $($Manifest.counts.printer)")
+    $defLabel = if ([string]::IsNullOrWhiteSpace($Manifest.defaultPrinter)) { '(なし)' } else { $Manifest.defaultPrinter }
+    [void]$lines.Add("  既定プリンタ   : $defLabel")
+    [void]$lines.Add("============================================================")
+    [void]$lines.Add("")
+
+    $manifestPorts = @($Manifest.items.ports)
+    $printerIdx = 0
+    foreach ($pp in @($Manifest.items.printers)) {
+        $printerIdx++
+        $defaultMark = if ($pp.name -eq $Manifest.defaultPrinter) { "  ★既定プリンタ" } else { "" }
+        [void]$lines.Add("【$printerIdx】 $($pp.name)$defaultMark")
+        [void]$lines.Add("  ドライバ         : $($pp.driverName)")
+
+        $portInfo = $manifestPorts | Where-Object { $_.name -eq $pp.portName } | Select-Object -First 1
+        if ($null -ne $portInfo) {
+            switch ($portInfo.portType) {
+                'TCPIP' {
+                    [void]$lines.Add("  ポート           : $($portInfo.printerHostAddress)  (TCP/IP standard, RAW $($portInfo.portNumber))")
+                }
+                'LPR' {
+                    [void]$lines.Add("  ポート           : $($portInfo.lprHostName) / queue=$($portInfo.lprQueueName)  (LPR)")
+                }
+                'WSD' {
+                    if (-not [string]::IsNullOrWhiteSpace($portInfo.wsdResolvedHost)) {
+                        [void]$lines.Add("  ポート           : $($portInfo.wsdResolvedHost)  (WSD → TCP/IP 9100 救済)")
+                    } else {
+                        [void]$lines.Add("  ポート           : (WSD、IP 解決不可 → 手動再追加が必要)")
+                    }
+                }
+                'Local' {
+                    [void]$lines.Add("  ポート           : $($portInfo.name)  (ローカル / 内部)")
+                }
+                default {
+                    [void]$lines.Add("  ポート           : $($portInfo.name)  (type=$($portInfo.portType))")
+                }
+            }
+        } else {
+            [void]$lines.Add("  ポート           : $($pp.portName)  (詳細情報なし)")
+        }
+
+        $inboxLabel = if ($pp.isInboxDriver) {
+            'YES (Windows 標準ドライバ)'
+        } else {
+            'NO (サードパーティ、Install-Printers.bat で自動 install)'
+        }
+        [void]$lines.Add("  Inbox driver     : $inboxLabel")
+
+        $sharedLabel = if ($pp.shared -and -not [string]::IsNullOrWhiteSpace($pp.shareName)) {
+            "共有中 (`"$($pp.shareName)`")"
+        } else {
+            '未共有'
+        }
+        [void]$lines.Add("  共有             : $sharedLabel")
+
+        if (-not [string]::IsNullOrWhiteSpace($pp.comment))  { [void]$lines.Add("  コメント         : $($pp.comment)") }
+        if (-not [string]::IsNullOrWhiteSpace($pp.location)) { [void]$lines.Add("  場所             : $($pp.location)") }
+
+        [void]$lines.Add("  採取データ:")
+        $devLabel  = if (-not [string]::IsNullOrWhiteSpace($pp.devModeFile))      { '採取済 (Install-Printers.bat で復元)' } else { '未採取 (driver 初期値を使用)' }
+        $hwLabel   = if (-not [string]::IsNullOrWhiteSpace($pp.hwConfigFile))     { '採取済 (Install-Printers.bat で復元)' } else { '未採取' }
+        $propLabel = if (-not [string]::IsNullOrWhiteSpace($pp.propertiesFile))   { '採取済 (Install-Printers.bat で適用)' } else { '未採取' }
+        $cfgLabel  = if (-not [string]::IsNullOrWhiteSpace($pp.printSettingsFile)){ '採取済' } else { '未採取 (用紙 / カラー / 両面 等は driver 初期値)' }
+        [void]$lines.Add("    DEVMODE binary : $devLabel")
+        [void]$lines.Add("    HW config      : $hwLabel")
+        [void]$lines.Add("    PrinterProperty: $propLabel")
+        [void]$lines.Add("    PrintConfig    : $cfgLabel")
+        [void]$lines.Add("")
+    }
+
+    [void]$lines.Add("============================================================")
+    [void]$lines.Add("  メモ")
+    [void]$lines.Add("============================================================")
+    [void]$lines.Add("  - 「採取済」の項目は Install-Printers.bat 実行時に自動復元")
+    [void]$lines.Add("    されます。")
+    [void]$lines.Add("  - 「未採取」の項目は driver の初期値が使われます。必要に")
+    [void]$lines.Add("    応じて移行先 PC で「印刷設定」から手動で変更してください。")
+    [void]$lines.Add("  - 失敗したプリンタの再追加には上記の IP / ドライバ名を")
+    [void]$lines.Add("    ご利用ください。")
+    [void]$lines.Add("")
+
+    return ($lines -join "`r`n")
 }
 

@@ -174,7 +174,7 @@ function New-RestoreView {
     # across Documents and PST folders. Default ON. OFF = full v0.24.5
     # legacy behaviour (no handoff folder ever created).
     $handoffCheck = New-StyledCheckBox `
-        -Text "operator 用ファイル (資格情報 / Outlook 設定 / 移行元PC情報) をデスクトップに統合 (推奨)" `
+        -Text "operator 用ファイル (資格情報 / Outlook 設定 / 移行元PC情報 / プリンタ) をデスクトップに統合 (推奨)" `
         -X 24 -Y 262 -Width 760 -Height 22 -Checked $true
     $script:RestoreOperatorHandoffCheck = $handoffCheck
     $panel.Controls.Add($handoffCheck)
@@ -867,9 +867,10 @@ function Invoke-RestoreStart {
             -OldPcName             $oldPcForHandoff
         $script:RestoreHandoffOldPc = $oldPcForHandoff
         $script:RestoreHandoffEnabled = $true
-        $credSubdir       = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'credentials'
-        $outlookSubdir    = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'outlook_pop'
+        $credSubdir        = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'credentials'
+        $outlookSubdir     = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'outlook_pop'
         $sysEvidenceSubdir = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'system_evidence'
+        $printerSubdir     = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'printer'
         if (-not $sectionParams['credentials']) { $sectionParams['credentials'] = @{} }
         $sectionParams['credentials']['OperatorHandoffSubdir'] = $credSubdir
         if (-not $sectionParams['outlook_pop']) { $sectionParams['outlook_pop'] = @{} }
@@ -877,6 +878,9 @@ function Invoke-RestoreStart {
         # v0.26.0
         if (-not $sectionParams['system_evidence']) { $sectionParams['system_evidence'] = @{} }
         $sectionParams['system_evidence']['OperatorHandoffSubdir'] = $sysEvidenceSubdir
+        # v0.29.0 (Phase 1)
+        if (-not $sectionParams['printer']) { $sectionParams['printer'] = @{} }
+        $sectionParams['printer']['OperatorHandoffSubdir'] = $printerSubdir
     }
 
     $userSummary = if ([string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
@@ -931,6 +935,20 @@ operator-facing な設定情報が番号順に集約されています。
     (LAN 直結移行で一時 IP に変更している場合、06_NetworkConfig.csv は
      一時 IP を記録しています)。
 
+04_プリンタ\
+  移行元 PC のプリンタ環境を移行先 PC に再現するための一式
+  (driver / port / 印刷設定 / インストールバッチ)。
+  → 操作者が触るファイルは 3 つ:
+     - Install-Printers.bat ... ダブルクリックでインストール開始
+     - README.txt ............ 詳細手順 (このファイルの 04_プリンタ 抜粋)
+     - _printer_settings.txt . 移行元プリンタの設定サマリ
+  → _data\ サブフォルダにはインストーラ本体 (Install-Printers.ps1) と
+     driver / printsettings / manifest 等の内部ファイルが入っています。
+     こちらは操作者が直接開く必要はありません (Install-Printers.bat が
+     自動で参照します)。
+  → Install-Printers.bat は必ず復元対象ユーザでログインした状態で
+     実行してください (UAC で同ユーザの管理者権限に昇格)。
+
 このフォルダは作業完了後に削除して構いません。
 
 リストア実行日時 : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
@@ -952,6 +970,9 @@ operator-facing な設定情報が番号順に集約されています。
             }
             if ($sectionParams.ContainsKey('system_evidence')) {
                 $sectionParams['system_evidence'].Remove('OperatorHandoffSubdir') | Out-Null
+            }
+            if ($sectionParams.ContainsKey('printer')) {
+                $sectionParams['printer'].Remove('OperatorHandoffSubdir') | Out-Null
             }
             $script:RestoreHandoffEnabled = $false
         }

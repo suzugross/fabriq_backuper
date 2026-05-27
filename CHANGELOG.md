@@ -15,6 +15,119 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.29.0: **printer section の restore を operator handoff folder 一本化
+  に再設計** —
+  [backuper/lib/sections/printer/restore.ps1](backuper/lib/sections/printer/restore.ps1) /
+  [backuper/common.ps1](backuper/common.ps1) /
+  [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1)。
+  credentials / outlook_pop / system_evidence と同じ「Desktop\<date>_<host>_BK\」
+  集約フォルダ pattern に統一し、printer の自動 install を撤廃して operator が
+  バッチを実行するモデルに切り替えた。後方互換不要方針 (テスト段階) に合わせて
+  legacy auto-install path は完全に削除した。
+  - **handoff folder 構造** (`<TargetDesktop>\<yyyy_MM_dd>_<OldPCname>_BK\04_プリンタ\`):
+    ```
+    Install-Printers.bat        operator がダブルクリック (UAC 自動昇格)
+    README.txt                  日本語の operator 手順 (BOM 付き UTF-8)
+    _printer_settings.txt       移行元プリンタ情報サマリ (BOM 付き UTF-8、日本語)
+    _data\                      内部ファイル一式 (operator は触らない)
+      ├ Install-Printers.ps1    bat から呼ばれる本体 (UTF-8 BOM、ASCII only)
+      ├ manifest.json           fabriq-printer-backup の section copy
+      ├ printers.json / ports.json / drivers_registered.json / etc.
+      ├ drivers/                pnputil 用 INF パッケージ (~80MB)
+      └ printsettings/          DEVMODE binary (Base64) + hwconfig (HKLM dump)
+    ```
+  - **operator が触るのは最大 3 ファイル + 1 サブフォルダ** に整理。`_data\`
+    プレフィックスで内部ファイルを視覚的に分離 (Explorer のソートでも下端に来る)。
+  - **Install-Printers.ps1** は restore.ps1 の here-string template から生成
+    される自己完結スクリプト。restore.ps1 (BOM なしで配備されることがある)
+    内に日本語を持ち込めない制約により console messages は ASCII only。日本語
+    の手順説明は隣の README.txt と _printer_settings.txt (common.ps1 helper
+    経由で BOM 付き出力) で提供する役割分離。
+  - **Install-Printers.ps1 の Phase A-E**: 旧 restore.ps1 の自動 install ロジック
+    を忠実に inline 移植。
+    - **Phase A**: driver install (inbox は `Add-PrinterDriver -Name` のみ、
+      OEM は `pnputil /add-driver` + `Add-PrinterDriver`)
+    - **Phase B**: port 作成 (TCPIP / LPR、WSD は `wsdResolvedHost` で
+      `IP_<ip>` の TCP/IP standard port に救済 = v0.21.0 同等)
+    - **Phase C**: `Add-Printer` (WSD rewrite map 適用) + 共有 / コメント /
+      場所属性 + `Set-PrinterProperty`
+    - **Phase D**: Spooler restart → HKLM hwconfig (Binary / String /
+      ExpandString / MultiString / DWord / QWord 各 type 復元) + HKCU DEVMODE
+      (Base64 decode → PropertyType=Binary 書込)。`Get-HandoffHkcuRoot` 関数を
+      inline で持ち、interactive logged-on user の SID を `Win32_Process`
+      explorer.exe 経由で解決して `HKU:\<SID>\Printers\DevModePerUser` に
+      書き込む (backuper/common.ps1 の `Resolve-HkcuRoot` と同等ロジック)
+    - **Phase E**: 既定プリンタ復元 (`WScript.Network::SetDefaultPrinter`)
+  - **UAC self-elevate**: `Install-Printers.ps1` 冒頭で current principal が
+    administrator か check、admin でなければ `Start-Process -Verb RunAs` で
+    同 script を再起動 → exit。operator はバッチをダブルクリックするだけで
+    UAC dialog 経由で admin 権限に到達できる。
+  - **IncludePrinters filter (Phase 5)**: restore_view の printer grid で
+    operator が deselect した printer を Install-Printers.ps1 でも除外する
+    ため、`<handoff>\_data\manifest.json` を rewrite して `items.printers[]` /
+    `items.ports[]` / `items.drivers[]` を選択分のみに絞る。`counts` も
+    更新。元の `sections/printer/manifest.json` は不変。
+  - **日本語 printer 名の文字化け対策** (実機検証で発覚):
+    - handoff manifest filter は **BOM 付き UTF-8 で書き出す**
+      (`UTF8Encoding($true)`) - 旧 `UTF8Encoding($false)` は PS5.1 の
+      Get-Content default が ANSI (CP932) フォールバックする罠を踏ませる
+    - Install-Printers.ps1 の `Get-Content` 全箇所 (manifest / properties /
+      hwConfig) に **`-Encoding UTF8` 明示** 追加 - BOM 有無に関係なく確実に
+      UTF-8 として読む
+    - Install-Printers.ps1 の冒頭で **`[Console]::OutputEncoding =
+      [System.Text.Encoding]::UTF8`** 設定 - default の CP932 だと non-ASCII
+      文字が Write-Host 経由で欠落する可能性 (実機で「PRT会議室２階」等が
+      壊れた printer 名で install される事象を観測 → 解消)
+  - **handoff README + _printer_settings.txt の日本語化** (Phase 4a):
+    operator-facing コンテンツは [common.ps1](backuper/common.ps1) (BOM 付き
+    existing file) に新規 helper 2 個 (`New-PrinterHandoffReadme` /
+    `New-PrinterSettingsText`) を追加して日本語 string をここで組み立て、
+    restore.ps1 (ASCII only) からは関数呼び出しのみで forward する役割分離
+    pattern を採用。CLAUDE.md project rule 5 (PS5.1 が BOM なし日本語を ANSI
+    誤解釈する問題) を回避する標準解。
+  - **legacy auto-install path 完全削除** (Phase 5): 旧 restore.ps1 の
+    Compatibility check (osArch / osVersion) + Phase A-E (driver / port /
+    printer / hwconfig / DEVMODE / default printer) + 不要 helpers
+    (`Test-IsRdpRedirect` / `Test-IsVirtualPrinter` / `Get-IPv4FromLocationCompat` /
+    `Resolve-WsdHost` / `_Get-Param`) + legacy SectionParams (`StrictOsVersion` /
+    `ReuseInboxDrivers` / `OnConflict` / `RestoreDefaultPrinter` /
+    `SkipVirtualPrinters` / `RestoreHardwareConfig`) を一掃。restore.ps1 サイズ
+    1078 → 696 行 (= -35%)。
+  - **operator handoff checkbox OFF 時の挙動**: printer も install されない
+    (`Status='Skipped'`, `reason='Operator handoff folder feature is disabled'`).
+    credentials / outlook_pop / system_evidence と一貫した挙動。
+  - **mapping 追加**: [common.ps1](backuper/common.ps1) の
+    `$script:OperatorHandoffSubdirs` に `'printer' = '04_プリンタ'` を追加。
+  - **restore_view.ps1 拡張**: handoff checkbox 文言に「プリンタ」を追記、
+    `$sectionParams['printer']` の OperatorHandoffSubdir forward + cleanup 時
+    の remove 経路を追加、handoff README 文言に `04_プリンタ\` の使い方
+    (operator が触る 3 ファイル + `_data\` は内部) を明示。
+  - **不変**:
+    - section interface / manifest schema (`fabriq-printer-backup` v1) 不変
+    - [backup.ps1](backuper/lib/sections/printer/backup.ps1) は一切変更なし
+    - WSD 救済 (v0.21.0) / inbox driver 判定 / DEVMODE Base64 binary 等の
+      backup 形式・採取データ・救済 logic は完全踏襲
+    - fabriq main への書込みなし
+  - **VERSION**: 0.28.0 → **0.29.0** (MINOR、legacy 削除は breaking change だが
+    テスト段階方針につき後方互換扱わず、機能追加 / UX 改善 / 内部 API 整理を
+    含めて MINOR)
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映 (EXE は無変更、再ビルド不要)
+  - **検証**:
+    1. handoff ON で restore → `04_プリンタ\` 直下に `Install-Printers.bat`
+       / `README.txt` / `_printer_settings.txt` / `_data\` の 4 entry のみ
+       表示。`_data\` 配下に section copy + Install-Printers.ps1
+    2. README.txt / _printer_settings.txt が Notepad で日本語正常表示
+       (printer 名も日本語のまま)
+    3. `Install-Printers.bat` ダブルクリック → UAC → console で英文の Phase
+       A-E 実行ログが出る (日本語 printer 名は正常表示)
+    4. Windows の「設定 → プリンターとスキャナー」で日本語 printer 名の
+       ままで install されている
+    5. restore_view の printer grid で 1 printer を deselect → restore →
+       Install-Printers.bat 実行で 1 printer のみ install
+    6. handoff OFF で restore → printer は install されない、aggregate
+       manifest に Status=Skipped
+
 ### Added
 - backuper v0.28.0: **lan-prep に KeepAwake (スリープ抑止) ユーティリティを同梱** —
   LAN 直結移行の作業中に PC がスリープに入って backup / restore が中断する事故
