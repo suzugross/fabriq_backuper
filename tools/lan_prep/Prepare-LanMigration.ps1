@@ -152,6 +152,22 @@ $snapshot = New-RollbackSnapshot -InterfaceAlias $netConfig.interfaceAlias -Role
 Save-RollbackSnapshot -Snapshot $snapshot -Path $migProfile.rollback.snapshotPath
 Write-Host "[ok] snapshot saved: $($migProfile.rollback.snapshotPath)" -ForegroundColor Green
 
+# v0.28.0: deploy KeepAwake utility into FabriqMigration so operator
+# can suppress sleep on this PC independently (USB-shared backuper /
+# staggered source/target rollout scenarios). Copy here -- after the
+# snapshot is on disk, before any network change can fail -- so the
+# files are present regardless of subsequent step outcomes.
+$keepAwakeDest = Split-Path -Parent $migProfile.rollback.snapshotPath
+$assetSrc      = Join-Path $script:LanPrepRoot 'assets'
+try {
+    Copy-Item -Path (Join-Path $assetSrc 'KeepAwake.bat') -Destination $keepAwakeDest -Force -ErrorAction Stop
+    Copy-Item -Path (Join-Path $assetSrc 'KeepAwake.ps1') -Destination $keepAwakeDest -Force -ErrorAction Stop
+    Write-Host "[ok] KeepAwake deployed to: $keepAwakeDest" -ForegroundColor Green
+} catch {
+    Write-Host "[warn] KeepAwake deploy failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "       (lan-prep continues; sleep suppression must be handled manually)" -ForegroundColor Yellow
+}
+
 # Step 2: apply network config.
 Write-Host ""
 Write-Host "[step] applying network configuration..." -ForegroundColor Cyan
@@ -172,6 +188,28 @@ if ($Role -eq 'target') {
     Write-Host "[step] creating SMB share..." -ForegroundColor Cyan
     New-MigrationShare -ShareConfig $migProfile.share
     Write-Host "[ok] share \\$env:COMPUTERNAME\$($migProfile.share.shareName) ready" -ForegroundColor Green
+}
+
+# v0.28.0: auto-launch KeepAwake.bat now that all setup steps succeeded.
+# This pops a separate console window that holds SetThreadExecutionState
+# active for as long as it stays open. Operator can immediately start
+# backup/restore in another window without remembering this step. We
+# put it AFTER Step 4 (success path only) so failure paths (caught
+# below) do not spawn an extra orphan window.
+$keepAwakeBat = Join-Path $keepAwakeDest 'KeepAwake.bat'
+if (Test-Path -LiteralPath $keepAwakeBat) {
+    try {
+        Start-Process -FilePath $keepAwakeBat -WindowStyle Normal
+        Write-Host ""
+        Write-Host "[ok] KeepAwake.bat auto-launched (sleep suppression active)" -ForegroundColor Green
+    } catch {
+        Write-Host ""
+        Write-Host "[warn] KeepAwake auto-launch failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "       Double-click manually: $keepAwakeBat" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host ""
+    Write-Host "[info] KeepAwake.bat not present at $keepAwakeBat -- sleep suppression skipped" -ForegroundColor DarkGray
 }
 
 # Summary + next-step hints.

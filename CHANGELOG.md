@@ -15,6 +15,70 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.28.0: **lan-prep に KeepAwake (スリープ抑止) ユーティリティを同梱** —
+  LAN 直結移行の作業中に PC がスリープに入って backup / restore が中断する事故
+  を防ぐため、`FabriqMigration` フォルダに `KeepAwake.bat` + `KeepAwake.ps1` を
+  配備し、lan-prep 完了時に自動起動する。
+  - **新規 assets** (`tools/lan_prep/assets/`、ASCII only):
+    - `KeepAwake.bat`: タイトル付き console wrapper (`Do NOT close while
+      backup is running`)
+    - `KeepAwake.ps1`: `SetThreadExecutionState(ES_CONTINUOUS |
+      ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)` で sleep + display-off を
+      抑止。try / finally で window close 時に確実に `ES_CONTINUOUS` 単独で
+      解除。操作者向けメッセージは日本人にも読みやすい平易な英語
+    - 実装は fabriq main の `kernel/common.ps1` の `SleepSuppressor` パターン
+      を vendoring (CLAUDE.md vendoring 規約に準拠、fabriq main は read-only
+      参照のみ)
+  - **`Prepare-LanMigration.ps1` の拡張**:
+    - **Step 1 直後**: snapshot 保存成功後に `Split-Path -Parent
+      $snapshotPath` (= `FabriqMigration` フォルダ) へ `KeepAwake.{bat,ps1}`
+      を Copy-Item。失敗は warning に降格して lan-prep 全体は継続
+    - **Step 4 直後 (success path)**: `Start-Process KeepAwake.bat` で
+      別 console window を spawn。operator は手動でダブルクリックする手間
+      なくスリープ抑止状態に入る
+    - **failure path**: Step 2-4 のいずれかが throw して catch ブロックに
+      落ちた場合は auto-launch しない (= 余計な orphan window を残さない)。
+      KeepAwake.bat は Step 1 で既に Copy 済なので、operator が後で手動
+      起動も可能
+  - **ステートマシン** (operator 視点):
+    - lan-prep 完了 → KeepAwake 別 window 起動 → 同 PC で `Fabriq_BackUper.exe`
+      を立ち上げて backup / restore → 完了したら KeepAwake window を close
+    - source PC / target PC それぞれ独立タイミングで KeepAwake 起動可能 → USB
+      で backuper を持ち回る運用 (= source と target で lan-prep のタイミング
+      がずれるシナリオ) にも対応
+  - **異常系の挙動**:
+    - PowerShell が crash / kill された場合: `finally` 経路は走らないが、
+      Windows OS が process 終了時に `SetThreadExecutionState` flag を
+      自動 cleanup するため、抑止状態が permanent に残ることはない
+    - operator がスタートメニューから手動で「スリープ」を選択した場合:
+      `SetThreadExecutionState` は automatic sleep のみを抑止する Win32 API
+      仕様のため、手動スリープは止められない (= operator 責任の範囲)
+    - 二重起動 (KeepAwake.bat を 2 回ダブルクリック): 2 つの独立 process が
+      立ち上がり、それぞれ独立にフラグを保持。片方 close でも他方が継続
+  - **不変**:
+    - backuper 本体 (backuper/) には一切の変更なし
+    - fabriq main への書込みなし
+    - section interface / manifest schema / sections.csv の実行順 (v0.27.1)
+    - `Prepare-LanMigration.ps1` の他 step / Revert-LanMigration.ps1 / lib/
+  - **encoding 制約**: KeepAwake.bat / .ps1 は Write tool 経由で生成された
+    BOM なし UTF-8 ファイル。PS5.1 の ANSI 誤解釈を避けるため両ファイルとも
+    ASCII only で記述 (CLAUDE.md 規約 5)。操作者向けメッセージは英語のみ。
+  - **VERSION**: 0.27.1 → **0.28.0** (MINOR、機能追加)
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映 (EXE 無変更)
+  - **検証**:
+    1. lan-prep (source/target どちらでも) 実行 → 成功すると別 console window
+       が自動で立ち上がり "Sleep Suppression Active" が表示される
+    2. PC の電源設定でスリープタイマーを短くしても、window が開いている間
+       はスリープしないこと (= `powercfg /requests` で SYSTEM/DISPLAY が
+       SleepSuppressor 名義で active になっていること)
+    3. window を X で閉じる or Ctrl+C → "Sleep suppression released" が
+       表示され、以後は通常のスリープタイマーに従う
+    4. lan-prep を 2 回連続実行 → KeepAwake.bat も 2 重起動するが互いに
+       独立、片方閉じても他方が継続
+    5. lan-prep が Step 2-4 で失敗 → KeepAwake.bat は配備されるが
+       auto-launch されない (operator が後で手動起動可能)
+
 ### Changed
 - backuper v0.27.1: **section 実行順を再配置** —
   [backuper/data/sections.csv](backuper/data/sections.csv) の行順を変更し、
