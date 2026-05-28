@@ -1,13 +1,28 @@
 ﻿# ============================================================
-# Fabriq LAN-Prep - Entry Script (v0.24.2)
+# Fabriq LAN-Prep - Entry Script (v0.30.0)
 # Called from Fabriq_LanPrep.exe (admin-elevated via manifest).
-# Shows a WinForms menu (lavender accent) with 4 actions:
+# Shows a WinForms menu (lavender accent) with action buttons:
 #   - "移行先として設定"   -> Prepare-LanMigration.ps1 -Role target
 #   - "移行元として設定"   -> Prepare-LanMigration.ps1 -Role source
 #   - "元に戻す"           -> Revert-LanMigration.ps1 -SnapshotPath ...
 #   - "終了"               -> exit
 #
-# v0.24.2 hardening:
+# v0.30.0 changes:
+#   - Find-FabriqRoot is now REQUIRED (was unused). Failure aborts
+#     lan-prep just like backuper itself does, because the menu now
+#     surfaces a hostlist combo to drive PC-pair selection.
+#   - Hostlist is loaded via Get-FabriqHostlist (read-only). If any
+#     row contains ENC: encrypted values a passphrase prompt is
+#     shown; cancel drops back into back-compat mode (= empty host
+#     list, profile drives everything as in v0.29.0).
+#   - Get-NetAdapter results are passed into the menu so the
+#     interfaceAlias used by Prepare-LanMigration is selected on
+#     the form rather than hardcoded in profile.json.
+#   - Menu returns a pscustomobject; the chosen NIC name and host
+#     pair are forwarded to the child .ps1 as optional parameters,
+#     overriding the profile values in-memory.
+#
+# v0.24.2 hardening (still active):
 #   - Start-Transcript writes every line of console output to
 #     %TEMP%\fabriq_lanprep_<timestamp>.log so the operator can
 #     still read the error even if the conhost window closes.
@@ -89,6 +104,13 @@ trap {
 # ============================================================
 try {
 
+# Declare $result up-front so the finally block can reference it
+# even when an early return aborts before Show-LanPrepMenu sets it
+# (e.g. fabriq main not found, dot-source failure). $null here means
+# "menu never ran", which the finally block treats as a failure path
+# and keeps the Read-Host so the operator can read the error.
+$result = $null
+
 # Pre-load WinForms assemblies.
 try {
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
@@ -99,17 +121,23 @@ catch {
     return
 }
 
-# Load backuper common.ps1 for Show-* helpers + theme constants.
+# Load backuper common.ps1 + theme + hostlist reader + multi-fabriq picker.
+# Order matters: common (Find-FabriqRoot, Test-MasterPassphrase, Show-*) ->
+# theme (style helpers used by every WinForms call below) -> fabriq picker
+# (uses theme) -> hostlist reader (uses common) -> menu form (uses
+# everything above).
 try {
     . (Join-Path $script:BackuperLib 'common.ps1')
     . (Join-Path $script:BackuperLib 'lib\ui\theme.ps1')
+    . (Join-Path $script:BackuperLib 'lib\ui\fabriq_select_form.ps1')
+    . (Join-Path $script:BackuperLib 'lib\hostlist_reader.ps1')
 }
 catch {
-    Write-Host "[FATAL] Failed to dot-source common.ps1 / theme.ps1: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[FATAL] Failed to dot-source backuper libraries: $($_.Exception.Message)" -ForegroundColor Red
     return
 }
 
-# Load the menu form.
+# Load the menu form (defines Show-LanPrepMenu + Show-LanPrepPassphrasePrompt).
 try {
     . (Join-Path $script:LanPrepRoot 'lib\menu_form.ps1')
 }
@@ -163,21 +191,176 @@ Write-Host "  LAN-direct migration prep: static IP + SMB share in one click" -Fo
 Show-Separator
 Write-Host ""
 
-# Show the menu (modal). Returns 'target' / 'source' / 'revert' / 'exit'.
-$action = Show-LanPrepMenu `
-    -Version          $script:LanPrepVersion `
-    -MigrationProfile $script:MigrationProfile
+# ============================================================
+# Fabriq main discovery (v0.30.0, REQUIRED)
+# Same auto-discovery logic as backuper/main.ps1: scan sibling
+# directories for one containing kernel/csv/hostlist.csv. Single
+# candidate -> auto-select; multiple -> Show-FabriqSelectForm.
+# Absence is fatal because the menu now needs hostlist.csv to
+# populate the host-pair combo.
+# ============================================================
+Set-Location -Path $script:RepoRoot
+$_parentDir = Split-Path -Parent $script:RepoRoot
+$_candidates = @(Find-FabriqRoot -ParentDir $_parentDir)
+if ($_candidates.Count -eq 0) {
+    Show-Error "Fabriq main directory not found under: $_parentDir"
+    Show-Error "Expected a sibling directory containing kernel\csv\hostlist.csv"
+    Show-Error "(e.g. E:\fabriq\) so Fabriq_LanPrep can read its hostlist."
+    return
+}
+elseif ($_candidates.Count -eq 1) {
+    $script:FabriqRoot = $_candidates[0].FullName
+    Show-Info "Fabriq main detected: $($_candidates[0].Name)"
+}
+else {
+    Show-Info "Multiple fabriq candidates found ($($_candidates.Count)). Opening picker."
+    $_picked = Show-FabriqSelectForm -Candidates $_candidates
+    if ([string]::IsNullOrWhiteSpace($_picked)) {
+        Show-Error "No fabriq root selected. Exiting."
+        return
+    }
+    $script:FabriqRoot = $_picked
+    Show-Info "Fabriq main selected: $script:FabriqRoot"
+}
 
-switch ($action) {
+# ============================================================
+# Hostlist load (v0.30.0)
+# Read hostlist.csv via the backuper hostlist_reader (which uses
+# Import-ModuleCsv internally). Import-ModuleCsv transparently
+# decrypts ENC: values only when $global:FabriqMasterPassphrase
+# is set; otherwise ENC: strings are returned verbatim. We probe
+# the first load for ENC: residue and, on detection, prompt the
+# operator for the passphrase and re-load.
+#
+# Failure / cancel policy (back-compat mode):
+#   - hostlist file absent / parse error -> warning, HostRows=@()
+#   - ENC: detected + passphrase cancelled -> warning, HostRows=@()
+#   - ENC: detected + verify fails repeatedly -> operator can cancel
+# In all failure paths the menu still opens; role buttons remain
+# usable as long as migration_profile.json is present (= profile
+# drives everything just like v0.29.0).
+# ============================================================
+$script:HostRows = @()
+$_hostsRaw = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
+if ($null -ne $_hostsRaw -and $_hostsRaw.Count -gt 0) {
+    # Detect ENC: residue (Import-ModuleCsv left them undecrypted).
+    $_needsPp = $false
+    foreach ($_r in $_hostsRaw) {
+        foreach ($_p in $_r.PSObject.Properties) {
+            if ($_p.Value -is [string] -and $_p.Value.StartsWith('ENC:')) { $_needsPp = $true; break }
+        }
+        if ($_needsPp) { break }
+    }
+    if ($_needsPp) {
+        $_verifyToken = Join-Path $script:FabriqRoot 'kernel\txt\passphrase_verify.txt'
+        Show-Info "Hostlist contains ENC: encrypted fields. Prompting for master passphrase..."
+        $_pp = Show-LanPrepPassphrasePrompt -VerifyTokenPath $_verifyToken
+        if ([string]::IsNullOrWhiteSpace($_pp)) {
+            Show-Warning "Passphrase prompt cancelled. Hostlist combo disabled (back-compat mode)."
+        }
+        else {
+            $global:FabriqMasterPassphrase = $_pp
+            $_hostsRaw = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
+            if ($null -ne $_hostsRaw) {
+                $script:HostRows = @($_hostsRaw)
+                Show-Success "Hostlist decrypted: $($script:HostRows.Count) row(s)"
+            }
+        }
+    }
+    else {
+        $script:HostRows = @($_hostsRaw)
+        Show-Success "Hostlist loaded: $($script:HostRows.Count) row(s) (no ENC: fields)"
+    }
+}
+else {
+    Show-Warning "Hostlist empty or unreadable. Hostlist combo will be disabled (back-compat mode)."
+}
+
+# ============================================================
+# NIC enumeration (v0.30.0)
+# Get-NetAdapter on a fresh PC may return adapters in any state
+# (Up/Down, Connected/Disconnected). We do not filter here -
+# kitting scenarios deliberately run with the LAN cable still
+# unplugged, so disconnected adapters must be selectable.
+# ============================================================
+$script:Nics = @()
+try {
+    $script:Nics = @(Get-NetAdapter -ErrorAction Stop | Sort-Object Name)
+    Show-Info "Detected $($script:Nics.Count) network adapter(s)"
+}
+catch {
+    Show-Warning "Failed to enumerate network adapters: $($_.Exception.Message)"
+}
+
+# ============================================================
+# Default interfaceAlias for the NIC combo:
+# pre-select the profile's source.interfaceAlias when both
+# (a) a profile is loaded and (b) the alias is present on this PC.
+# Otherwise the combo defaults to the first adapter row.
+# ============================================================
+$_defaultAlias = $null
+if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.network) {
+    if ($null -ne $script:MigrationProfile.network.source -and `
+        -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.network.source.interfaceAlias)) {
+        $_defaultAlias = $script:MigrationProfile.network.source.interfaceAlias
+    }
+}
+
+# ============================================================
+# Show the menu (modal). Returns a pscustomobject:
+#   .action          -> 'target' | 'source' | 'revert' | 'exit'
+#   .oldPCName       -> selected hostlist OldPCName  (or $null)
+#   .newPCName       -> selected hostlist NewPCName  (or $null)
+#   .interfaceAlias  -> selected NIC name            (or $null)
+# ============================================================
+$result = Show-LanPrepMenu `
+    -Version               $script:LanPrepVersion `
+    -MigrationProfile      $script:MigrationProfile `
+    -HostRows              $script:HostRows `
+    -Nics                  $script:Nics `
+    -DefaultInterfaceAlias $_defaultAlias
+
+# Build the optional-parameter splat once so target/source paths share it.
+$_childArgs = @{}
+if (-not [string]::IsNullOrWhiteSpace($result.interfaceAlias)) {
+    $_childArgs['InterfaceAlias'] = $result.interfaceAlias
+}
+if (-not [string]::IsNullOrWhiteSpace($result.oldPCName)) {
+    $_childArgs['OldPCName'] = $result.oldPCName
+}
+if (-not [string]::IsNullOrWhiteSpace($result.newPCName)) {
+    $_childArgs['NewPCName'] = $result.newPCName
+}
+
+switch ($result.action) {
     'target' {
         Show-Info "Running Prepare-LanMigration.ps1 -Role target ..."
+        if ($result.oldPCName -or $result.newPCName) {
+            Show-Info ("  host pair      : {0} -> {1}" -f $result.oldPCName, $result.newPCName)
+        }
+        if ($result.interfaceAlias) {
+            Show-Info ("  interfaceAlias : {0}" -f $result.interfaceAlias)
+        }
+        # Reset $LASTEXITCODE so the finally block can rely on it to detect
+        # success path (Prepare-LanMigration ends with explicit `exit 0`;
+        # failure paths use `exit 1`). -Force suppresses the child's Y/N
+        # prompt: the menu's role button (e.g. "(this PC = NEW-PC-01)") is
+        # already the operator's last point of confirmation.
+        $global:LASTEXITCODE = 0
         Write-Host ""
-        & (Join-Path $script:LanPrepRoot 'Prepare-LanMigration.ps1') -Role target
+        & (Join-Path $script:LanPrepRoot 'Prepare-LanMigration.ps1') -Role target -Force @_childArgs
     }
     'source' {
         Show-Info "Running Prepare-LanMigration.ps1 -Role source ..."
+        if ($result.oldPCName -or $result.newPCName) {
+            Show-Info ("  host pair      : {0} -> {1}" -f $result.oldPCName, $result.newPCName)
+        }
+        if ($result.interfaceAlias) {
+            Show-Info ("  interfaceAlias : {0}" -f $result.interfaceAlias)
+        }
+        $global:LASTEXITCODE = 0
         Write-Host ""
-        & (Join-Path $script:LanPrepRoot 'Prepare-LanMigration.ps1') -Role source
+        & (Join-Path $script:LanPrepRoot 'Prepare-LanMigration.ps1') -Role source -Force @_childArgs
     }
     'revert' {
         if ($null -eq $script:MigrationProfile) {
@@ -204,7 +387,7 @@ switch ($action) {
         Show-Info "Menu cancelled. Exiting."
     }
     default {
-        Show-Warning "Unknown menu action: $action"
+        Show-Warning "Unknown menu action: $($result.action)"
     }
 }
 
@@ -214,7 +397,36 @@ finally {
     if ($script:TranscriptStarted) {
         Write-Host "Log saved: $script:TranscriptPath" -ForegroundColor DarkGray
     }
-    Read-Host "Press Enter to close this window"
+
+    # Skip the trailing Read-Host on the target/source SUCCESS path only:
+    #   - KeepAwake.bat is now running in a separate window (baton-passed),
+    #     so closing this conhost immediately is the natural next step.
+    # All other paths keep the Read-Host so the operator can read the
+    # error / cancellation / completion message before the window closes:
+    #   - $result is $null              -> early return before menu
+    #     (fabriq main not found, dot-source failure, etc.)
+    #   - $result.action = 'exit'       -> menu cancelled, give a beat
+    #     so an accidental Esc/Quit doesn't slam the window shut
+    #   - $result.action = 'revert'     -> operator explicitly asked to
+    #     keep the Enter step per project decision (revert is rarer and
+    #     less time-pressured than the prep path)
+    #   - target/source + LASTEXITCODE != 0 -> Prepare-LanMigration
+    #     failed; the child .ps1 already showed its own "Press Enter to
+    #     exit" message, so this Read-Host is the parent's safety net
+    #     (operator sees a second Enter prompt, but the parent transcript
+    #     summary stays on screen).
+    $skipReadHost = (
+        $null -ne $result -and
+        ($result.action -eq 'target' -or $result.action -eq 'source') -and
+        $LASTEXITCODE -eq 0
+    )
+    if ($skipReadHost) {
+        Write-Host "[ok] LAN-Prep finished; closing this window. (KeepAwake.bat continues in a separate window.)" -ForegroundColor Green
+    }
+    else {
+        Read-Host "Press Enter to close this window"
+    }
+
     if ($script:TranscriptStarted) {
         try { Stop-Transcript | Out-Null } catch {}
     }

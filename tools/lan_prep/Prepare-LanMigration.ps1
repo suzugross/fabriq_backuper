@@ -15,6 +15,19 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$ProfilePath,
 
+    # v0.30.0: optional overrides from the LAN-Prep menu.
+    # When the operator picked a NIC / host pair on the menu form,
+    # fabriq_lanprep.ps1 forwards those choices here. Empty values
+    # mean "fall back to profile values" (back-compat mode).
+    [Parameter(Mandatory = $false)]
+    [string]$InterfaceAlias,
+
+    [Parameter(Mandatory = $false)]
+    [string]$OldPCName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$NewPCName,
+
     [switch]$Force
 )
 
@@ -67,6 +80,17 @@ if ($jsonText -match '"\s*password\s*"') {
 
 $netConfig = if ($Role -eq 'source') { $migProfile.network.source } else { $migProfile.network.target }
 
+# v0.30.0: optional interfaceAlias override from the menu form.
+# Copy the PSObject first so the in-memory profile remains
+# untouched (defensive; the profile object is not otherwise
+# mutated, but ConvertFrom-Json returns shared sub-objects).
+if (-not [string]::IsNullOrWhiteSpace($InterfaceAlias)) {
+    $_overrideAlias = $InterfaceAlias
+    $netConfig = $netConfig | Select-Object *
+    $netConfig.interfaceAlias = $_overrideAlias
+    Write-Host "[info] interfaceAlias overridden by menu selection: $_overrideAlias" -ForegroundColor DarkGray
+}
+
 # Pre-flight: verify the configured interfaceAlias actually exists on this
 # PC. Without this check, Get-NetIPInterface inside New-RollbackSnapshot
 # throws "No matching MSFT_NetIPInterface objects found" after the operator
@@ -111,6 +135,13 @@ Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host "  Fabriq LAN-Prep  -  Role: $Role" -ForegroundColor Cyan
 Write-Host "  Profile: $($migProfile.profileName)" -ForegroundColor Cyan
+if (-not [string]::IsNullOrWhiteSpace($OldPCName) -or -not [string]::IsNullOrWhiteSpace($NewPCName)) {
+    $_hp = "{0} -> {1}" -f (
+        $(if ([string]::IsNullOrWhiteSpace($OldPCName)) { '(unspecified)' } else { $OldPCName }),
+        $(if ([string]::IsNullOrWhiteSpace($NewPCName)) { '(unspecified)' } else { $NewPCName })
+    )
+    Write-Host "  Host pair (hostlist): $_hp" -ForegroundColor Cyan
+}
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "[plan] interface alias  : $($netConfig.interfaceAlias)"
@@ -259,3 +290,11 @@ catch {
     Read-Host "Press Enter to exit"
     exit 1
 }
+
+# v0.30.0: explicit exit 0 on the success path so the parent
+# fabriq_lanprep.ps1 can rely on $LASTEXITCODE for its
+# skip-Read-Host decision. Without this PowerShell leaves
+# $LASTEXITCODE at whatever the last native call set it to
+# (typically 0 from netsh, but the explicit return value is
+# safer than relying on that side-effect).
+exit 0

@@ -16,6 +16,309 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.30.0: **LAN-Prep の target/source 成功時に Y/N 確認 + 完了後
+  Enter 押下を省略** — operator が menu の役割ボタン (「移行先として設定 /
+  (この PC = NEW-PC-01)」) を押した後、`Apply the above changes? (y/N)` と
+  完了後の `Press Enter to close this window` を待たされていた問題に対処。
+  Step 4 完了後に KeepAwake.bat が別 window で自動起動するため (v0.28.0)、
+  そこで「バトンタッチ」が成立しており、conhost 側で Enter を促す必然性が
+  なくなっていた。
+  - **修正ファイル** [fabriq_lanprep.ps1](fabriq_lanprep.ps1):
+    - try ブロック冒頭で `$result = $null` を先行宣言。menu 到達前の早期
+      `return` (fabriq main 不在、dot-source 失敗等) で finally から
+      `$result` を参照できるようにする
+    - target/source 経路で `Prepare-LanMigration.ps1` を `-Force` 付きで
+      呼び出し → 子側 Y/N 確認 (`Apply the above changes? (y/N)`) を
+      bypass。menu の役割ボタンが最終確認の役割を担う
+    - 呼び出し直前に `$global:LASTEXITCODE = 0` でリセットし、子側完了
+      後に親側で確実に exit code を判定可能にする (defensive)
+    - `finally` ブロックで `Read-Host "Press Enter to close this window"`
+      を条件分岐:
+        - **skip 条件**: `$result.action -in @('target','source')` かつ
+          `$LASTEXITCODE -eq 0` (= success path) のみ。 `[ok] LAN-Prep
+          finished; closing this window. (KeepAwake.bat continues ...)`
+          を 1 行表示してから即 close
+        - **Read-Host 維持**: 早期 return ($result が $null)、`exit` /
+          `revert`、または target/source 失敗 ($LASTEXITCODE != 0)。
+          operator が error/cancellation メッセージを読む時間を確保
+  - **修正ファイル** [tools/lan_prep/Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1):
+    - success path の末尾に明示的な `exit 0` を追加。これがないと
+      PowerShell は `$LASTEXITCODE` を最後の native 呼出 (netsh 等) の
+      値のまま放置するため、親側の skip-Read-Host 判定が壊れる可能性が
+      あった。`exit 0` で明示的に 0 を返すことで親の `$LASTEXITCODE`
+      チェックが信頼できるシグナルになる
+    - **失敗 path は無変更**: 既存の `Read-Host "Press Enter to exit"`
+      + `exit 1` を維持。operator は失敗内容を読み終えてから親側にも
+      `Press Enter to close` を再度押すことになるが、安全側の挙動
+      として許容
+  - **不変 ファイル**:
+    - [tools/lan_prep/Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1):
+      revert は `-Force` を渡さないので Y/N 確認 + Read-Host が従来通り
+      残る (operator 希望: revert は確認のためにポーズしたい)
+    - [tools/lan_prep/lib/menu_form.ps1](tools/lan_prep/lib/menu_form.ps1):
+      menu 自体の挙動には変更なし
+    - top-level `trap` ブロック内の `Read-Host "Press Enter to close
+      this window"`: 未捕捉 terminating error は確実にメッセージを読ませる
+      ため、現状維持
+  - **後方互換**:
+    - 直接 PowerShell から `Prepare-LanMigration.ps1 -Role target` を
+      呼ぶ運用 → `-Force` 来ない → Y/N 確認 + 完了後 Read-Host とも
+      従来通り表示される。EXE 経由 (menu) のみ UX 改善
+    - revert は全パスで挙動不変
+    - 起動前エラー / menu 終了 / Esc キャンセル → Read-Host 維持
+  - **ステートマシン**:
+    ```
+    target/source 成功:
+      menu → ボタン押下 → plan 表示 → 即 Step 1-4 → KeepAwake 別 window
+        起動 → 親 conhost は "[ok] ... closing this window" 1 行表示で
+        即 close (Enter 押下なし)
+    target/source 失敗:
+      menu → ボタン押下 → plan 表示 → Step N 失敗 → 子側 "Press Enter
+        to exit" → exit 1 → 親側 "Press Enter to close this window"
+        (2 段 Enter、failure path は安全側として許容)
+    revert:
+      menu → ボタン押下 → plan 表示 → Y/N 確認 → Step 復元 → 親側
+        "Press Enter to close this window" (現状維持)
+    exit / Esc:
+      menu → 終了 → "Menu cancelled" → 親側 Read-Host (押し間違い対策)
+    起動前エラー:
+      早期 return → 親側 Read-Host (error message を読ませる)
+    ```
+  - **VERSION**: 0.30.0 据え置き (UX 改善、interface/schema 不変)
+  - **配備方針**: `E:\fabriq_backuper\` 再配置のみ。EXE / Prepare-
+    LanMigration.ps1 の interface 不変なので運用変更なし
+  - **検証** (operator 側で実機確認):
+    1. target 成功 path → Y/N なし、完了後の Enter なし、`[ok]` ログの
+       直後にウィンドウが閉じる、KeepAwake.bat の別 window が継続
+    2. target 失敗 path (例: profile に存在しない interfaceAlias を
+       入れる) → 子側 `Press Enter to exit` → 親側 `Press Enter to
+       close` の 2 段 Enter
+    3. revert → 従来通り Y/N + 完了後 Enter
+    4. menu で `終了` 押下 → 従来通り Read-Host で待機
+    5. fabriq main 不在で起動 → 従来通り Read-Host で待機
+    6. 直接 `pwsh Prepare-LanMigration.ps1 -Role target` を呼ぶ →
+       従来通り Y/N + Read-Host (Force 付かない)
+
+### Added
+- backuper v0.30.0: **LAN-Prep メニューを hostlist 駆動に拡張** —
+  これまで `migration_profile.json` に hardcode していた PC アイデンティティと
+  NIC alias を、起動時の WinForms メニュー上で **fabriq hostlist.csv からの
+  選択** + **Get-NetAdapter からのドロップダウン選択** に置き換え。case-by-case
+  に profile.json を手編集していた運用を排除し、複数 PC ペアを 1 つの profile
+  で運用できるようにする。`migration_profile.json` のスキーマは **無変更**
+  (schemaVersion=1)、子スクリプトへは optional パラメータで上書き伝達するので
+  完全に後方互換。
+  - **新規 メニュー画面構成** ([tools/lan_prep/lib/menu_form.ps1](tools/lan_prep/lib/menu_form.ps1)):
+    - hostlist combo: `(未選択 — profile 値で実行)` を sentinel に、続いて
+      `OldPCName  ->  NewPCName` 行を一覧表示。未選択時は後方互換モード
+    - NIC combo: `Get-NetAdapter | Sort-Object Name` の結果を `Name (Status,
+      MediaConnectState)` 形式で全件表示。kitting 中の disconnected NIC も
+      選択可能 (現行 lan-prep が想定する link-down 状態でも IP を仕込む
+      シナリオを維持)
+    - 役割ボタン (移行先 / 移行元) を 2 列横並びに変更。ラベルは hostlist
+      選択行に追従して 2 行表示:
+        - 行選択あり: `移行先として設定 / (この PC = NEW-PC-01)`
+        - 行未選択 : `移行先として設定 / (profile 値)`
+    - 戻り値を string token → pscustomobject に変更
+      (`action / oldPCName / newPCName / interfaceAlias`)。caller のみが
+      影響範囲、外部依存なし
+  - **新規 関数** `Show-LanPrepPassphrasePrompt`
+    ([tools/lan_prep/lib/menu_form.ps1](tools/lan_prep/lib/menu_form.ps1)):
+    hostlist に ENC: 暗号化フィールドが含まれている場合のみ呼ばれる、
+    fabriq マスターパスフレーズ入力モーダル。Test-MasterPassphrase で
+    verify、成功時に plaintext を返し `$global:FabriqMasterPassphrase`
+    に設定後、hostlist を再読込して復号値を menu に渡す。Cancel/検証 NG
+    は警告のみ降格して後方互換モード突入。新規 .ps1 ファイルは作らず
+    既存 BOM 付き menu_form.ps1 に同居 (Write tool が BOM なし保存する
+    制約への対処、CLAUDE.md 規約 5)
+  - **修正 ファイル** [fabriq_lanprep.ps1](fabriq_lanprep.ps1):
+    - dot-source 追加: `backuper/lib/hostlist_reader.ps1` /
+      `backuper/lib/ui/fabriq_select_form.ps1`
+    - 起動時に `Find-FabriqRoot` (multi-candidate picker込) を実行、
+      fabriq main 不在は **FATAL** で起動拒否 (backuper 本体と同じ依存
+      パターン)
+    - `Get-FabriqHostlist` で hostlist 読込 → ENC: 検出ロジック →
+      passphrase prompt → 再読込 (Import-ModuleCsv は ENC: 未設定でも
+      エラーを返さず ENC: 文字列のまま列値に入れるため、別途検出する)
+    - `Get-NetAdapter` で NIC 一覧取得 (失敗は warning に降格)
+    - `Show-LanPrepMenu` を新シグネチャ (HostRows / Nics /
+      DefaultInterfaceAlias) で呼び出し、戻り値の pscustomobject を
+      switch で分岐。target/source 経路では optional パラメータ
+      (`-InterfaceAlias` / `-OldPCName` / `-NewPCName`) を splat で
+      `Prepare-LanMigration.ps1` に転送
+  - **修正 ファイル** [tools/lan_prep/Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1):
+    - optional パラメータ `-InterfaceAlias` `-OldPCName` `-NewPCName`
+      を追加 (後方互換: 未指定なら profile 値を使用)
+    - `-InterfaceAlias` 指定時は `$netConfig | Select-Object *` で
+      shallow copy を作って `.interfaceAlias` を上書き。in-memory
+      profile オブジェクトには手を加えない (defensive copy)
+    - `-OldPCName` / `-NewPCName` は plan 表示 banner に「Host pair
+      (hostlist): OLD-PC-01 -> NEW-PC-01」を追加するためにのみ使用
+      (Step 1 以降の動作には影響しない)
+  - **不変** ファイル:
+    - [tools/lan_prep/Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1):
+      revert は snapshot 内の `interfaceAlias` と profile の
+      `rollback.snapshotPath` だけで動作するため hostlist 選択は不要。
+      無変更
+    - [backuper/data/migration_profile.sample.json](backuper/data/migration_profile.sample.json):
+      schema 不変なのでサンプルも無変更
+    - [tools/lan_prep/lib/network_config.ps1](tools/lan_prep/lib/network_config.ps1) /
+      [share_setup.ps1](tools/lan_prep/lib/share_setup.ps1) /
+      [firewall.ps1](tools/lan_prep/lib/firewall.ps1) /
+      [rollback_snapshot.ps1](tools/lan_prep/lib/rollback_snapshot.ps1):
+      menu からの呼び出しは upstream の Prepare-LanMigration が
+      吸収するため、ライブラリ側に変更不要
+  - **ステートマシン** (operator 視点):
+    1. `Fabriq_LanPrep.exe` ダブルクリック (UAC 自動昇格)
+    2. fabriq main 自動検出 (見つからなければ起動拒否)
+    3. hostlist 読込、ENC: 検出時は passphrase 入力ダイアログ
+    4. WinForms メニュー表示:
+       - PC ペアを combo から選択 (任意。未選択 = 後方互換モード)
+       - NIC を combo から選択 (profile の interfaceAlias が default)
+       - 役割ボタン (移行先 / 移行元) を押下、ボタンラベルが選択行に
+         追従して `(この PC = NEW-PC-01)` 等を表示
+    5. 既存 Prepare-LanMigration が起動、Step 1-4 + KeepAwake 自動起動
+       (v0.28.0 で導入したフロー)
+    6. operator は backup/restore へ移行
+  - **後方互換**:
+    - hostlist 読込失敗 / hostlist 行未選択 → 役割ボタンは押下可能、
+      profile 値のみで Prepare-LanMigration が動作 (= v0.29.0 等価)
+    - profile.json 不在 → 役割ボタン disabled (= v0.29.0 等価)
+    - 既存 profile.json の `network.source/target.interfaceAlias` は
+      menu の NIC combo の **default 選択値** として機能
+    - 直接 `tools/lan_prep/Prepare-LanMigration.ps1 -Role target` を
+      PowerShell から呼ぶ運用も維持される (新パラメータは optional)
+  - **VERSION**: 0.30.0 据え置き (アプリ移行チェックと同 Unreleased サイクル)
+  - **配備方針**:
+    1. `E:\fabriq_backuper\` を customer 端末に再配置 (`Fabriq_LanPrep.exe`
+       は無変更、ps1 ファイル群のみ差し替わる)
+    2. fabriq main (`E:\fabriq\` 等) が同 PC に存在する前提を確認
+    3. operator は `Fabriq_LanPrep.exe` をダブルクリック (運用上の操作は
+       v0.29.0 から変わらない、メニュー画面に対象 PC ペアと NIC の選択肢が
+       増えただけ)
+  - **検証**:
+    1. fabriq main 存在 + hostlist 平文 → hostlist combo に行が並ぶ、
+       NIC combo に adapter 一覧表示
+    2. hostlist 行切替で役割ボタンのラベルが追従更新 (改行付き 2 行)
+    3. hostlist 未選択 → 後方互換モードのラベル `(profile 値)` で押下可能、
+       v0.29.0 と同じ動作で Prepare-LanMigration が走る
+    4. fabriq main 不在 → 起動拒否、`%TEMP%\fabriq_lanprep_*.log` に
+       `Fabriq main directory not found` が残る
+    5. hostlist 読込失敗 → 警告 + 後方互換モード突入、menu 自体は開く
+    6. ENC: 検出 → passphrase ダイアログ表示、Cancel で警告 + 後方互換
+       モード突入
+    7. revert 動作は v0.29.0 と同等 (snapshot 内 alias 使用、hostlist 不要)
+    8. profile.network.{role}.interfaceAlias が menu の NIC combo 値で
+       in-memory 上書きされること、snapshot ファイル
+       (`_rollback_snapshot.json`) にも上書き値が記録されること
+
+- backuper v0.30.0: **アプリ移行チェックツールを system_evidence section に同梱** —
+  案件ごとに「移行先 PC に必要なアプリ」を定義した CSV と、`system_evidence`
+  が採取した `11_DesktopApps.csv` / `11_StoreApps.csv` を突き合わせて、operator
+  が target PC のデスクトップ集約フォルダで `.bat` をダブルクリックするだけで
+  「移行が必要なアプリ」を一覧できる基盤を追加。
+  - **新規ファイル**:
+    - [.gitignore](.gitignore): repo 直下に新設。`backuper/data/app_migration_list.csv`
+      を ignore (案件固有のアプリ名が誤コミットされる事故を防止)。サンプル
+      テンプレート (`*.sample.csv`) は commit 対象として残す
+    - [backuper/data/app_migration_list.sample.csv](backuper/data/app_migration_list.sample.csv):
+      案件定義 CSV のテンプレート。**UTF-8 BOM + CRLF**。Excel で開いた時の
+      日本語化け回避のため BOM 必須。10 件の代表アプリ例 (Microsoft 365 /
+      Chrome / Acrobat / 秀丸エディタ / TeraTerm 等) を同梱
+  - **修正ファイル**:
+    - [backuper/common.ps1](backuper/common.ps1) (BOM 付き既存ファイル) に
+      helper 2 個を追加:
+      - `New-AppMigrationCheckBat`: ASCII only な `.bat` 本体 (chcp 65001 +
+        powershell -File + `%*` で `/verbose` などの引数 forward)
+      - `New-AppMigrationCheckScript`: 日本語 string label を含む `.ps1`
+        本体を返す。restore.ps1 が `UTF8Encoding($true)` で書き出すことで
+        BOM 付き UTF-8 ファイルとして配備される。printer の
+        `New-PrinterHandoffReadme` / `New-PrinterSettingsText` と同じ
+        役割分離 pattern (ASCII only restore.ps1 から helper 経由で日本語
+        を扱う、CLAUDE.md 規約 5 準拠)
+    - [backuper/lib/sections/system_evidence/restore.ps1](backuper/lib/sections/system_evidence/restore.ps1):
+      handoff deploy 直後に新規ステップを挿入。
+      - `<repo>/backuper/data/app_migration_list.csv` を handoff 配下に Copy
+        (不在時は warning + sample のみ deploy で継続)
+      - `<repo>/backuper/data/app_migration_list.sample.csv` を handoff 配下に Copy
+      - `Check-AppMigration.bat` (ASCII) を handoff 配下に生成
+      - `_data\Check-AppMigration.ps1` (UTF-8 BOM) を handoff 配下に生成
+      - `_restore_manifest.json` の `appMigrationCheck` フィールドに deploy
+        状況 (toolDeployed / listCsvCopied / sampleCsvCopied) を記録
+      - 失敗は warning に降格、section 全体は Success のまま (evidence Copy
+        が既に成功しているため)
+    - [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1):
+      handoff folder の README.txt 内、`03_移行元PC情報\` セクションに
+      Check-AppMigration.bat の使い方を 5 行追記 (BOM 付き既存ファイル
+      なので日本語をそのまま記述)
+  - **バッチ実行フロー** (operator 視点):
+    1. target PC のデスクトップで `<date>_<host>_BK\03_移行元PC情報\Check-AppMigration.bat`
+       をダブルクリック (UAC 不要)
+    2. console に「要移行 / 未検出 / サマリ」が日本語表示
+    3. 同じ内容が同フォルダの `_AppMigrationReport.txt` に BOM 付き UTF-8
+       で保存される (Notepad で開いて日本語正常表示)
+    4. `Check-AppMigration.bat /verbose` で「補足: source にあるが案件未登録」
+       セクションも表示
+  - **マッチング仕様**:
+    - 案件定義 CSV の `MatchPatterns` 列を `|` で分割した各パターンを
+      case-insensitive 部分一致 (`-like '*pat*'`) で source 採取アプリの
+      Name (Desktop は Publisher も) と照合
+    - **Desktop apps**: `Name + " | " + Publisher` を hay に
+    - **Store apps**: `Name` のみを hay に (StoreApps.csv の Publisher 列は
+      `PublisherId` = hash 文字列で人間可読でないため照合対象から除外)
+    - 1 案件 entry に複数 source アプリが該当した場合は全部表示
+  - **エンコーディング多重ガード**:
+    - 案件定義 CSV (operator が Excel 編集) の読み込みは **BOM 自動判定**:
+      ファイル先頭 3 bytes が `EF BB BF` → `Import-Csv -Encoding UTF8`、
+      無 BOM → `Import-Csv -Encoding Default` (= JP Windows では CP932)。
+      Excel の「CSV UTF-8」/「CSV」両方の保存形式に対応
+    - `11_DesktopApps.csv` / `11_StoreApps.csv` は backup.ps1 の
+      `Export-Csv -Encoding UTF8` で BOM 付き UTF-8 確定なので
+      `-Encoding UTF8` 固定で読込
+    - `.bat` 冒頭で `chcp 65001` + ps1 冒頭で `[Console]::OutputEncoding =
+      UTF8` の二段ガード (どちらか単独では PS5.1 が CP932 を保持する罠)
+    - `_AppMigrationReport.txt` は `UTF8Encoding($true)` で BOM 付き出力
+      (PS5.1 の `Out-File -Encoding utf8` は BOM 無しを出す罠を回避)
+  - **不在系の挙動** (crash 防止):
+    - repo `app_migration_list.csv` 不在 → restore.ps1 が warning、sample
+      のみ deploy。bat 実行時に親切なメッセージ表示
+    - handoff `app_migration_list.csv` 不在 → bat 実行時に「sample をコピー
+      して編集してください」案内 + exit 1
+    - `11_DesktopApps.csv` / `11_StoreApps.csv` 不在 (pre-v0.26.0 backup) →
+      bat 実行時に「system_evidence 採取がされていない可能性」案内 + exit 1
+    - handoff checkbox OFF / pre-v0.26.0 backup → system_evidence/restore.ps1
+      自体が早期 Skipped を返すため、バッチ配備自体が行われない (= 既存の
+      Skipped 挙動と完全に整合)
+  - **不変**:
+    - section interface / sections.csv 実行順 / aggregate manifest schema
+    - backup 経路 (system_evidence/backup.ps1) は一切変更なし
+    - 他 5 sections / engine / restore_view の handoff root mkdir & README
+      生成ロジック / fabriq main への書込み (なし)
+    - EXE は無変更 (再ビルド不要)
+  - **VERSION**: 0.29.0 → **0.30.0** (MINOR、後方互換な機能追加)
+  - **配備**: `E:\fabriq_backuper\` を customer 端末に再配置で反映。
+    案件担当が `backuper/data/app_migration_list.sample.csv` をコピーして
+    `backuper/data/app_migration_list.csv` を作成し、案件アプリを記述
+  - **検証**:
+    1. `app_migration_list.sample.csv` を Excel で開き日本語が文字化けしない
+       (UTF-8 BOM 効果)
+    2. sample をコピーして `app_migration_list.csv` を作成
+    3. `git status` で `app_migration_list.csv` が untracked 表示されない
+       (= .gitignore 反映)
+    4. backup → restore (handoff ON) で `03_移行元PC情報\` 配下に 4 entry
+       (Check-AppMigration.bat / app_migration_list.csv /
+       app_migration_list.sample.csv / _data\) が配備される
+    5. `Check-AppMigration.bat` ダブルクリック → console で要移行 / 未検出 /
+       サマリの 3 セクションが日本語正常表示
+    6. `_AppMigrationReport.txt` を Notepad で開いて同内容が日本語正常表示
+    7. `app_migration_list.csv` をリネーム/削除して bat 実行 → 親切な warning +
+       exit (crash しない)
+    8. `Check-AppMigration.bat /verbose` で「補足」セクションが追加表示
+    9. handoff OFF で restore → バッチ配備されない (system_evidence Skipped)
+   10. pre-v0.26.0 backup を v0.30.0 で restore → system_evidence は Skipped
+       (= バッチ配備されない)、他 sections は通常動作
+
+### Changed
 - backuper v0.29.0: **printer section の restore を operator handoff folder 一本化
   に再設計** —
   [backuper/lib/sections/printer/restore.ps1](backuper/lib/sections/printer/restore.ps1) /
