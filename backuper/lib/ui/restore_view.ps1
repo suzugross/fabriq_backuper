@@ -934,6 +934,11 @@ operator-facing な設定情報が番号順に集約されています。
   → 採取時の本来のネットワーク設定は _OriginalNetworkConfig.txt をご覧ください
     (LAN 直結移行で一時 IP に変更している場合、06_NetworkConfig.csv は
      一時 IP を記録しています)。
+  → アプリ移行チェック: Check-AppMigration.bat をダブルクリックすると、
+    案件で移行対象としているアプリ (app_migration_list.csv に定義) と
+    移行元 PC の実インストール状況を突き合わせて表示します。
+    定義 CSV が未配置の場合は同梱の .sample.csv をコピーして編集してから
+    再実行してください。詳細結果は _AppMigrationReport.txt に保存されます。
 
 04_プリンタ\
   移行元 PC のプリンタ環境を移行先 PC に再現するための一式

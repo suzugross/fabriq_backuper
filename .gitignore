@@ -1,0 +1,20 @@
+# Fabriq BackUper - git ignore rules
+#
+# Per-deployment app migration list. The committed sample
+# (app_migration_list.sample.csv) is the operator template; the actual
+# project-specific file is created by copying the sample and editing it
+# in the field, so we intentionally exclude it from git to avoid
+# accidentally committing project-confidential application names.
+backuper/data/app_migration_list.csv
+
+# Build artifacts
+*.pdb
+
+# Backup output (operator data, never committed)
+Backup/
+backuper/Backup/
+
+# Temporary / scratch
+*.tmp
+*.bak
+~*

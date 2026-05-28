@@ -823,3 +823,312 @@ function global:New-PrinterSettingsText {
     return ($lines -join "`r`n")
 }
 
+# ============================================================
+# v0.31.0: app migration check helpers (system_evidence section)
+#
+# Returns the body of Check-AppMigration.{bat,ps1} that get
+# deployed to the operator handoff folder so the operator can
+# cross-check the project's app migration list against the
+# source PC's installed software (captured in 11_DesktopApps.csv
+# + 11_StoreApps.csv).
+#
+# Why these live in common.ps1 (BOM-tagged) rather than inside
+# system_evidence/restore.ps1 (ASCII-only by Write-tool
+# constraint, CLAUDE.md rule 5): the ps1 body contains Japanese
+# operator-facing labels ("要移行" etc.) that would be ANSI-
+# misinterpreted by PS5.1 if persisted via the Write tool. Same
+# pattern as printer's New-PrinterHandoffReadme.
+#
+# The caller writes the returned string with UTF8Encoding($true)
+# via [System.IO.File]::WriteAllText so the file lands on the
+# operator's desktop in BOM-tagged UTF-8.
+# ============================================================
+
+function global:New-AppMigrationCheckBat {
+    # Plain ASCII batch wrapper.
+    #
+    # Design note: deliberately avoids passing the handoff root as an
+    # argument. The classic Windows trap is that `"%~dp0"` expands with a
+    # trailing backslash that the PowerShell quoted-argument parser then
+    # treats as an escape for the closing quote (so $HandoffDir ends up
+    # containing a literal `"`). Instead, the ps1 derives its handoff
+    # root from $PSScriptRoot (which resolves to `<handoff>\_data\`) and
+    # walks one level up. This mirrors printer/Install-Printers.bat.
+    #
+    # `%*` is forwarded so operator-facing flags like `/verbose` reach
+    # the ps1 via $args.
+    #
+    # `chcp 65001` switches the console code page so Write-Host of
+    # non-ASCII characters renders correctly. The ps1 still sets
+    # [Console]::OutputEncoding=UTF8 as a second guard (one without the
+    # other is insufficient on PS5.1).
+    @"
+@echo off
+chcp 65001 >nul
+title Fabriq BackUper - App Migration Check
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0_data\Check-AppMigration.ps1" %*
+echo.
+pause
+"@
+}
+
+function global:New-AppMigrationCheckScript {
+    # Returns the PowerShell body that performs:
+    #   1. Load app_migration_list.csv (BOM-aware: UTF8 if BOM, CP932 fallback)
+    #   2. Load 11_DesktopApps.csv + 11_StoreApps.csv (always UTF8 -- written by
+    #      Export-Csv -Encoding UTF8 in backup.ps1, which yields BOM on PS5.1)
+    #   3. Match each entry's MatchPatterns (`|`-separated, case-insensitive
+    #      substring) against source app Name (+ Publisher for Desktop apps;
+    #      StoreApps.Publisher is actually PublisherId/hash and unsuitable)
+    #   4. Emit three sections to console + _AppMigrationReport.txt:
+    #        - 要移行 (matched entries with source hits)
+    #        - 未検出 (entries with no source hit)
+    #        - 補足   (source apps not covered by any entry; /verbose only)
+    @'
+# This script lives at <handoff>\_data\Check-AppMigration.ps1.
+# Derive the handoff root from $PSScriptRoot rather than accepting it as
+# a parameter -- passing "%~dp0" from the bat trips the Windows
+# trailing-backslash-as-escape trap on the PowerShell argv parser.
+
+$ErrorActionPreference = 'Stop'
+
+# Force UTF-8 console output regardless of CHCP / system locale.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
+$verboseMode = $args -contains '/verbose'
+
+$HandoffDir = Split-Path -Parent $PSScriptRoot
+$listPath    = Join-Path $HandoffDir 'app_migration_list.csv'
+$samplePath  = Join-Path $HandoffDir 'app_migration_list.sample.csv'
+$desktopPath = Join-Path $HandoffDir '11_DesktopApps.csv'
+$storePath   = Join-Path $HandoffDir '11_StoreApps.csv'
+$reportPath  = Join-Path $HandoffDir '_AppMigrationReport.txt'
+
+$output = New-Object System.Collections.ArrayList
+
+function Write-Both {
+    param([string]$Text)
+    Write-Host $Text
+    [void]$output.Add($Text)
+}
+
+function Save-Report {
+    $u = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($reportPath, ($output -join "`r`n"), $u)
+}
+
+function Read-CsvAutoEncoding {
+    # BOM detection -> UTF8 / Default. Excel "CSV UTF-8" save = BOM,
+    # Excel "CSV (comma-separated)" save = CP932 on JP Windows.
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    $hasBom = $false
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        try {
+            $buf = New-Object byte[] 3
+            $read = $fs.Read($buf, 0, 3)
+            if ($read -ge 3 -and $buf[0] -eq 0xEF -and $buf[1] -eq 0xBB -and $buf[2] -eq 0xBF) {
+                $hasBom = $true
+            }
+        } finally { $fs.Dispose() }
+    } catch {}
+    $enc = if ($hasBom) { 'UTF8' } else { 'Default' }
+    return @(Import-Csv -LiteralPath $Path -Encoding $enc)
+}
+
+Write-Both "============================================================"
+Write-Both "  Fabriq BackUper - アプリ移行チェック"
+Write-Both "============================================================"
+
+if (-not (Test-Path -LiteralPath $listPath)) {
+    Write-Both ""
+    Write-Both "[ERROR] 案件定義 CSV が見つかりません:"
+    Write-Both "        $listPath"
+    Write-Both ""
+    if (Test-Path -LiteralPath $samplePath) {
+        Write-Both "サンプルが同梱されています:"
+        Write-Both "  $samplePath"
+        Write-Both ""
+        Write-Both "上記サンプルを app_migration_list.csv にコピーしてから"
+        Write-Both "Excel 等で編集し、再度このバッチをダブルクリック"
+        Write-Both "してください。"
+        Write-Both ""
+        Write-Both "※ Excel で保存する際は「CSV UTF-8 (BOM 付き) (*.csv)」"
+        Write-Both "   を選ぶと日本語文字化けを防げます。"
+        Write-Both "   通常の「CSV (カンマ区切り)」でも本ツールは読み込めますが、"
+        Write-Both "   日本語の表記ゆれパターンを書く場合は BOM 付きを推奨します。"
+    } else {
+        Write-Both "app_migration_list.csv または app_migration_list.sample.csv"
+        Write-Both "のどちらかをこのフォルダに配置してください。"
+    }
+    Save-Report
+    exit 1
+}
+
+$entries = @(Read-CsvAutoEncoding -Path $listPath)
+if ($entries.Count -eq 0) {
+    Write-Both "[WARN] 案件定義 CSV は空でした: $listPath"
+    Save-Report
+    exit 0
+}
+
+# Source PC apps
+$sourceApps = New-Object System.Collections.ArrayList
+$desktopCount = 0
+$storeCount   = 0
+if (Test-Path -LiteralPath $desktopPath) {
+    $d = @(Import-Csv -LiteralPath $desktopPath -Encoding UTF8)
+    $desktopCount = $d.Count
+    foreach ($a in $d) {
+        [void]$sourceApps.Add([PSCustomObject]@{
+            Name      = "$($a.Name)".Trim()
+            Publisher = "$($a.Publisher)".Trim()
+            Version   = "$($a.Version)".Trim()
+            Scope     = "$($a.Scope)".Trim()
+            Source    = 'Desktop'
+        })
+    }
+} else {
+    Write-Both "[WARN] 11_DesktopApps.csv が見つかりません: $desktopPath"
+}
+if (Test-Path -LiteralPath $storePath) {
+    $s = @(Import-Csv -LiteralPath $storePath -Encoding UTF8)
+    $storeCount = $s.Count
+    foreach ($a in $s) {
+        [void]$sourceApps.Add([PSCustomObject]@{
+            Name      = "$($a.Name)".Trim()
+            Publisher = ''   # StoreApps の Publisher 列は PublisherId (hash) のため照合対象外
+            Version   = "$($a.Version)".Trim()
+            Scope     = 'Store'
+            Source    = 'Store'
+        })
+    }
+} else {
+    Write-Both "[WARN] 11_StoreApps.csv が見つかりません: $storePath"
+}
+
+if ($sourceApps.Count -eq 0) {
+    Write-Both ""
+    Write-Both "[ERROR] 移行元 PC のアプリ一覧が無いため照合できません。"
+    Write-Both "        backup 取得時に system_evidence section が走っていない"
+    Write-Both "        可能性があります (v0.26.0 未満の古いバックアップ?)。"
+    Save-Report
+    exit 1
+}
+
+# Match
+$matched           = New-Object System.Collections.ArrayList
+$notFound          = New-Object System.Collections.ArrayList
+$matchedAppIndices = New-Object System.Collections.Generic.HashSet[int]
+
+foreach ($entry in $entries) {
+    $name = "$($entry.Name)".Trim()
+    if ([string]::IsNullOrWhiteSpace($name)) { continue }
+    $patternsRaw = "$($entry.MatchPatterns)".Trim()
+    if ([string]::IsNullOrWhiteSpace($patternsRaw)) {
+        Write-Both "[SKIP] '$name' は MatchPatterns 空欄のため照合不能"
+        continue
+    }
+    $patterns = @($patternsRaw.Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+
+    $hits = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $sourceApps.Count; $i++) {
+        $app = $sourceApps[$i]
+        $hay = if ($app.Source -eq 'Desktop') {
+            "$($app.Name) | $($app.Publisher)"
+        } else {
+            "$($app.Name)"
+        }
+        $matched1 = $false
+        foreach ($p in $patterns) {
+            if ($hay -like "*$p*") { $matched1 = $true; break }
+        }
+        if ($matched1) {
+            [void]$hits.Add($app)
+            [void]$matchedAppIndices.Add($i)
+        }
+    }
+    $isRequired = ("$($entry.Required)".Trim() -eq '1')
+    $row = [PSCustomObject]@{
+        Entry      = $entry
+        Hits       = @($hits)
+        IsRequired = $isRequired
+    }
+    if ($hits.Count -gt 0) { [void]$matched.Add($row) }
+    else                   { [void]$notFound.Add($row) }
+}
+
+Write-Both "  案件定義件数   : $($entries.Count)"
+Write-Both ("  移行元アプリ   : {0} 件 (Desktop={1}, Store={2})" -f $sourceApps.Count, $desktopCount, $storeCount)
+Write-Both "  チェック実行   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Write-Both "============================================================"
+Write-Both ""
+
+Write-Both "【要移行 (案件定義に該当 & 移行元 PC に存在)】"
+if ($matched.Count -eq 0) {
+    Write-Both "  (該当なし)"
+} else {
+    foreach ($m in $matched) {
+        $req = if ($m.IsRequired) { '[必須]' } else { '[任意]' }
+        $cat = if ([string]::IsNullOrWhiteSpace($m.Entry.Category)) { '' } else { "  ($($m.Entry.Category))" }
+        Write-Both ("  o {0} {1}{2}" -f $req, $m.Entry.Name, $cat)
+        foreach ($h in $m.Hits) {
+            $ver   = if ([string]::IsNullOrWhiteSpace($h.Version)) { '' } else { "  v$($h.Version)" }
+            $scope = if ([string]::IsNullOrWhiteSpace($h.Scope))   { '' } else { "  ($($h.Scope))" }
+            Write-Both ("      -> {0}{1}{2}" -f $h.Name, $ver, $scope)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($m.Entry.Note)) {
+            Write-Both ("      備考: $($m.Entry.Note)")
+        }
+    }
+}
+Write-Both ""
+
+Write-Both "【案件定義あるが移行元 PC に未検出】"
+if ($notFound.Count -eq 0) {
+    Write-Both "  (該当なし)"
+} else {
+    foreach ($m in $notFound) {
+        $req = if ($m.IsRequired) { '[必須]' } else { '[任意]' }
+        $cat = if ([string]::IsNullOrWhiteSpace($m.Entry.Category)) { '' } else { "  ($($m.Entry.Category))" }
+        Write-Both ("  x {0} {1}{2}" -f $req, $m.Entry.Name, $cat)
+        Write-Both ("      MatchPatterns: $($m.Entry.MatchPatterns)")
+        if (-not [string]::IsNullOrWhiteSpace($m.Entry.Note)) {
+            Write-Both ("      備考: $($m.Entry.Note)")
+        }
+    }
+}
+Write-Both ""
+
+if ($verboseMode) {
+    Write-Both "【補足: 移行元 PC にあるが案件定義に未登録】"
+    $verboseCount = 0
+    for ($i = 0; $i -lt $sourceApps.Count; $i++) {
+        if ($matchedAppIndices.Contains($i)) { continue }
+        $app = $sourceApps[$i]
+        if ([string]::IsNullOrWhiteSpace($app.Name)) { continue }
+        $verboseCount++
+        $ver = if ([string]::IsNullOrWhiteSpace($app.Version)) { '' } else { "  v$($app.Version)" }
+        $pub = if ([string]::IsNullOrWhiteSpace($app.Publisher)) { '' } else { "  ($($app.Publisher))" }
+        Write-Both ("    [{0}] {1}{2}{3}" -f $app.Source, $app.Name, $ver, $pub)
+    }
+    if ($verboseCount -eq 0) { Write-Both "  (該当なし)" }
+    Write-Both ""
+}
+
+Write-Both "============================================================"
+Write-Both "【サマリ】"
+Write-Both ("  要移行         : {0} 件" -f $matched.Count)
+Write-Both ("  未検出         : {0} 件" -f $notFound.Count)
+Write-Both ("  移行元全件     : {0} 件" -f $sourceApps.Count)
+if (-not $verboseMode) {
+    Write-Both "  (補足を見るには Check-AppMigration.bat /verbose で再実行)"
+}
+Write-Both ("  レポート       : {0}" -f $reportPath)
+Write-Both "============================================================"
+
+Save-Report
+'@
+}
+

@@ -1,0 +1,11 @@
+﻿Name,MatchPatterns,Category,Required,Note
+Microsoft 365 Apps,Microsoft 365|Office Professional|Microsoft Office|Office 16|Office 15,Productivity,1,法人ライセンス前提
+Google Chrome,Google Chrome,Browser,1,
+Mozilla Firefox,Firefox,Browser,0,
+Adobe Acrobat Reader,Acrobat Reader|Adobe Reader,PDF,1,無償版
+Adobe Acrobat Pro,Acrobat Pro|Acrobat (32-bit)|Acrobat (64-bit),PDF,0,有償ライセンス確認
+Zoom,Zoom Workplace|Zoom Meetings|Zoom (x86),Communication,1,
+Slack,Slack,Communication,0,
+秀丸エディタ,秀丸|Hidemaru,Editor,0,
+TeraTerm,Tera Term|TeraTerm,Tool,0,
+WinSCP,WinSCP,Tool,0,

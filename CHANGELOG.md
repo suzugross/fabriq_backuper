@@ -15,6 +15,122 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.31.0: **アプリ移行チェックツールを system_evidence section に同梱** —
+  案件ごとに「移行先 PC に必要なアプリ」を定義した CSV と、`system_evidence`
+  が採取した `11_DesktopApps.csv` / `11_StoreApps.csv` を突き合わせて、operator
+  が target PC のデスクトップ集約フォルダで `.bat` をダブルクリックするだけで
+  「移行が必要なアプリ」を一覧できる基盤を追加。
+  - **新規ファイル**:
+    - [.gitignore](.gitignore): repo 直下に新設。`backuper/data/app_migration_list.csv`
+      を ignore (案件固有のアプリ名が誤コミットされる事故を防止)。サンプル
+      テンプレート (`*.sample.csv`) は commit 対象として残す
+    - [backuper/data/app_migration_list.sample.csv](backuper/data/app_migration_list.sample.csv):
+      案件定義 CSV のテンプレート。**UTF-8 BOM + CRLF**。Excel で開いた時の
+      日本語化け回避のため BOM 必須。10 件の代表アプリ例 (Microsoft 365 /
+      Chrome / Acrobat / 秀丸エディタ / TeraTerm 等) を同梱
+  - **修正ファイル**:
+    - [backuper/common.ps1](backuper/common.ps1) (BOM 付き既存ファイル) に
+      helper 2 個を追加:
+      - `New-AppMigrationCheckBat`: ASCII only な `.bat` 本体 (chcp 65001 +
+        powershell -File、`%*` で `/verbose` などの引数 forward)
+      - `New-AppMigrationCheckScript`: 日本語 string label を含む `.ps1`
+        本体を返す。restore.ps1 が `UTF8Encoding($true)` で書き出すことで
+        BOM 付き UTF-8 ファイルとして配備される。printer の
+        `New-PrinterHandoffReadme` / `New-PrinterSettingsText` と同じ
+        役割分離 pattern (ASCII only restore.ps1 から helper 経由で日本語
+        を扱う、CLAUDE.md 規約 5 準拠)
+    - [backuper/lib/sections/system_evidence/restore.ps1](backuper/lib/sections/system_evidence/restore.ps1):
+      handoff deploy 直後に新規ステップを挿入。
+      - `<repo>/backuper/data/app_migration_list.csv` を handoff 配下に Copy
+        (不在時は warning + sample のみ deploy で継続)
+      - `<repo>/backuper/data/app_migration_list.sample.csv` を handoff 配下に Copy
+      - `Check-AppMigration.bat` (ASCII) を handoff 配下に生成
+      - `_data\Check-AppMigration.ps1` (UTF-8 BOM) を handoff 配下に生成
+      - `_restore_manifest.json` の `appMigrationCheck` フィールドに deploy
+        状況 (toolDeployed / listCsvCopied / sampleCsvCopied) を記録
+      - 失敗は warning に降格、section 全体は Success のまま (evidence Copy
+        が既に成功しているため)
+    - [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1):
+      handoff folder の README.txt 内、`03_移行元PC情報\` セクションに
+      Check-AppMigration.bat の使い方を 5 行追記 (BOM 付き既存ファイル
+      なので日本語をそのまま記述)
+  - **バッチ実行フロー** (operator 視点):
+    1. target PC のデスクトップで `<date>_<host>_BK\03_移行元PC情報\Check-AppMigration.bat`
+       をダブルクリック (UAC 不要)
+    2. console に「要移行 / 未検出 / サマリ」が日本語表示
+    3. 同じ内容が同フォルダの `_AppMigrationReport.txt` に BOM 付き UTF-8
+       で保存される (Notepad で開いて日本語正常表示)
+    4. `Check-AppMigration.bat /verbose` で「補足: source にあるが案件未登録」
+       セクションも表示
+  - **マッチング仕様**:
+    - 案件定義 CSV の `MatchPatterns` 列を `|` で分割した各パターンを
+      case-insensitive 部分一致 (`-like '*pat*'`) で source 採取アプリの
+      Name (Desktop は Publisher も) と照合
+    - **Desktop apps**: `Name + " | " + Publisher` を hay に
+    - **Store apps**: `Name` のみを hay に (StoreApps.csv の Publisher 列は
+      `PublisherId` = hash 文字列で人間可読でないため照合対象から除外)
+    - 1 案件 entry に複数 source アプリが該当した場合は全部表示
+  - **エンコーディング多重ガード**:
+    - 案件定義 CSV (operator が Excel 編集) の読み込みは **BOM 自動判定**:
+      ファイル先頭 3 bytes が `EF BB BF` → `Import-Csv -Encoding UTF8`、
+      無 BOM → `Import-Csv -Encoding Default` (= JP Windows では CP932)。
+      Excel の「CSV UTF-8」/「CSV」両方の保存形式に対応
+    - `11_DesktopApps.csv` / `11_StoreApps.csv` は backup.ps1 の
+      `Export-Csv -Encoding UTF8` で BOM 付き UTF-8 確定なので
+      `-Encoding UTF8` 固定で読込
+    - `.bat` 冒頭で `chcp 65001` + ps1 冒頭で `[Console]::OutputEncoding =
+      UTF8` の二段ガード (どちらか単独では PS5.1 が CP932 を保持する罠)
+    - `_AppMigrationReport.txt` は `UTF8Encoding($true)` で BOM 付き出力
+      (PS5.1 の `Out-File -Encoding utf8` は BOM 無しを出す罠を回避)
+  - **bat の引数渡し設計** (smoke test で発見した罠への対処):
+    `"%~dp0"` を引数で渡す古典 trap (末尾 `\` が PowerShell argv parser で
+    閉じ quote のエスケープと解釈され、$HandoffDir 末尾に `"` が混入する)
+    を回避するため、bat は引数を一切渡さず、ps1 が `$PSScriptRoot`
+    (= `<handoff>\_data\`) の親を handoff root として解決する設計に統一。
+    printer の Install-Printers.bat と同じパターン。
+  - **不在系の挙動** (crash 防止):
+    - repo `app_migration_list.csv` 不在 → restore.ps1 が warning、sample
+      のみ deploy。bat 実行時に親切なメッセージ表示
+    - handoff `app_migration_list.csv` 不在 → bat 実行時に「sample をコピー
+      して編集してください」案内 + exit 1
+    - `11_DesktopApps.csv` / `11_StoreApps.csv` 不在 (pre-v0.26.0 backup) →
+      bat 実行時に「system_evidence 採取がされていない可能性」案内 + exit 1
+    - handoff checkbox OFF / pre-v0.26.0 backup → system_evidence/restore.ps1
+      自体が早期 Skipped を返すため、バッチ配備自体が行われない (= 既存の
+      Skipped 挙動と完全に整合)
+  - **不変**:
+    - section interface / sections.csv 実行順 / aggregate manifest schema
+    - backup 経路 (system_evidence/backup.ps1) は一切変更なし
+    - 他 5 sections / engine / restore_view の handoff root mkdir & README
+      生成ロジック / fabriq main への書込み (なし)
+    - EXE は無変更 (再ビルド不要)
+    - **LAN-Prep v0.30.0 への影響なし**: 同じ `[Unreleased]` に独立した
+      機能として並ぶ (LAN-Prep entry は本 entry の直下に保持)
+  - **VERSION**: 0.29.0 → **0.31.0** (MINOR、後方互換な機能追加)。
+    v0.30.0 番号は LAN-Prep entry が既に占有しているため一つスキップ
+  - **配備**: `E:\fabriq_backuper\` を customer 端末に再配置で反映。
+    案件担当が `backuper/data/app_migration_list.sample.csv` をコピーして
+    `backuper/data/app_migration_list.csv` を作成し、案件アプリを記述
+  - **検証**:
+    1. `app_migration_list.sample.csv` を Excel で開き日本語が文字化けしない
+       (UTF-8 BOM 効果)
+    2. sample をコピーして `app_migration_list.csv` を作成
+    3. `git status` で `app_migration_list.csv` が untracked 表示されない
+       (= .gitignore 反映、検証済 = OK)
+    4. backup → restore (handoff ON) で `03_移行元PC情報\` 配下に 4 entry
+       (Check-AppMigration.bat / app_migration_list.csv /
+       app_migration_list.sample.csv / _data\) が配備される
+    5. `Check-AppMigration.bat` ダブルクリック → console で要移行 / 未検出 /
+       サマリの 3 セクションが日本語正常表示
+    6. `_AppMigrationReport.txt` を Notepad で開いて同内容が日本語正常表示
+    7. `app_migration_list.csv` をリネーム/削除して bat 実行 → 親切な warning +
+       exit (crash しない)
+    8. `Check-AppMigration.bat /verbose` で「補足」セクションが追加表示
+    9. handoff OFF で restore → バッチ配備されない (system_evidence Skipped)
+   10. pre-v0.26.0 backup を v0.31.0 で restore → system_evidence は Skipped
+       (= バッチ配備されない)、他 sections は通常動作
+
 ### Changed
 - backuper v0.30.0: **LAN-Prep の target/source 成功時に Y/N 確認 + 完了後
   Enter 押下を省略** — operator が menu の役割ボタン (「移行先として設定 /
@@ -211,112 +327,6 @@
     8. profile.network.{role}.interfaceAlias が menu の NIC combo 値で
        in-memory 上書きされること、snapshot ファイル
        (`_rollback_snapshot.json`) にも上書き値が記録されること
-
-- backuper v0.30.0: **アプリ移行チェックツールを system_evidence section に同梱** —
-  案件ごとに「移行先 PC に必要なアプリ」を定義した CSV と、`system_evidence`
-  が採取した `11_DesktopApps.csv` / `11_StoreApps.csv` を突き合わせて、operator
-  が target PC のデスクトップ集約フォルダで `.bat` をダブルクリックするだけで
-  「移行が必要なアプリ」を一覧できる基盤を追加。
-  - **新規ファイル**:
-    - [.gitignore](.gitignore): repo 直下に新設。`backuper/data/app_migration_list.csv`
-      を ignore (案件固有のアプリ名が誤コミットされる事故を防止)。サンプル
-      テンプレート (`*.sample.csv`) は commit 対象として残す
-    - [backuper/data/app_migration_list.sample.csv](backuper/data/app_migration_list.sample.csv):
-      案件定義 CSV のテンプレート。**UTF-8 BOM + CRLF**。Excel で開いた時の
-      日本語化け回避のため BOM 必須。10 件の代表アプリ例 (Microsoft 365 /
-      Chrome / Acrobat / 秀丸エディタ / TeraTerm 等) を同梱
-  - **修正ファイル**:
-    - [backuper/common.ps1](backuper/common.ps1) (BOM 付き既存ファイル) に
-      helper 2 個を追加:
-      - `New-AppMigrationCheckBat`: ASCII only な `.bat` 本体 (chcp 65001 +
-        powershell -File + `%*` で `/verbose` などの引数 forward)
-      - `New-AppMigrationCheckScript`: 日本語 string label を含む `.ps1`
-        本体を返す。restore.ps1 が `UTF8Encoding($true)` で書き出すことで
-        BOM 付き UTF-8 ファイルとして配備される。printer の
-        `New-PrinterHandoffReadme` / `New-PrinterSettingsText` と同じ
-        役割分離 pattern (ASCII only restore.ps1 から helper 経由で日本語
-        を扱う、CLAUDE.md 規約 5 準拠)
-    - [backuper/lib/sections/system_evidence/restore.ps1](backuper/lib/sections/system_evidence/restore.ps1):
-      handoff deploy 直後に新規ステップを挿入。
-      - `<repo>/backuper/data/app_migration_list.csv` を handoff 配下に Copy
-        (不在時は warning + sample のみ deploy で継続)
-      - `<repo>/backuper/data/app_migration_list.sample.csv` を handoff 配下に Copy
-      - `Check-AppMigration.bat` (ASCII) を handoff 配下に生成
-      - `_data\Check-AppMigration.ps1` (UTF-8 BOM) を handoff 配下に生成
-      - `_restore_manifest.json` の `appMigrationCheck` フィールドに deploy
-        状況 (toolDeployed / listCsvCopied / sampleCsvCopied) を記録
-      - 失敗は warning に降格、section 全体は Success のまま (evidence Copy
-        が既に成功しているため)
-    - [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1):
-      handoff folder の README.txt 内、`03_移行元PC情報\` セクションに
-      Check-AppMigration.bat の使い方を 5 行追記 (BOM 付き既存ファイル
-      なので日本語をそのまま記述)
-  - **バッチ実行フロー** (operator 視点):
-    1. target PC のデスクトップで `<date>_<host>_BK\03_移行元PC情報\Check-AppMigration.bat`
-       をダブルクリック (UAC 不要)
-    2. console に「要移行 / 未検出 / サマリ」が日本語表示
-    3. 同じ内容が同フォルダの `_AppMigrationReport.txt` に BOM 付き UTF-8
-       で保存される (Notepad で開いて日本語正常表示)
-    4. `Check-AppMigration.bat /verbose` で「補足: source にあるが案件未登録」
-       セクションも表示
-  - **マッチング仕様**:
-    - 案件定義 CSV の `MatchPatterns` 列を `|` で分割した各パターンを
-      case-insensitive 部分一致 (`-like '*pat*'`) で source 採取アプリの
-      Name (Desktop は Publisher も) と照合
-    - **Desktop apps**: `Name + " | " + Publisher` を hay に
-    - **Store apps**: `Name` のみを hay に (StoreApps.csv の Publisher 列は
-      `PublisherId` = hash 文字列で人間可読でないため照合対象から除外)
-    - 1 案件 entry に複数 source アプリが該当した場合は全部表示
-  - **エンコーディング多重ガード**:
-    - 案件定義 CSV (operator が Excel 編集) の読み込みは **BOM 自動判定**:
-      ファイル先頭 3 bytes が `EF BB BF` → `Import-Csv -Encoding UTF8`、
-      無 BOM → `Import-Csv -Encoding Default` (= JP Windows では CP932)。
-      Excel の「CSV UTF-8」/「CSV」両方の保存形式に対応
-    - `11_DesktopApps.csv` / `11_StoreApps.csv` は backup.ps1 の
-      `Export-Csv -Encoding UTF8` で BOM 付き UTF-8 確定なので
-      `-Encoding UTF8` 固定で読込
-    - `.bat` 冒頭で `chcp 65001` + ps1 冒頭で `[Console]::OutputEncoding =
-      UTF8` の二段ガード (どちらか単独では PS5.1 が CP932 を保持する罠)
-    - `_AppMigrationReport.txt` は `UTF8Encoding($true)` で BOM 付き出力
-      (PS5.1 の `Out-File -Encoding utf8` は BOM 無しを出す罠を回避)
-  - **不在系の挙動** (crash 防止):
-    - repo `app_migration_list.csv` 不在 → restore.ps1 が warning、sample
-      のみ deploy。bat 実行時に親切なメッセージ表示
-    - handoff `app_migration_list.csv` 不在 → bat 実行時に「sample をコピー
-      して編集してください」案内 + exit 1
-    - `11_DesktopApps.csv` / `11_StoreApps.csv` 不在 (pre-v0.26.0 backup) →
-      bat 実行時に「system_evidence 採取がされていない可能性」案内 + exit 1
-    - handoff checkbox OFF / pre-v0.26.0 backup → system_evidence/restore.ps1
-      自体が早期 Skipped を返すため、バッチ配備自体が行われない (= 既存の
-      Skipped 挙動と完全に整合)
-  - **不変**:
-    - section interface / sections.csv 実行順 / aggregate manifest schema
-    - backup 経路 (system_evidence/backup.ps1) は一切変更なし
-    - 他 5 sections / engine / restore_view の handoff root mkdir & README
-      生成ロジック / fabriq main への書込み (なし)
-    - EXE は無変更 (再ビルド不要)
-  - **VERSION**: 0.29.0 → **0.30.0** (MINOR、後方互換な機能追加)
-  - **配備**: `E:\fabriq_backuper\` を customer 端末に再配置で反映。
-    案件担当が `backuper/data/app_migration_list.sample.csv` をコピーして
-    `backuper/data/app_migration_list.csv` を作成し、案件アプリを記述
-  - **検証**:
-    1. `app_migration_list.sample.csv` を Excel で開き日本語が文字化けしない
-       (UTF-8 BOM 効果)
-    2. sample をコピーして `app_migration_list.csv` を作成
-    3. `git status` で `app_migration_list.csv` が untracked 表示されない
-       (= .gitignore 反映)
-    4. backup → restore (handoff ON) で `03_移行元PC情報\` 配下に 4 entry
-       (Check-AppMigration.bat / app_migration_list.csv /
-       app_migration_list.sample.csv / _data\) が配備される
-    5. `Check-AppMigration.bat` ダブルクリック → console で要移行 / 未検出 /
-       サマリの 3 セクションが日本語正常表示
-    6. `_AppMigrationReport.txt` を Notepad で開いて同内容が日本語正常表示
-    7. `app_migration_list.csv` をリネーム/削除して bat 実行 → 親切な warning +
-       exit (crash しない)
-    8. `Check-AppMigration.bat /verbose` で「補足」セクションが追加表示
-    9. handoff OFF で restore → バッチ配備されない (system_evidence Skipped)
-   10. pre-v0.26.0 backup を v0.30.0 で restore → system_evidence は Skipped
-       (= バッチ配備されない)、他 sections は通常動作
 
 ### Changed
 - backuper v0.29.0: **printer section の restore を operator handoff folder 一本化

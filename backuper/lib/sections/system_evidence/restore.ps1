@@ -178,6 +178,67 @@ if ($filesSkipped.Count -gt 0) {
 }
 
 # ----------------------------------------------------------
+# v0.31.0: deploy Check-AppMigration tool
+# ----------------------------------------------------------
+# Layout under handoffSubdir (= ...\03_移行元PC情報\):
+#   Check-AppMigration.bat              (operator double-click entry, ASCII)
+#   app_migration_list.csv              (project-specific, copied from repo)
+#   app_migration_list.sample.csv       (always copied, fallback template)
+#   _data\Check-AppMigration.ps1        (body, UTF-8 BOM from helper)
+#
+# Failure policy: each deploy step is best-effort; failures get warnings
+# but never flip the section to Failed. The operator can still browse the
+# evidence files (Copy step above already succeeded).
+$appMigDeployed = $false
+$appMigListCopied = $false
+$appMigSampleCopied = $false
+try {
+    $repoListPath   = Join-Path $BackuperRoot 'data\app_migration_list.csv'
+    $repoSamplePath = Join-Path $BackuperRoot 'data\app_migration_list.sample.csv'
+    $dataDir        = Join-Path $handoffSubdir '_data'
+    if (-not (Test-Path -LiteralPath $dataDir)) {
+        $null = New-Item -ItemType Directory -Path $dataDir -Force -ErrorAction Stop
+    }
+
+    # Copy project list (optional - may not exist if operator did not configure)
+    if (Test-Path -LiteralPath $repoListPath) {
+        Copy-Item -LiteralPath $repoListPath -Destination (Join-Path $handoffSubdir 'app_migration_list.csv') -Force -ErrorAction Stop
+        $appMigListCopied = $true
+        Show-Info "system_evidence: copied app_migration_list.csv to handoff folder"
+    } else {
+        Show-Warning "system_evidence: $repoListPath not found; deploying sample only. Copy the sample on the target PC and edit it before running Check-AppMigration.bat."
+        $warnings += "app_migration_list.csv missing from repo; only sample deployed"
+    }
+
+    # Copy sample (always - serves as fallback template)
+    if (Test-Path -LiteralPath $repoSamplePath) {
+        Copy-Item -LiteralPath $repoSamplePath -Destination (Join-Path $handoffSubdir 'app_migration_list.sample.csv') -Force -ErrorAction Stop
+        $appMigSampleCopied = $true
+    } else {
+        Show-Warning "system_evidence: $repoSamplePath not found; sample CSV will be absent from handoff folder"
+        $warnings += "app_migration_list.sample.csv missing from repo"
+    }
+
+    # Generate Check-AppMigration.bat (ASCII) and Check-AppMigration.ps1 (BOM UTF-8)
+    $batBody = New-AppMigrationCheckBat
+    $batPath = Join-Path $handoffSubdir 'Check-AppMigration.bat'
+    $asciiEnc = New-Object System.Text.ASCIIEncoding
+    [System.IO.File]::WriteAllText($batPath, $batBody, $asciiEnc)
+
+    $psBody = New-AppMigrationCheckScript
+    $psPath = Join-Path $dataDir 'Check-AppMigration.ps1'
+    $utf8BomEnc = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($psPath, $psBody, $utf8BomEnc)
+
+    $appMigDeployed = $true
+    Show-Success "system_evidence: deployed Check-AppMigration.bat + _data\Check-AppMigration.ps1"
+} catch {
+    $msg = "Failed to deploy Check-AppMigration tool: $($_.Exception.Message)"
+    $warnings += $msg
+    Show-Warning "system_evidence: $msg"
+}
+
+# ----------------------------------------------------------
 # Write restore manifest (fabriq-system-evidence-restore v1)
 # ----------------------------------------------------------
 $restoreManifest = [ordered]@{
@@ -189,6 +250,11 @@ $restoreManifest = [ordered]@{
     filesCopied      = $filesCopied
     filesSkipped     = $filesSkipped
     copyErrors       = $copyErrors
+    appMigrationCheck = [ordered]@{
+        toolDeployed    = $appMigDeployed
+        listCsvCopied   = $appMigListCopied
+        sampleCsvCopied = $appMigSampleCopied
+    }
     summary          = [ordered]@{
         copiedCount  = $filesCopied.Count
         skippedCount = $filesSkipped.Count
