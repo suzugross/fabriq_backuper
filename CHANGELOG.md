@@ -132,6 +132,17 @@
        (= バッチ配備されない)、他 sections は通常動作
 
 ### Changed
+- backuper v0.31.0: **LAN-Prep 役割ボタン文言を「〜の設定を行う」形に補強** —
+  「移行先（新PC）」「移行元（旧PC）」を「移行先（新PC）の設定を行う」
+  「移行元（旧PC）の設定を行う」に変更。動作詞 (「設定を行う」) を補うことで
+  「クリックすると何が起こるか」が文面で完結。menu_form.ps1 のボタン .Text
+  プロパティ 6 箇所のみ変更、.BgColor / 色合い / Click handler / 戻り値 /
+  子スクリプト呼び出し / dynamic label updater の改行構造はすべて不変。
+  - **不変**: Backuper 配下 / VERSION / theme.ps1 / fabriq_lanprep.ps1 /
+    Prepare-LanMigration.ps1 / Revert-LanMigration.ps1 / ボタン色 (移行先 =
+    lavender、移行元 = stripeYellow)
+  - **VERSION**: 0.31.0 据え置き (cosmetic、Backuper 無影響)
+
 - backuper v0.31.0: **LAN-Prep メニューの役割ボタン文言を短縮 + 移行元ボタンを
   黄色に** — operator が役割をひと目で判別できるよう cosmetic 調整。
   動作 (Click handler / 戻り値 / 子スクリプト呼び出し / 引数) は完全に不変、

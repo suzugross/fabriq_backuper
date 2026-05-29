@@ -182,14 +182,14 @@ function global:Show-LanPrepMenu {
     # source = warm yellow). Click handlers / return value / child-script
     # arguments are unchanged.
     $btnTarget = New-StyledButton `
-        -Text '移行先（新PC）' `
+        -Text '移行先（新PC）の設定を行う' `
         -X 20 -Y $yPos -Width 254 -Height 50 -BgColor $script:bgAccent
     $btnTarget.Font = $script:fontBold
     $btnTarget.Enabled = $hasProfile
     $form.Controls.Add($btnTarget)
 
     $btnSource = New-StyledButton `
-        -Text '移行元（旧PC）' `
+        -Text '移行元（旧PC）の設定を行う' `
         -X 286 -Y $yPos -Width 254 -Height 50 -BgColor $script:stripeYellow
     $btnSource.Font = $script:fontBold
     $btnSource.Enabled = $hasProfile
@@ -218,8 +218,8 @@ function global:Show-LanPrepMenu {
         $updateRoleLabels = {
             $idx = $hostCombo.SelectedIndex
             if ($idx -le 0 -or -not $hasHosts) {
-                $btnTarget.Text = '移行先（新PC）  (profile 値)'
-                $btnSource.Text = '移行元（旧PC）  (profile 値)'
+                $btnTarget.Text = '移行先（新PC）の設定を行う  (profile 値)'
+                $btnSource.Text = '移行元（旧PC）の設定を行う  (profile 値)'
                 return
             }
             $row = $HostRows[$idx - 1]
@@ -227,8 +227,8 @@ function global:Show-LanPrepMenu {
             $newName = if ($row.PSObject.Properties.Name -contains 'NewPCName') { "$($row.NewPCName)" } else { '' }
             if ([string]::IsNullOrWhiteSpace($newName)) { $newName = '(未設定)' }
             if ([string]::IsNullOrWhiteSpace($oldName)) { $oldName = '(未設定)' }
-            $btnTarget.Text = "移行先（新PC）`r`n(この PC = $newName)"
-            $btnSource.Text = "移行元（旧PC）`r`n(この PC = $oldName)"
+            $btnTarget.Text = "移行先（新PC）の設定を行う`r`n(この PC = $newName)"
+            $btnSource.Text = "移行元（旧PC）の設定を行う`r`n(この PC = $oldName)"
         }
         & $updateRoleLabels
         $hostCombo.Add_SelectedIndexChanged({ & $updateRoleLabels })
