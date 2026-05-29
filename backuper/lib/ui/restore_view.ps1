@@ -202,15 +202,18 @@ function New-RestoreView {
         -X 44 -Y 336 -Width 860 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($shortcutHint)
 
-    # v0.17.0: NEW - Strategy B-light opt-in, default OFF
+    # v0.32.0: "auto-restore batch" generation, default ON. The reg.exe
+    # import no longer runs during restore; instead a Restore-Outlook.bat
+    # is placed in 02_outlook_アカウント情報\ for the operator to run AS
+    # THE TARGET USER. OFF = Strategy A files only (no batch).
     $strategyBCheck = New-StyledCheckBox `
-        -Text "レジストリ自動再構築 (実験的、通常は使用しない)" `
-        -X 24 -Y 356 -Width 500 -Height 22 -Checked $false
+        -Text "Outlook 自動復元バッチを生成 (推奨)" `
+        -X 24 -Y 356 -Width 500 -Height 22 -Checked $true
     $script:RestoreOutlookAttemptStrategyBCheck = $strategyBCheck
     $panel.Controls.Add($strategyBCheck)
 
     $strategyBHint = New-StyledLabel `
-        -Text "MAPI registry transform 経由で自動再構築。不安定なため operator 手動セットアップを推奨" `
+        -Text "POP プロファイルを再構築する Restore-Outlook.bat を集約フォルダに配置。移行先ユーザで実行 (IMAP は手動)" `
         -X 44 -Y 378 -Width 860 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($strategyBHint)
 
@@ -774,9 +777,10 @@ function Invoke-RestoreStart {
     if ($null -ne $script:RestoreOutlookShortcutCheck) {
         $createShortcut = [bool]$script:RestoreOutlookShortcutCheck.Checked
     }
-    # v0.17.0: Strategy B-light は opt-in。Checked=$false が新デフォルト動作
-    # (= Strategy A operator manual setup)。Checked=$true で旧 v0.16.0 動作。
-    $attemptStrategyB = $false
+    # v0.32.0: AttemptStrategyB = "generate the auto-restore batch into the
+    # operator handoff folder", default ON. Checked=$false = Strategy A files
+    # only (no batch). Falls back to $true if the checkbox is unavailable.
+    $attemptStrategyB = $true
     if ($null -ne $script:RestoreOutlookAttemptStrategyBCheck) {
         $attemptStrategyB = [bool]$script:RestoreOutlookAttemptStrategyBCheck.Checked
     }
@@ -921,9 +925,12 @@ operator-facing な設定情報が番号順に集約されています。
      (※ 必ず復元対象ユーザでログインした状態で実行)
 
 02_outlook_アカウント情報\
-  Outlook プロファイルのアカウント設定情報 (POP / IMAP / SMTP)。
-  → RESTORE_INSTRUCTIONS.txt または _account_settings.txt を参照し、
-    Outlook を起動して各アカウントを手動追加してください。
+  Outlook プロファイルのアカウント設定 (POP / IMAP / SMTP)。
+  → POP アカウントは「Restore-Outlook.bat」をダブルクリックすると
+    自動で再構築されます (必ず復元対象ユーザでログインした状態で実行。
+    管理者としての実行は不可)。詳しい手順は同フォルダの README.txt を参照。
+  → IMAP アカウントや、自動復元しない場合は、RESTORE_INSTRUCTIONS.txt /
+    _account_settings.txt を参照し Outlook で手動追加してください。
   → PST ファイル本体は Documents\Outlook ファイル\ に展開されています
     (Outlook プロファイル設定が指す場所のため、ここには移していません)。
 

@@ -824,6 +824,91 @@ function global:New-PrinterSettingsText {
 }
 
 # ============================================================
+# v0.32.0: outlook_pop section handoff README generator
+#
+# Lives in common.ps1 (BOM-tagged UTF-8) for the same reason as the
+# printer helpers above: the Japanese string literals would be
+# ANSI-mis-decoded by PS5.1 if they lived inside the ASCII-only
+# outlook_pop/restore.ps1 here-strings. restore.ps1 forwards the
+# returned string to [System.IO.File]::WriteAllText with
+# UTF8Encoding($true) so README.txt arrives BOM-tagged.
+# ============================================================
+
+function global:New-OutlookHandoffReadme {
+    # Returns the operator-facing README.txt body for the Outlook handoff
+    # folder (02_outlook_アカウント情報). Explains the run-as-target-user
+    # batch model, the IMAP-manual split, and the "launch Outlook twice"
+    # follow-up. AutoProfiles / ManualProfiles are arrays of profile-name
+    # strings (POP-only auto-restored vs IMAP-containing manual).
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [string[]]$AutoProfiles = @(),
+        [string[]]$ManualProfiles = @()
+    )
+
+    $computerName = if ($null -ne $Manifest.computerName) { $Manifest.computerName } else { '(unknown)' }
+    $collectedAt  = if ($null -ne $Manifest.collectedAt)  { $Manifest.collectedAt  } else { '(unknown)' }
+    $autoLabel    = if ($AutoProfiles.Count   -gt 0) { ($AutoProfiles   -join ', ') } else { '(なし)' }
+    $manualLabel  = if ($ManualProfiles.Count -gt 0) { ($ManualProfiles -join ', ') } else { '(なし)' }
+
+    @"
+============================================================
+  Fabriq Outlook アカウント復元 - はじめに
+============================================================
+
+このフォルダには、移行元 PC の Outlook (POP) アカウント設定を
+移行先 PC に再現するためのファイル一式が入っています。
+
+【使い方 (POP アカウントの自動復元)】
+  1. 移行先 (新 PC) に【復元対象ユーザ】でログインしてください。
+     ※ 管理者として実行しないでください。レジストリは「いま操作して
+        いるユーザ」の HKCU に取り込まれます。別ユーザ (管理者) で実行
+        すると、間違ったプロファイルにアカウントが登録されます。
+  2. このフォルダの「Restore-Outlook.bat」をダブルクリックしてください。
+     (UAC 昇格は不要です)
+  3. 画面のログでインポート結果を確認してください。
+  4. 完了後、Outlook を「2 回」起動します:
+     - 1 回目: 「PST のリンクのため再起動が必要」と表示され Outlook が
+       自動的に閉じます。これは想定動作です。そのまま閉じてください。
+     - 2 回目: 各アカウントでパスワードを尋ねられたら入力してください。
+       (DPAPI 制約により、パスワードは PC を跨いで移行できません)
+       パスワード入力後に送受信が動作します。
+
+  自動復元対象 (POP-only) プロファイル : $autoLabel
+
+【IMAP を含むプロファイル (手動セットアップ)】
+  手動セットアップが必要なプロファイル : $manualLabel
+  IMAP を含むプロファイルは自動復元の対象外です (オフラインでの
+  安全な再構築ができないため)。Outlook を起動し、
+  「ファイル > アカウント追加」から手動で設定してください。
+  サーバ / ポート等の設定値は _account_settings.txt に記載しています。
+
+【PST ファイルについて】
+  メール本体 (PST) は移行先ユーザのプロファイル配下
+  (Documents\Outlook ファイル\) に配置済みです。Restore-Outlook.bat は
+  レジストリの取り込みのみを行います。
+
+【うまくいかない場合 (手動セットアップ)】
+  - _account_settings.txt に全アカウントのサーバ / ポート / PST パスを
+    記載しています。
+  - RESTORE_INSTRUCTIONS.txt に手動セットアップ手順を記載しています。
+  - Outlook を起動 > ファイル > アカウント追加 から、各メールアドレスを
+    入力してください (autodiscover が大半の設定を補完します)。
+
+【内部ファイル】
+  _data\ サブフォルダにはバッチ本体 (Restore-Outlook.ps1) と取り込み用
+  レジストリ (.reg)・manifest 等の内部ファイルが入っています。操作者が
+  直接開く必要はありません (Restore-Outlook.bat が自動で参照します)。
+
+このフォルダは作業完了後に削除して構いません。
+
+移行元 PC : $computerName
+採取日時  : $collectedAt
+============================================================
+"@
+}
+
+# ============================================================
 # v0.31.0: app migration check helpers (system_evidence section)
 #
 # Returns the body of Check-AppMigration.{bat,ps1} that get

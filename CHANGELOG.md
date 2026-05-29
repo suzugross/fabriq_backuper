@@ -15,6 +15,95 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.32.0: **Outlook プロファイル自動復元をバッチ化して handoff フォルダに移行** —
+  これまで Strategy B-light は**リストア実行中 (engine コンテキスト)** に
+  `reg.exe import` で target レジストリを直接書き換えていた。これを printer
+  (`Install-Printers.bat`, v0.29.0) / credentials (`登録.bat`) と同じ
+  **operator handoff バッチモデル**に統一する。POP-only プロファイルについて、
+  リストア時に T1-T6 変換 + hive prefix を `HKEY_CURRENT_USER` に書換した
+  **import-ready `.reg`** を生成し、`02_outlook_アカウント情報\` に
+  `Restore-Outlook.bat` + `Restore-Outlook.ps1` を配置する。operator は
+  **移行先ユーザでログインした状態 (非 admin)** でバッチをダブルクリックする
+  ことで、自分の HKCU に直接取り込む。これにより `Resolve-HkcuRoot` の
+  HKU\<SID> リダイレクト (v0.17.0 で対処した New-PSDrive scope 脆弱性) を
+  Outlook 復元経路から**構造的に排除**する。
+  - **設計判断 (operator 確認済み)**:
+    - 案A (pre-bake): 変換 (T1-T6) は**リストア時に restore.ps1 が実行**し、
+      import-ready `.reg` を `_data\` に出力。繊細な変換エンジンを 1 か所に
+      保持し、バッチは「import + verify」の薄い実装。
+    - **完全廃止** (printer v0.29.0 型): in-engine の `reg.exe import` を撤廃。
+      `Invoke-RegImport` / `Test-AccountImported` 相当は生成バッチ側に移設。
+    - **default ON**: UI checkbox 既定を ON 化 (文言「Outlook 自動復元バッチを
+      生成 (推奨)」)。OFF で Strategy A ファイルのみ (バッチ非生成)。
+  - **リストア時の section popup を抑止 (スムーズ化)**: outlook_pop section が
+    Stage 5 で出していた自前モーダル (`Show-CompletionPopup`) を、**operator
+    handoff フォルダ使用時 (default) は出さない**よう変更。printer / credentials
+    / system_evidence と同じく、案内は handoff の README.txt / Restore-Outlook.ps1
+    実行時 console / progress log / run 末尾の共通完了 popup に集約する。
+    **handoff OFF (Desktop 集約フォルダが無い legacy opt-out 経路) のときのみ**
+    従来通り popup を表示 (案内が辿りにくい backup 元フォルダにしか出ないため、
+    この経路の popup を消すと退行する)。run 末尾の共通完了 popup (全 section 1 個)
+    は有用なため不変。情報の損失なし (2 回起動 / パスワード / IMAP 手動 / 異
+    バージョン clean-up の各案内は README.txt と _account_settings.txt に保持)。
+  - **新規ファイル (operator 実機に配備されるもの)**:
+    - `02_outlook_アカウント情報\Restore-Outlook.bat`: 移行先ユーザが
+      ダブルクリック (UAC 不要、`登録.bat` と同 idiom、`%~dp0` トラップ回避で
+      引数なし呼び出し)
+    - `02_outlook_アカウント情報\_data\Restore-Outlook.ps1`: ASCII-only。
+      preflight (OUTLOOK.EXE close) → `reg.exe import` (HKCU) → POP3 Server
+      verify → console/`_RestoreOutlookReport.txt` サマリ。admin 実行時は
+      警告 (HKCU 誤爆防止)
+    - `02_outlook_アカウント情報\_data\profile_<name>.import.reg`: 変換済み
+      (UTF-16LE)
+    - `02_outlook_アカウント情報\_data\_restore_config.json`: target/source
+      profile + outlook version + auto/manual プロファイル一覧
+  - **修正ファイル**:
+    - [backuper/lib/sections/outlook_pop/restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1):
+      Stage 3+4 の import/verify ループを削除し、pre-bake + handoff バッチ
+      生成 (Stage 3/4) に置換。Stage 5 popup を batch-aware 化。`AttemptStrategyB`
+      既定を `$true` に。return Summary を `strategy='B (handoff batch)'` /
+      `batchGenerated` / `autoProfiles` / `manualProfiles` に更新。**IMAP gate
+      は維持** (IMAP を含むプロファイルは Strategy A 手動)。`Get-RegFileSourceHive`
+      / `Convert-RegFileToTargetHive` / `Convert-RegFileToStrategyBLight` は
+      pre-bake で継続使用。`Invoke-RegImport` / `Test-AccountImported` は
+      restore.ps1 からは未使用化 (バッチ側に同等ロジックを inline、将来 cleanup 候補)
+    - [backuper/common.ps1](backuper/common.ps1): `New-OutlookHandoffReadme`
+      (日本語 README, BOM 付き) を追加。printer の役割分離 pattern と同じく
+      restore.ps1 (ASCII) から呼び出し `UTF8Encoding($true)` で出力
+    - [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1):
+      checkbox 既定 ON + 文言更新、`$attemptStrategyB` UI 既定を `$true`、
+      全体 handoff README の `02_` 項に Restore-Outlook.bat の使い方を追記
+  - **不変**:
+    - **PST 配置 (Stage 2) はリストア時のまま据え置き** — admin で動作し実績
+      あり、SID リダイレクト問題は registry import 固有のため移設不要。バッチは
+      PST 存在を advisory チェックのみ
+    - section interface / manifest schema (`fabriq-outlook-pop-backup` v1) 不変
+    - backup.ps1 / IMAP gate / multi-PST skip / cross-version (T1) / 「Outlook を
+      2 回起動」案内 / rule-clear shortcut (今回スコープ外) は不変
+    - fabriq main への書込みなし、EXE 無変更
+  - **前提**: リストアは**移行先 PC 上で実行**する運用 (案A の T1 pre-bake は
+    target Outlook 版数を restore 時に検出するため)
+  - **VERSION**: 0.31.0 → **0.32.0** (MINOR / printer v0.29.0 と同型、
+    テスト段階方針につき in-engine import 廃止は後方互換扱わず MINOR)
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映 (EXE 無変更)
+  - **検証**:
+    1. handoff ON + 自動復元 ON で POP-only profile を restore →
+       `02_outlook_アカウント情報\` に Restore-Outlook.bat / README.txt /
+       `_data\Restore-Outlook.ps1` / `_data\profile_*.import.reg` /
+       `_data\_restore_config.json` / `_data\manifest.json` が生成される
+    2. **移行先ユーザでログイン**して Restore-Outlook.bat ダブルクリック →
+       OUTLOOK 起動検知 (起動中なら閉じる) → import → POP3 Server verify →
+       サマリ表示。Outlook 2 回起動でパスワード入力後に送受信成功
+    3. **管理者として実行**した場合に警告 + 続行確認が出ること (HKCU 誤爆防止)
+    4. IMAP 混在 profile → バッチは POP 分のみ自動化、IMAP は README /
+       `_account_settings.txt` の手動手順へ誘導
+    5. 全 IMAP 環境 → import-ready .reg 0 件 → バッチは生成されず Strategy A
+       ファイルのみ (popup も手動セットアップ案内)
+    6. 自動復元 OFF (checkbox) → バッチ非生成、`_account_settings.txt` /
+       `RESTORE_INSTRUCTIONS.txt` のみ
+    7. `git diff` で fabriq main 配下への書込みが無いこと
+
 ### Added
 - backuper v0.31.0: **アプリ移行チェックツールを system_evidence section に同梱** —
   案件ごとに「移行先 PC に必要なアプリ」を定義した CSV と、`system_evidence`

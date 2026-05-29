@@ -793,15 +793,19 @@ if ($SectionParams.ContainsKey('CreateRuleClearShortcut')) {
     $createRuleClearShortcut = [bool]$SectionParams['CreateRuleClearShortcut']
 }
 
-# v0.17.0: Strategy B-light (registry auto-rebuild) is now OFF by default.
-# Reason: the T1-T6 MAPI registry transforms are heuristic-based and have a
-# track record of subtle profile corruption (cf. restore.ps1:260+ T-series
-# comments). Operator manual setup (Strategy A) via the generated
-# _account_settings.txt + RESTORE_INSTRUCTIONS.txt is the recommended path.
-# The UI checkbox in restore_view.ps1 ("レジストリ自動再構築 (実験的)") gates
-# this; callers that omit the flag will skip Strategy B entirely and go
-# straight to Strategy A operator handoff.
-$attemptStrategyB = $false
+# v0.32.0: AttemptStrategyB now means "generate the auto-restore BATCH into
+# the operator handoff folder" (it no longer performs an in-engine reg.exe
+# import). The pre-baked import-ready .reg + Restore-Outlook.bat are emitted
+# into 02_outlook_アカウント情報\; the operator runs the batch AS THE TARGET
+# USER (not admin), so the reg import lands in that user's own HKCU directly
+# -- no Resolve-HkcuRoot SID redirection. Mirrors the printer v0.29.0 handoff
+# model (Install-Printers.bat) and the credentials 登録.bat run-as-user model.
+#
+# Default is ON (v0.32.0). The T1-T6 transforms still run at restore time
+# (case-by-case POP-only gating, IMAP -> Strategy A), so the heuristic engine
+# stays in one place; the batch only imports + verifies. Operators who want
+# Strategy-A-only (no batch) opt OUT via the UI checkbox in restore_view.ps1.
+$attemptStrategyB = $true
 if ($SectionParams.ContainsKey('AttemptStrategyB')) {
     $attemptStrategyB = [bool]$SectionParams['AttemptStrategyB']
 }
@@ -1134,153 +1138,108 @@ foreach ($pa in $plannedAccounts) {
 }
 
 # ----------------------------------------------------------
-# Stage 3 + 4: Strategy B attempt (reg import + per-account verify)
+# Stage 3 + 4 (v0.32.0): pre-bake import-ready .reg + emit auto-restore batch
 #
-# Viability gate: items.regExports[] must exist and be non-empty.
-# Older 2.10.0 backups have no regExports; those go straight to A.
+# REPLACES the legacy in-engine reg.exe import. For POP-only profiles we
+# pre-apply the T1-T6 transforms, rewrite the .reg hive prefix to
+# HKEY_CURRENT_USER, and write the import-ready .reg into the handoff
+# 02_outlook_アカウント情報\_data\ folder alongside a generated
+# Restore-Outlook.bat + Restore-Outlook.ps1. The operator runs the batch
+# AS THE MIGRATION TARGET USER (not admin) -> the reg import lands in that
+# user's own HKCU directly, so no Resolve-HkcuRoot SID redirection and no
+# admin are needed. The reg import + per-account verify now happen inside
+# the batch (Restore-Outlook.ps1) on the target PC, not here. IMAP-
+# containing profiles are still gated out to Strategy A (manual wizard).
+# Mirrors the printer v0.29.0 Install-Printers.bat handoff model.
+#
+# Viability gate: AttemptStrategyB ON + operator handoff folder present +
+# items.regExports[] non-empty. Otherwise only the Strategy A files
+# (_account_settings.txt / RESTORE_INSTRUCTIONS.txt) are written.
 # ----------------------------------------------------------
 $regExports = @()
 if ($manifest.items.PSObject.Properties.Name -contains 'regExports') {
     $regExports = @($manifest.items.regExports)
 }
 
-$strategyBAttempted = $false
-$strategyBSucceeded = $false
+$autoProfiles    = @()   # @{ profileName; importReg } for POP-only profiles baked into the batch
+$manualProfiles  = @()   # profile names handed to Strategy A (IMAP / missing reg / transform failure)
 $strategyBDetails = @()
+$batchGenerated  = $false
+$handoffDataDir  = $null
 
 if (-not $attemptStrategyB) {
-    # v0.17.0: default flow. Strategy B-light skipped; operator manual
-    # setup via Strategy A is the canonical path. Falls through to Stage 5
-    # which generates RESTORE_INSTRUCTIONS.txt + _account_settings.txt and
-    # presents an operator-friendly popup.
-    Show-Info 'Strategy B-light: skipped (UI opt-in not selected). Strategy A operator manual setup is the v0.17+ default path.'
-} elseif ($regExports.Count -gt 0 -and $successCount -gt 0) {
-    $strategyBAttempted = $true
-    Show-Info ('Strategy B: reg-import path is viable (' + $regExports.Count + ' profile export(s))')
+    Show-Info 'Auto-restore batch: disabled (UI opt-out). Strategy A operator manual setup only.'
+} elseif ([string]::IsNullOrWhiteSpace($operatorHandoffSubdir)) {
+    Show-Warning 'Auto-restore batch: operator handoff folder is OFF; cannot place the batch. Writing Strategy A files only.'
+} elseif ($regExports.Count -eq 0) {
+    Show-Info 'Auto-restore batch: no regExports in manifest (pre-2.10.x backup). Strategy A only.'
+} else {
+    Show-Info ("Auto-restore batch: pre-baking import-ready .reg for POP-only profile(s) (" + $regExports.Count + " export(s))")
 
-    # Resolve target hive
-    $hkcuInfo = Resolve-HkcuRoot
-    if ($null -eq $hkcuInfo -or [string]::IsNullOrWhiteSpace($hkcuInfo.PsDrivePath)) {
-        $warnings += 'Strategy B: Resolve-HkcuRoot returned null - falling back to Strategy A'
-        Show-Warning '  Resolve-HkcuRoot returned null - falling back to Strategy A'
-    } else {
-        $targetHivePsDrive = $hkcuInfo.PsDrivePath
-        $targetHivePrefix  = $hkcuInfo.RegExePath
-        if ($hkcuInfo.Redirected) {
-            Show-Info "  target hive: $($hkcuInfo.Label) [SID=$($hkcuInfo.SID)]"
-        } else {
-            Show-Info "  target hive: $($hkcuInfo.Label)"
+    # Phase 2.10.3-derived source/target user names for the T4 path rewrite.
+    $blSrcUserName = $null
+    if ($manifest.sourceUser -and $manifest.sourceUser.userName) {
+        $blSrcUserName = "$($manifest.sourceUser.userName)"
+    } elseif ($null -ne $sourceUserProfile) {
+        $blSrcUserName = Split-Path -Path $sourceUserProfile -Leaf
+    }
+    $blDstUserName = Split-Path -Path $targetUserProfilePath -Leaf
+    if ([string]::IsNullOrWhiteSpace($blSrcUserName)) { $blSrcUserName = $blDstUserName }
+    Show-Info "  [BL-transform] user rewrite: $blSrcUserName -> $blDstUserName"
+
+    # Ensure the handoff _data\ folder exists (import-ready .reg land here,
+    # next to the generated Restore-Outlook.ps1 - same layout as printer).
+    $handoffDataDir = Join-Path $operatorHandoffSubdir '_data'
+    try {
+        if (-not (Test-Path -LiteralPath $handoffDataDir)) {
+            $null = New-Item -ItemType Directory -Path $handoffDataDir -Force -ErrorAction Stop
         }
-        Show-Info "  target hive prefix: $targetHivePrefix"
+    } catch {
+        $warnings += "Auto-restore: could not create handoff _data dir '$handoffDataDir': $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+        $handoffDataDir = $null
+    }
 
-        $outlookVersion = "$($manifest.outlookVersion)"
-        if ([string]::IsNullOrWhiteSpace($outlookVersion)) { $outlookVersion = '16.0' }
-
-        # Phase 2.10.3: derive source/target user names for B-light path
-        # rewrite. Defaults are safe: if either side is missing the
-        # transform's path-rewrite step becomes a no-op (delivery-strip
-        # step still runs).
-        $blSrcUserName = $null
-        if ($manifest.sourceUser -and $manifest.sourceUser.userName) {
-            $blSrcUserName = "$($manifest.sourceUser.userName)"
-        } elseif ($null -ne $sourceUserProfile) {
-            $blSrcUserName = Split-Path -Path $sourceUserProfile -Leaf
-        }
-        $blDstUserName = Split-Path -Path $targetUserProfilePath -Leaf
-        if ([string]::IsNullOrWhiteSpace($blSrcUserName)) { $blSrcUserName = $blDstUserName }
-        Show-Info "  [BL-transform] user rewrite: $blSrcUserName -> $blDstUserName"
-
-        # v0.18.2: per-profile B-light tracking. POP-only profiles go
-        # through B-light; IMAP-containing profiles skip B-light entirely
-        # (gate just below) and fall through to Strategy A for their
-        # accounts. The two name arrays let the post-loop logic distinguish
-        # "everything auto-restored" from "some auto, some wizard" and
-        # "all manual" without losing per-profile granularity.
-        $allProfilesVerified = $true
-        $bLightVerifiedProfileNames = @()
-        $bLightSkippedImapProfileNames = @()
+    if ($null -ne $handoffDataDir) {
         foreach ($re in $regExports) {
             $profName = "$($re.profileName)"
             $regFile  = "$($re.regFile)"
             $regPath  = Join-Path $sectionDir $regFile
-
             $perProfile = [ordered]@{
-                profileName     = $profName
-                regFile         = $regFile
-                blTransformed   = $false
-                hiveRewrite     = $null
-                importSucceeded = $false
-                importExitCode  = $null
-                importOutput    = $null
-                verifyResults   = @()
+                profileName   = $profName
+                regFile       = $regFile
+                blTransformed = $false
+                importReg     = $null
+                imapSkipped   = $false
+                hiveRewrite   = $null
             }
 
             if (-not (Test-Path -LiteralPath $regPath)) {
-                $msg = "Strategy B: reg file missing for profile '$profName' at $regPath"
-                $warnings += $msg
-                Show-Warning "  $msg"
-                $allProfilesVerified = $false
-                $strategyBDetails += $perProfile
-                break
-            }
-
-            # v0.18.2 GATE: skip B-light entirely for any profile that
-            # contains IMAP accounts (any version).
-            #
-            # History (why we ended up here):
-            #   v0.17.0  : kept IMAP accounts in the imported reg -> OST
-            #              recreate worked on 15.0->16.0 (lenient migration)
-            #              but on 16.0->16.0 the imported state caused
-            #              "send/receive can't reach server" until the
-            #              operator manually deleted the IMAP account.
-            #   v0.18.0  : added T7 (drop IMAP account subkeys) + expanded
-            #              T5 (drop their OST service-def subkeys) so that
-            #              same-version IMAP-mixed could keep auto-restoring
-            #              the POP side. This left dangling MAPIUID refs in
-            #              well-known subkeys (MAPI Section Provider
-            #              0a0d02..., Service Provider 8503...) which the
-            #              same-version strict validator rejects -> Outlook
-            #              silently crashed at startup (observed 2026-05-22
-            #              16.0 MSI -> 16.0 365 C2R, 1 POP + 1 IMAP).
-            #   v0.18.1  : safety gate for same-version IMAP-mixed only.
-            #              Cross-version IMAP-mixed still went through T7+T5.
-            #   v0.18.2  : decision -- B-light is only safe for POP-only
-            #              profiles, full stop. IMAP-containing profiles
-            #              fall back to Strategy A (operator wizard) which
-            #              leaves the registry untouched and avoids both
-            #              traps. T7 and the T5 expansion are reverted
-            #              (the gate makes them dead code).
-            #
-            # `continue` (not `break`) so the remaining profiles in a
-            # multi-profile setup can still be B-light if they are
-            # POP-only.
-            $profileHasImap = @($plannedAccounts | Where-Object {
-                $_.ProfileName -eq $profName -and "$($_.Account.type)" -eq 'imap'
-            }).Count -gt 0
-            if ($profileHasImap) {
-                $msg = ("Strategy B: profile '$profName' contains IMAP account(s). " +
-                        "Skipping B-light for this profile (POP-only profiles still " +
-                        "processed); its accounts fall back to Strategy A operator " +
-                        "wizard. Rationale: cleanly auto-restoring IMAP-mixed " +
-                        "profiles via reg-import is not possible -- the MAPIUID " +
-                        "cross-reference graph in well-known subkeys cannot be " +
-                        "safely pruned offline.")
-                $warnings += $msg
-                Show-Warning "  $msg"
-                $bLightSkippedImapProfileNames += $profName
-                $perProfile.importSucceeded = $false
-                $perProfile.importOutput = 'skipped by safety gate: profile contains IMAP'
+                $msg = "Auto-restore: reg file missing for profile '$profName' at $regPath (handed to Strategy A)"
+                $warnings += $msg; Show-Warning "  $msg"
+                $manualProfiles += $profName
                 $strategyBDetails += $perProfile
                 continue
             }
 
-            # Apply B-light pre-processing. POP-only profiles only reach
-            # this point. Five transforms cover: cross-version path rewrite
-            # (T1, only when version args differ), POP delivery-binding
-            # strip (T2), IMAP Store EID strip (T3, no-op on POP-only),
-            # user-path rewrite (T4), OST service-def drop (T5, no-op
-            # because POP-only profiles have no OST subkeys), OST internal-
-            # binary strip (T6, same-version POP-only, no-op when no OST).
+            # IMAP gate (unchanged rationale, v0.18.2): B-light is only safe
+            # for POP-only profiles. IMAP-containing profiles fall back to
+            # Strategy A operator wizard (the MAPIUID cross-reference graph
+            # in well-known subkeys cannot be safely pruned offline).
+            $profileHasImap = @($plannedAccounts | Where-Object {
+                $_.ProfileName -eq $profName -and "$($_.Account.type)" -eq 'imap'
+            }).Count -gt 0
+            if ($profileHasImap) {
+                $msg = "Auto-restore: profile '$profName' contains IMAP account(s); handed to Strategy A (manual wizard)."
+                $warnings += $msg; Show-Warning "  $msg"
+                $manualProfiles += $profName
+                $perProfile.imapSkipped = $true
+                $strategyBDetails += $perProfile
+                continue
+            }
+
+            # T1-T6 transform (single source of the delicate engine; lives
+            # here in restore.ps1, NOT duplicated into the batch).
             $blPath = Convert-RegFileToStrategyBLight `
                 -SrcRegPath $regPath `
                 -SourceUserName $blSrcUserName `
@@ -1291,123 +1250,371 @@ if (-not $attemptStrategyB) {
 
             $sourcePrefix = Get-RegFileSourceHive -RegPath $blPath
             if ([string]::IsNullOrWhiteSpace($sourcePrefix)) {
-                $msg = "Strategy B: could not detect source hive prefix in $regFile - falling back"
-                $warnings += $msg
-                Show-Warning "  $msg"
+                $msg = "Auto-restore: could not detect source hive prefix in $regFile (handed to Strategy A)"
+                $warnings += $msg; Show-Warning "  $msg"
                 if ($blPath -ne $regPath -and (Test-Path -LiteralPath $blPath)) {
                     Remove-Item -LiteralPath $blPath -Force -ErrorAction SilentlyContinue
                 }
-                $allProfilesVerified = $false
+                $manualProfiles += $profName
                 $strategyBDetails += $perProfile
-                break
+                continue
             }
-            $perProfile.hiveRewrite = if ($sourcePrefix -eq $targetHivePrefix) { 'none' }
-                                     else { "$sourcePrefix -> $targetHivePrefix" }
-            Show-Info "  [$profName] hive rewrite: $($perProfile.hiveRewrite)"
 
-            $importPath = Convert-RegFileToTargetHive `
+            # Bake the hive prefix to HKEY_CURRENT_USER: the batch runs AS the
+            # migration target user, so their own HKCU is the correct target
+            # and no SID redirection is required (this is the structural fix
+            # for the Resolve-HkcuRoot New-PSDrive scope fragility).
+            $importReady = Convert-RegFileToTargetHive `
                 -SrcRegPath $blPath `
                 -SourcePrefix $sourcePrefix `
-                -TargetPrefix $targetHivePrefix
+                -TargetPrefix 'HKEY_CURRENT_USER'
+            $perProfile.hiveRewrite = if ($sourcePrefix -eq 'HKEY_CURRENT_USER') { 'none' }
+                                      else { "$sourcePrefix -> HKEY_CURRENT_USER" }
 
-            $importResult = Invoke-RegImport -RegPath $importPath
-            $perProfile.importExitCode = $importResult.ExitCode
-            $perProfile.importOutput   = $importResult.Output
-            $perProfile.importSucceeded = $importResult.Success
+            # Persist the import-ready .reg into the handoff _data\ folder
+            # (UTF-16LE, matching reg.exe export encoding).
+            $safe          = ($profName -replace '[^\w\-]', '_')
+            $importRegName = "profile_$safe.import.reg"
+            $importRegDest = Join-Path $handoffDataDir $importRegName
+            try {
+                $readyText = [System.IO.File]::ReadAllText($importReady, [System.Text.Encoding]::Unicode)
+                [System.IO.File]::WriteAllText($importRegDest, $readyText, [System.Text.Encoding]::Unicode)
+                $perProfile.importReg = $importRegName
+                $autoProfiles += [ordered]@{ profileName = $profName; importReg = $importRegName }
+                Show-Success "  [$profName] import-ready .reg -> _data\$importRegName ($($perProfile.hiveRewrite))"
+            } catch {
+                $msg = "Auto-restore: failed to write import-ready .reg for '$profName': $($_.Exception.Message)"
+                $warnings += $msg; Show-Warning "  $msg"
+                $manualProfiles += $profName
+            }
 
-            # Cleanup temp .reg files (both BL-transformed and hive-rewritten)
-            foreach ($tmp in @($blPath, $importPath)) {
+            # Cleanup temp .reg files (BL-transformed + hive-rewritten).
+            foreach ($tmp in @($blPath, $importReady)) {
                 if ($tmp -ne $regPath -and (Test-Path -LiteralPath $tmp)) {
                     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
                 }
             }
 
-            if (-not $importResult.Success) {
-                $msg = "Strategy B: reg.exe import failed for '$profName' (exit=$($importResult.ExitCode)): $($importResult.Output)"
-                $warnings += $msg
-                Show-Warning "  $msg"
-                $allProfilesVerified = $false
-                $strategyBDetails += $perProfile
-                break
-            }
-            Show-Success "  [$profName] reg import OK"
-
-            # Per-account verify. v0.18.2: only POP accounts reach here
-            # (IMAP-containing profiles were gated out above). Track
-            # per-profile success so the post-loop summary can distinguish
-            # "this profile was auto-restored" from "this profile was
-            # skipped due to IMAP" vs "this profile actually failed".
-            $profileAccounts = @($plannedAccounts | Where-Object { $_.ProfileName -eq $profName })
-            $thisProfileVerified = $true
-            foreach ($pa in $profileAccounts) {
-                $a = $pa.Account
-                $expectedServer = "$($a.pop3.server)"
-                $serverValueName = 'POP3 Server'
-                $vr = Test-AccountImported `
-                    -HiveDrivePath $targetHivePsDrive `
-                    -OutlookVersion $outlookVersion `
-                    -ProfileName $profName `
-                    -SubKey $a.subKey `
-                    -ExpectedServer $expectedServer `
-                    -ServerValueName $serverValueName
-                $perProfile.verifyResults += [ordered]@{
-                    subKey    = $a.subKey
-                    type      = "$($a.type)"
-                    email     = $a.email
-                    verified  = $vr.Verified
-                    reason    = $vr.Reason
-                }
-                if ($vr.Verified) {
-                    Show-Success "    [verify] $($a.email): OK"
-                    # Reflect Strategy B success on the per-account result block
-                    $accountResultRef = $resultsByAccount | Where-Object {
-                        $_.profile -eq $profName -and $_.accountSubKey -eq $a.subKey
-                    } | Select-Object -First 1
-                    if ($null -ne $accountResultRef) {
-                        $accountResultRef.verifyResult = 'verified'
-                    }
-                } else {
-                    Show-Warning "    [verify] $($a.email): NG - $($vr.Reason)"
-                    $warnings += "Strategy B verify failed for $profName/$($a.subKey) ($($a.email)): $($vr.Reason)"
-                    $thisProfileVerified = $false
-                    $allProfilesVerified = $false
-                }
-            }
-
-            if ($thisProfileVerified) {
-                $bLightVerifiedProfileNames += $profName
-            }
-
             $strategyBDetails += $perProfile
         }
 
-        # v0.18.2 overall verdict:
-        #   $strategyBSucceeded is true when at least one profile was
-        #   auto-restored AND no attempted profile failed mid-verify.
-        #   Profiles skipped at the IMAP gate are NOT failures -- they
-        #   are intentional handoffs to Strategy A. Per-profile branching
-        #   downstream uses $bLightVerifiedProfileNames /
-        #   $bLightSkippedImapProfileNames to keep the operator messaging
-        #   accurate for mixed multi-profile setups.
-        if ($bLightVerifiedProfileNames.Count -gt 0 -and $allProfilesVerified) {
-            $strategyBSucceeded = $true
-            if ($bLightSkippedImapProfileNames.Count -gt 0) {
-                Show-Success ("Strategy B: $($bLightVerifiedProfileNames.Count) profile(s) " +
-                              "auto-restored; $($bLightSkippedImapProfileNames.Count) IMAP-containing " +
-                              "profile(s) handed off to Strategy A wizard")
-            } else {
-                Show-Success 'Strategy B: all profiles imported and verified'
-            }
-        } elseif ($bLightSkippedImapProfileNames.Count -gt 0 -and
-                  $bLightVerifiedProfileNames.Count -eq 0 -and
-                  $allProfilesVerified) {
-            Show-Warning ('Strategy B: every reg-export profile contains IMAP -- ' +
-                          'B-light skipped for all; falling back to Strategy A')
-        } else {
-            Show-Warning 'Strategy B: at least one profile/account failed - falling back to Strategy A'
+        if ($autoProfiles.Count -gt 0) { $batchGenerated = $true }
+    }
+}
+
+# ----------------------------------------------------------
+# Stage 4 (v0.32.0): emit the auto-restore batch into the handoff folder
+#   02_outlook_アカウント情報\
+#     Restore-Outlook.bat        operator double-clicks (AS TARGET USER)
+#     _data\
+#       Restore-Outlook.ps1      reg import + verify (ASCII-only)
+#       _restore_config.json     target/source profile + version + auto list
+#       manifest.json            copy of the section manifest (account data)
+#       profile_<name>.import.reg
+# Strategy A files (README.txt / _account_settings.txt / RESTORE_INSTRUCTIONS.txt)
+# are written by Stage 5 / Stage 5.5 below regardless.
+# ----------------------------------------------------------
+if ($batchGenerated -and $null -ne $handoffDataDir) {
+    # (a) copy the section manifest into _data\ (the batch reads it for
+    #     account/PST data + per-account verify).
+    try {
+        Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $handoffDataDir 'manifest.json') -Force -ErrorAction Stop
+    } catch {
+        $warnings += "Auto-restore: failed to copy manifest into _data: $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+    }
+
+    # (b) _restore_config.json: target/source profiles + outlook version +
+    #     auto/manual profile lists. The batch keys off this.
+    $cfg = [ordered]@{
+        schemaVersion         = 1
+        sourceUserProfile     = $sourceUserProfile
+        targetUserProfile     = $targetUserProfilePath
+        outlookVersion        = if (-not [string]::IsNullOrWhiteSpace($tgtRegVer)) { $tgtRegVer } else { '16.0' }
+        crossVersion          = [bool]$isCrossVersion
+        crossVersionDirection = $crossVersionDirection
+        autoProfiles          = @($autoProfiles)
+        manualProfiles        = @($manualProfiles)
+    }
+    try {
+        $cfgJson = $cfg | ConvertTo-Json -Depth 8
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText((Join-Path $handoffDataDir '_restore_config.json'), $cfgJson, $utf8Bom)
+    } catch {
+        $warnings += "Auto-restore: failed to write _restore_config.json: $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+    }
+
+    # (c) Restore-Outlook.ps1 (ASCII-only here-string, written with UTF-8 BOM).
+    #     ASCII-only because restore.ps1 may be persisted without a BOM and
+    #     PS5.1 would then ANSI-mis-decode any Japanese in this here-string
+    #     (CLAUDE.md rule 5). Japanese guidance lives in README.txt
+    #     (New-OutlookHandoffReadme, common.ps1) + _account_settings.txt.
+    $restorePs1 = @'
+# ============================================================
+# Fabriq Outlook Restore - Restore-Outlook.ps1
+#
+# Launched by Restore-Outlook.bat (parent folder). Imports the
+# pre-baked Outlook profile registry export(s) into the CURRENT
+# user's HKCU, then verifies each POP3 account.
+#
+# IMPORTANT: run while logged on AS THE MIGRATION TARGET USER.
+#   Do NOT run as administrator - the registry import targets the
+#   CURRENT user's HKCU, so running as a different (admin) account
+#   would write the accounts into the wrong profile.
+#
+# Does NOT require administrator privileges. IMAP-containing
+# profiles are NOT auto-restored (set them up manually via the
+# Outlook account wizard; see _account_settings.txt).
+# ============================================================
+
+$ErrorActionPreference = 'Continue'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
+$baseDir    = $PSScriptRoot                  # _data\
+$handoffDir = Split-Path -Parent $baseDir    # 02_outlook_account folder
+$reportPath = Join-Path $handoffDir '_RestoreOutlookReport.txt'
+
+$reportLines = New-Object System.Collections.ArrayList
+function Write-Line {
+    param([string]$Message, [string]$Color = 'Gray')
+    Write-Host $Message -ForegroundColor $Color
+    [void]$reportLines.Add($Message)
+}
+function Save-Report {
+    try {
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText($reportPath, ($reportLines -join "`r`n"), $utf8Bom)
+    } catch {}
+}
+
+Clear-Host
+Write-Line ""
+Write-Line "============================================================" Cyan
+Write-Line "  Fabriq Outlook Restore" Cyan
+Write-Line "============================================================" Cyan
+Write-Line ""
+
+# Admin footgun guard: import targets the CURRENT user's HKCU.
+try {
+    $pr = New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent())
+    if ($pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Line "  [WARN] This window is running with administrator privileges." Yellow
+        Write-Line "         The registry import targets the CURRENT user's HKCU." Yellow
+        Write-Line "         If this is NOT the migration target user, the accounts" Yellow
+        Write-Line "         will land in the wrong profile." Yellow
+        Write-Line ""
+        $ans = Read-Host "  Continue anyway? (y/N)"
+        if ($ans -notmatch '^[Yy]$') {
+            Write-Line "  Aborted by user." Yellow
+            Save-Report
+            Read-Host "  Press Enter to close"
+            exit 1
+        }
+    }
+} catch {}
+
+# Load manifest + config.
+$manifestPath = Join-Path $baseDir 'manifest.json'
+$configPath   = Join-Path $baseDir '_restore_config.json'
+if (-not (Test-Path -LiteralPath $manifestPath)) {
+    Write-Line "  [FATAL] manifest.json not found: $manifestPath" Red
+    Save-Report; Read-Host "  Press Enter to close"; exit 1
+}
+if (-not (Test-Path -LiteralPath $configPath)) {
+    Write-Line "  [FATAL] _restore_config.json not found: $configPath" Red
+    Save-Report; Read-Host "  Press Enter to close"; exit 1
+}
+try { $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+catch { Write-Line "  [FATAL] manifest parse: $($_.Exception.Message)" Red; Save-Report; Read-Host "  Press Enter to close"; exit 1 }
+try { $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+catch { Write-Line "  [FATAL] config parse: $($_.Exception.Message)" Red; Save-Report; Read-Host "  Press Enter to close"; exit 1 }
+
+$ver            = if (-not [string]::IsNullOrWhiteSpace($config.outlookVersion)) { "$($config.outlookVersion)" } else { '16.0' }
+$autoProfiles   = @($config.autoProfiles)
+$manualProfiles = @($config.manualProfiles)
+
+Write-Line "  Source PC      : $($manifest.computerName)  (captured: $($manifest.collectedAt))"
+Write-Line "  Auto profiles  : $($autoProfiles.Count)"
+Write-Line "  Manual (IMAP)  : $($manualProfiles.Count)"
+Write-Line ""
+
+if ($autoProfiles.Count -eq 0) {
+    Write-Line "  No POP-only profiles to auto-restore." Yellow
+    Write-Line "  Set up your account(s) manually via Outlook (File > Add Account)." Yellow
+    Write-Line "  See _account_settings.txt for server / port / PST details." Yellow
+    Write-Line ""
+    Save-Report; Read-Host "  Press Enter to close"; exit 0
+}
+
+# Preflight: close Outlook so reg import is picked up cleanly on next launch.
+$ol = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue)
+if ($ol.Count -gt 0) {
+    Write-Line "  Outlook is running. Closing it before importing..." Yellow
+    foreach ($p in $ol) { try { $null = $p.CloseMainWindow() } catch {} }
+    Start-Sleep -Seconds 3
+    $ol = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue)
+    foreach ($p in $ol) {
+        try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; Write-Line "    force-closed PID $($p.Id)" DarkGray } catch {}
+    }
+    Start-Sleep -Seconds 1
+}
+
+# PST presence advisory (PSTs were placed by the restore run).
+$pstWarn = 0
+$srcProf = "$($config.sourceUserProfile)"
+$dstProf = "$($config.targetUserProfile)"
+foreach ($prof in @($manifest.items.profiles)) {
+    if (@($autoProfiles | Where-Object { $_.profileName -eq $prof.name }).Count -eq 0) { continue }
+    foreach ($acct in @($prof.accounts)) {
+        if ("$($acct.type)" -ne 'pop3') { continue }
+        if (-not $acct.pst -or [string]::IsNullOrWhiteSpace($acct.pst.sourcePath)) { continue }
+        $src = "$($acct.pst.sourcePath)"
+        $rebased = $src
+        if (-not [string]::IsNullOrWhiteSpace($srcProf) -and $src.Length -ge $srcProf.Length -and `
+            $src.Substring(0, $srcProf.Length) -ieq $srcProf) {
+            $rebased = ($dstProf.TrimEnd('\','/')) + $src.Substring($srcProf.Length)
+        }
+        $byEmail = Join-Path (Split-Path -Path $rebased -Parent) ("$($acct.email).pst")
+        if (-not (Test-Path -LiteralPath $rebased) -and -not (Test-Path -LiteralPath $byEmail)) {
+            Write-Line "  [WARN] PST not found for $($acct.email): $rebased" Yellow
+            $pstWarn++
         }
     }
 }
+if ($pstWarn -gt 0) {
+    Write-Line "  $pstWarn PST file(s) not at the expected target path." Yellow
+    Write-Line "  Outlook will prompt for the data file on first launch if needed." Yellow
+    Write-Line ""
+}
+
+# Import + verify, per auto profile.
+$importOk = 0; $importFail = 0; $verifyOk = 0; $verifyNg = 0
+foreach ($ap in $autoProfiles) {
+    $profName = "$($ap.profileName)"
+    $regName  = "$($ap.importReg)"
+    $regPath  = Join-Path $baseDir $regName
+    Write-Line "  ----- Profile: $profName -----" Cyan
+    if (-not (Test-Path -LiteralPath $regPath)) {
+        Write-Line "    [FAIL] import .reg missing: $regPath" Red; $importFail++; continue
+    }
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    $ok = $false
+    try {
+        $proc = Start-Process -FilePath 'reg.exe' -ArgumentList @('import', $regPath) `
+            -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        if ($proc.ExitCode -eq 0) { Write-Line "    [OK] registry imported" Green; $importOk++; $ok = $true }
+        else {
+            $err = if (Test-Path -LiteralPath $tmpErr) { (Get-Content -LiteralPath $tmpErr -Raw) } else { '' }
+            Write-Line "    [FAIL] reg import exit=$($proc.ExitCode): $err" Red; $importFail++
+        }
+    } catch {
+        Write-Line "    [FAIL] reg import error: $($_.Exception.Message)" Red; $importFail++
+    } finally {
+        Remove-Item -LiteralPath $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $ok) { continue }
+
+    $prof = @($manifest.items.profiles | Where-Object { $_.name -eq $profName }) | Select-Object -First 1
+    if ($null -ne $prof) {
+        foreach ($acct in @($prof.accounts)) {
+            if ("$($acct.type)" -ne 'pop3') { continue }
+            $key = "HKCU:\Software\Microsoft\Office\$ver\Outlook\Profiles\$profName\9375CFF0413111d3B88A00104B2A6676\$($acct.subKey)"
+            $expected = "$($acct.pop3.server)"
+            if (-not (Test-Path -LiteralPath $key)) {
+                Write-Line "      [verify] $($acct.email): subkey not found" Yellow; $verifyNg++; continue
+            }
+            try {
+                $rk = Get-Item -LiteralPath $key -ErrorAction Stop
+                $raw = $rk.GetValue('POP3 Server', $null)
+                $got = if ($raw -is [byte[]]) { [System.Text.Encoding]::Unicode.GetString([byte[]]$raw).TrimEnd([char]0) } else { [string]$raw }
+                if ($got -eq $expected) { Write-Line "      [verify] $($acct.email): OK" Green; $verifyOk++ }
+                else { Write-Line "      [verify] $($acct.email): server mismatch (expected '$expected', got '$got')" Yellow; $verifyNg++ }
+            } catch {
+                Write-Line "      [verify] $($acct.email): $($_.Exception.Message)" Yellow; $verifyNg++
+            }
+        }
+    }
+}
+Write-Line ""
+
+if ($manualProfiles.Count -gt 0) {
+    Write-Line "  ----- Manual setup required (IMAP) -----" Cyan
+    foreach ($mp in $manualProfiles) { Write-Line "    - $mp" Yellow }
+    Write-Line "    These profiles contain IMAP accounts and were not auto-restored." Yellow
+    Write-Line "    Set them up via Outlook (File > Add Account); see _account_settings.txt." Yellow
+    Write-Line ""
+}
+
+Write-Line "============================================================" Cyan
+Write-Line "  Done.  import OK=$importOk fail=$importFail  /  verify OK=$verifyOk NG=$verifyNg" Cyan
+Write-Line "============================================================" Cyan
+Write-Line ""
+Write-Line "  NEXT: launch Outlook TWICE."
+Write-Line "    1. First launch may show a 'restart required to link PST' notice and"
+Write-Line "       close itself. This is expected - just reopen Outlook."
+Write-Line "    2. Second launch: enter each account password when prompted (passwords"
+Write-Line "       cannot be migrated across PCs / DPAPI). Send/receive then works."
+Write-Line "  Server / port / PST details are in _account_settings.txt."
+Write-Line ""
+Save-Report
+Read-Host "  Press Enter to close"
+'@
+    $restorePs1Path = Join-Path $handoffDataDir 'Restore-Outlook.ps1'
+    try {
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText($restorePs1Path, $restorePs1, $utf8Bom)
+        Show-Success "Auto-restore: Restore-Outlook.ps1 emitted to _data\"
+    } catch {
+        $warnings += "Restore-Outlook.ps1 emit failed: $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+    }
+
+    # (d) Restore-Outlook.bat (ASCII, no BOM). Run AS TARGET USER, no UAC.
+    #     Passes no path arg (the .ps1 derives root from $PSScriptRoot) to
+    #     dodge the %~dp0 trailing-backslash quote-escape trap.
+    $restoreBat = @'
+@echo off
+title Fabriq Outlook Restore
+chcp 65001 > nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0_data\Restore-Outlook.ps1" %*
+'@
+    $restoreBatPath = Join-Path $operatorHandoffSubdir 'Restore-Outlook.bat'
+    try {
+        $asciiNoBom = New-Object System.Text.ASCIIEncoding
+        [System.IO.File]::WriteAllText($restoreBatPath, $restoreBat, $asciiNoBom)
+        Show-Success "Auto-restore: Restore-Outlook.bat emitted"
+    } catch {
+        $warnings += "Restore-Outlook.bat emit failed: $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+    }
+
+    # (e) README.txt - Japanese operator guide, composed in common.ps1
+    #     (BOM-tagged) and written with UTF-8 BOM (CLAUDE.md rule 5).
+    $outlookReadmePath = Join-Path $operatorHandoffSubdir 'README.txt'
+    try {
+        $readmeText = New-OutlookHandoffReadme `
+            -Manifest $manifest `
+            -AutoProfiles @($autoProfiles | ForEach-Object { $_.profileName }) `
+            -ManualProfiles @($manualProfiles)
+        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllText($outlookReadmePath, $readmeText, $utf8Bom)
+        Show-Success "Auto-restore: README.txt emitted"
+    } catch {
+        $warnings += "Outlook README.txt emit failed: $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+    }
+}
+
+# v0.32.0: the legacy in-engine Strategy B import loop (reg.exe import +
+# per-account verify against Resolve-HkcuRoot's HKCU/HKU hive) was REMOVED.
+# Its work now happens (a) at restore time as the pre-bake above
+# (Convert-RegFileToStrategyBLight -> hive rewrite to HKEY_CURRENT_USER ->
+# import-ready .reg in the handoff _data\) and (b) on the target PC inside
+# the generated Restore-Outlook.ps1 (reg import + POP3 Server verify, run AS
+# the target user so no SID redirection is needed). See CHANGELOG v0.32.0.
 
 # ----------------------------------------------------------
 # Stage 4.5 (Phase 0.15.0): rule-clear launcher shortcut
@@ -1440,164 +1647,130 @@ if ($createRuleClearShortcut) {
 }
 
 # ----------------------------------------------------------
-# Stage 5: operator communication
+# Stage 5: operator communication (v0.32.0: batch-aware)
 # ----------------------------------------------------------
+# Always write RESTORE_INSTRUCTIONS.txt (Strategy A reference; also the
+# fallback for IMAP / manual profiles). The completion popup then differs
+# by whether the auto-restore batch was generated (POP-only profiles) or
+# not (opt-out / no POP-only profiles / handoff OFF).
 $instructionsPath = $null
-
-if ($strategyBSucceeded) {
-    # ---- Stage 5a: Strategy B success popup (full or partial in v0.18.2) ----
-    # Title differs based on whether all profiles were B-light verified
-    # or whether IMAP-containing profiles were intentionally skipped to
-    # Strategy A. Body always describes the auto-restored part the same
-    # way; the partial case appends a section enumerating the wizard-
-    # required profiles.
-    $emails = ($resultsByAccount | Where-Object { $_.verifyResult -eq 'verified' } |
-               ForEach-Object { $_.email }) -join ', '
-    $verifiedPopCount = @($resultsByAccount | Where-Object { $_.verifyResult -eq 'verified' }).Count
-    $hasSkippedImapProfiles = $bLightSkippedImapProfileNames.Count -gt 0
-    $popupTitle = if ($hasSkippedImapProfiles) {
-        'Outlook POP - 一部自動復元 / IMAP profile は wizard 手動'
+if ($null -ne $operatorHandoffSubdir) {
+    if (-not (Test-Path -LiteralPath $operatorHandoffSubdir)) {
+        try {
+            $null = New-Item -ItemType Directory -Path $operatorHandoffSubdir -Force -ErrorAction Stop
+        } catch {
+            $warnings += "Could not create operator handoff subdir '$operatorHandoffSubdir' (falling back to legacy path): $($_.Exception.Message)"
+            Show-Warning ("Operator handoff subdir creation failed; falling back to legacy: " + $_.Exception.Message)
+        }
+    }
+    $instructionsPath = if (Test-Path -LiteralPath $operatorHandoffSubdir) {
+        Join-Path $operatorHandoffSubdir 'RESTORE_INSTRUCTIONS.txt'
     } else {
-        'Outlook POP - 復元完了 (実験機能)'
+        Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
     }
-    $popupBody  = "*** レジストリ自動再構築 (実験機能) で復元 ***`r`n" +
-                  "POP3 $verifiedPopCount 件のアカウントを自動復元しました:`r`n  $emails`r`n`r`n" +
-                  "操作者の対応が必要 (Outlook を 2 回起動):`r`n" +
-                  "  1. Outlook を起動。'PST のリンクのため再起動が必要' という通知が出て`r`n" +
-                  "     Outlook が自動終了します。想定動作なのでそのまま閉じてください。`r`n" +
-                  "  2. もう一度 Outlook を起動。各アカウントでパスワードを尋ねられたら入力。`r`n" +
-                  "     パスワード入力後に送受信が動作します。`r`n" +
-                  "     (DPAPI 制約: パスワードは PC を跨いで移行できません)`r`n`r`n" +
-                  "PST ファイルとメール履歴は保持されます。連絡先は起動直後から表示されます。`r`n`r`n" +
-                  "アカウント設定 (サーバ / ポート / ユーザ名 / PST パス) は手動再設定が必要な場合に備え`r`n" +
-                  "PST ファイルと同じフォルダに _account_settings.txt として保存されています。"
-    if ($isCrossVersion) {
-        $popupBody += "`r`n`r`n*** 異バージョン復元 ($crossVersionDirection) ***`r`n" +
-                      "初回起動時に追加の手動クリーンアップ手順が必要です:`r`n" +
-                      "  - 'IMAP 検索フォルダ' 警告ポップアップ -> OK を押す`r`n" +
-                      "  - 自動作成された空の Outlook.pst -> 移行した PST を既定に設定し、`r`n" +
-                      "    Outlook.pst を削除、POP アカウントの 'フォルダの変更' を実施`r`n" +
-                      "  - 初回送受信時に POP / IMAP のパスワードを入力`r`n" +
-                      "詳細な手順は _account_settings.txt の '異バージョン復元時のクリーンアップ手順'`r`n" +
-                      "セクションを参照してください。"
-    }
-    # v0.18.2: partial-restore notice for multi-profile mixed setups.
-    # Single-profile IMAP-mixed case falls into the else branch (Strategy A
-    # fallback) since $strategyBSucceeded would be $false there.
-    if ($hasSkippedImapProfiles) {
-        $skippedList = $bLightSkippedImapProfileNames -join ', '
-        $popupBody += "`r`n`r`n*** IMAP を含むため wizard 手動セットアップが必要なプロファイル ***`r`n" +
-                      "$skippedList`r`n`r`n" +
-                      "上記のプロファイルは IMAP アカウントを含むため Strategy B-light の対象外です。`r`n" +
-                      "コントロールパネル > Mail > プロファイルの表示 で該当プロファイルを選び、`r`n" +
-                      "Outlook で  ファイル > アカウント追加 から全アカウントを wizard で手動セットアップ`r`n" +
-                      "してください。各 PST フォルダ内の _account_settings.txt にサーバ設定を記載しています。"
-    }
-    # Phase 0.15.0: rule-clear shortcut callout. Inserted last so it sits
-    # visually adjacent to the operator's next action ("launch Outlook").
-    if ($null -ne $shortcutResult -and $shortcutResult.Success) {
-        $popupBody += "`r`n`r`n*** 重要: Outlook の初回起動 ***`r`n" +
-                      "Desktop の [Outlook を初回起動 (仕分けルールをクリア).lnk] から`r`n" +
-                      "起動してください。`r`n" +
-                      "移行された仕分けルールは移行先 PC で正しく動作しない可能性があるため、`r`n" +
-                      "初回起動時にクライアントサイドのルールをクリアします。`r`n" +
-                      "必要なルールは Outlook 上で手動で再設定してください。`r`n" +
-                      "初回起動後は通常の Outlook アイコンから起動して問題ありません。"
-    }
-    try {
-        Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status 'Success'
-    } catch { }
 } else {
-    # ---- Stage 5b: Strategy A fallback - RESTORE_INSTRUCTIONS.txt ----
-    # v0.18.3: file content is account-data only now (procedures moved
-    # out of this repo); the filename is preserved for backward
-    # compatibility with operator-facing tooling that references it.
-    # v0.25.0: when OperatorHandoffSubdir is provided, write into the
-    # handoff subdir (Desktop\<date>_<host>_BK\02_outlook_アカウント情報\)
-    # instead of the backup-source $sectionDir (which is hard for
-    # operators to navigate to). Subdir mkdir failure -> warn + fall
-    # back to the legacy path.
-    if ($null -ne $operatorHandoffSubdir) {
-        if (-not (Test-Path -LiteralPath $operatorHandoffSubdir)) {
-            try {
-                $null = New-Item -ItemType Directory -Path $operatorHandoffSubdir -Force -ErrorAction Stop
-            } catch {
-                $warnings += "Could not create operator handoff subdir '$operatorHandoffSubdir' (falling back to legacy path): $($_.Exception.Message)"
-                Show-Warning ("Operator handoff subdir creation failed; falling back to legacy: " + $_.Exception.Message)
+    $instructionsPath = Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
+}
+try {
+    $instructionsText = New-OutlookAccountInfoText `
+        -Manifest $manifest `
+        -TargetUserProfilePath $targetUserProfilePath `
+        -PlannedAccounts $plannedAccounts `
+        -ResultsByAccount $resultsByAccount
+    $instructionsText | Out-File -FilePath $instructionsPath -Encoding UTF8 -Force
+    Show-Info "Wrote instruction file: $instructionsPath"
+} catch {
+    $warnings += "Failed to write instructions file: $($_.Exception.Message)"
+    Show-Error "Failed to write instructions file: $($_.Exception.Message)"
+}
+
+try {
+    if ($batchGenerated) {
+        # ---- Stage 5a (v0.32.0): auto-restore batch placed in handoff ----
+        $autoCount   = $autoProfiles.Count
+        $manualCount = $manualProfiles.Count
+        $popupTitle  = if ($manualCount -gt 0) {
+            'Outlook - 自動復元バッチを配置 (一部 IMAP は手動)'
+        } else {
+            'Outlook - 自動復元バッチを配置しました'
+        }
+        $popupBody = "POP アカウントの自動復元バッチを操作者用フォルダに配置しました ($autoCount プロファイル)。`r`n`r`n" +
+                     "*** 操作手順 ***`r`n" +
+                     "  1. 移行先 (新 PC) に【復元対象ユーザ】でログインしてください。`r`n" +
+                     "     (管理者として実行しないでください。レジストリは現在のユーザの`r`n" +
+                     "      HKCU に取り込まれます)`r`n" +
+                     "  2. デスクトップの集約フォルダ内`r`n" +
+                     "     02_outlook_アカウント情報\Restore-Outlook.bat をダブルクリック。`r`n" +
+                     "  3. インポート後、Outlook を 2 回起動します:`r`n" +
+                     "     - 1 回目: 'PST のリンクのため再起動が必要' と表示され自動終了 (想定動作)`r`n" +
+                     "     - 2 回目: 各アカウントでパスワードを入力`r`n" +
+                     "       (DPAPI 制約でパスワードは PC を跨いで移行できません)`r`n`r`n" +
+                     "PST ファイル・メール履歴・連絡先は保持されます。`r`n" +
+                     "サーバ / ポート / PST パスは同フォルダの _account_settings.txt に記載しています。"
+        if ($manualCount -gt 0) {
+            $popupBody += "`r`n`r`n*** IMAP を含むため手動セットアップが必要なプロファイル ***`r`n" +
+                          ($manualProfiles -join ', ') + "`r`n" +
+                          "上記は Restore-Outlook.bat では自動復元されません。Outlook の`r`n" +
+                          "[ファイル > アカウント追加] から手動で設定してください。"
+        }
+        if ($isCrossVersion) {
+            $popupBody += "`r`n`r`n*** 異バージョン復元 ($crossVersionDirection) ***`r`n" +
+                          "初回起動時に追加の手動クリーンアップが必要な場合があります。`r`n" +
+                          "詳細は _account_settings.txt を参照してください。"
+        }
+        if ($null -ne $shortcutResult -and $shortcutResult.Success) {
+            $popupBody += "`r`n`r`n*** Outlook の初回起動 ***`r`n" +
+                          "Desktop の [Outlook を初回起動 (仕分けルールをクリア).lnk] から`r`n" +
+                          "起動すると、移行された仕分けルールをクリアします (必要時のみ)。"
+        }
+        # v0.32.0: handoff モデルでは section 自前のモーダルを出さず、リストアを
+        # スムーズに流す (printer / credentials / system_evidence と同方針)。案内は
+        # 配置済みの README.txt + Restore-Outlook.ps1 実行時 console + 下記 progress
+        # log に集約。handoff OFF (Desktop 集約フォルダが無い legacy 経路) のときだけ、
+        # 唯一の明確な案内手段として従来通り popup を出す (ここを消すと退行)。
+        if ($null -eq $operatorHandoffSubdir) {
+            Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status 'Success'
+        } else {
+            Show-Info ("Outlook: auto-restore batch placed -> $operatorHandoffSubdir " +
+                       "(run Restore-Outlook.bat as the target user; see README.txt). " +
+                       "auto=$autoCount manual=$manualCount")
+            if ($manualCount -gt 0) {
+                Show-Warning ("Outlook: $manualCount IMAP profile(s) need manual setup: " +
+                              ($manualProfiles -join ', '))
             }
         }
-        $instructionsPath = if (Test-Path -LiteralPath $operatorHandoffSubdir) {
-            Join-Path $operatorHandoffSubdir 'RESTORE_INSTRUCTIONS.txt'
-        } else {
-            Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
-        }
     } else {
-        $instructionsPath = Join-Path $sectionDir 'RESTORE_INSTRUCTIONS.txt'
-    }
-    try {
-        $instructionsText = New-OutlookAccountInfoText `
-            -Manifest $manifest `
-            -TargetUserProfilePath $targetUserProfilePath `
-            -PlannedAccounts $plannedAccounts `
-            -ResultsByAccount $resultsByAccount
-        $instructionsText | Out-File -FilePath $instructionsPath -Encoding UTF8 -Force
-        Show-Info "Wrote instruction file: $instructionsPath"
-    } catch {
-        $warnings += "Failed to write instructions file: $($_.Exception.Message)"
-        Show-Error "Failed to write instructions file: $($_.Exception.Message)"
-    }
-
-    try {
-        # v0.17.0: 2 種類の popup body. AttemptStrategyB=false (= 新デフォルト
-        # 動作で意図的に skip) のときは「正常に PST 配置完了、operator 手動
-        # セットアップへ」という安心感ある文言。AttemptStrategyB=true (= UI
-        # で opt-in したが Strategy B 失敗) のときは従来通り fallback を示唆
-        # する文言を維持。
-        $popupTitle = if (-not $attemptStrategyB) {
-            'Outlook POP/IMAP - PST 配置完了'
-        } else {
-            'Outlook POP - 手動セットアップが必要'
-        }
-        # v0.25.0: settings-file callout differs by handoff mode.
-        # Handoff ON  -> single _account_settings.txt sits next to the
-        #                instructions file in the same subdir.
-        # Handoff OFF -> per-PST-folder copies in Documents\Outlook ファイル\.
+        # ---- Stage 5b: no auto-restore batch (opt-out / no POP-only / handoff OFF) ----
+        # Strategy A operator manual setup. PST files are already placed.
+        $popupTitle = 'Outlook POP/IMAP - PST 配置完了 (手動セットアップ)'
         $settingsCallout = if ($null -ne $operatorHandoffSubdir) {
             "同じフォルダに _account_settings.txt (同内容) も配置されています。"
         } else {
             "各 PST 配置先のフォルダにも _account_settings.txt が併設されています。"
         }
-        $popupBody = if (-not $attemptStrategyB) {
-            "PST ファイルは移行先パスに配置済みです。$($plannedAccounts.Count) 件のアカウントを" +
-            "Outlook で手動で追加してください。`r`n`r`n" +
-            "手順:`r`n" +
-            "  1. Outlook を起動 > ファイル > アカウント追加`r`n" +
-            "  2. 各メールアドレスを入力 (autodiscover が大半の設定を自動補完)`r`n" +
-            "  3. データファイルを求められたら、配置済みの <email>.pst を選択`r`n" +
-            "  4. パスワードは初回送受信時に入力`r`n`r`n" +
-            "詳細手順書 (アカウントごとのサーバ設定・PST パスを記載):`r`n$instructionsPath`r`n`r`n" +
-            $settingsCallout
-        } else {
-            "$($plannedAccounts.Count) 件の Outlook アカウント (POP / IMAP) で手動セットアップが必要です。`r`n`r`n" +
-            "PST ファイルは移行先パスに配置済みです。操作者が一致するメールアドレスでアカウントを" +
-            "追加すると、Outlook のウィザードが自動で PST をアタッチします。`r`n`r`n" +
-            "手順書を開いて手順に従ってください:`r`n$instructionsPath"
-        }
+        $popupBody = "PST ファイルは移行先パスに配置済みです。$($plannedAccounts.Count) 件のアカウントを" +
+                     "Outlook で手動で追加してください。`r`n`r`n" +
+                     "手順:`r`n" +
+                     "  1. Outlook を起動 > ファイル > アカウント追加`r`n" +
+                     "  2. 各メールアドレスを入力 (autodiscover が大半の設定を自動補完)`r`n" +
+                     "  3. データファイルを求められたら、配置済みの <email>.pst を選択`r`n" +
+                     "  4. パスワードは初回送受信時に入力`r`n`r`n" +
+                     "詳細手順書 (アカウントごとのサーバ設定・PST パスを記載):`r`n$instructionsPath`r`n`r`n" +
+                     $settingsCallout
         if ($null -ne $shortcutResult -and $shortcutResult.Success) {
             $popupBody += "`r`n`r`n*** 重要: Outlook の初回起動 ***`r`n" +
                           "アカウント追加が済んだら、Desktop の`r`n" +
-                          "[Outlook を初回起動 (仕分けルールをクリア).lnk] から起動してください。`r`n" +
-                          "移行された仕分けルールが PST に残っている場合のクリーンアップとして機能します。"
+                          "[Outlook を初回起動 (仕分けルールをクリア).lnk] から起動してください。"
         }
-        # v0.17.0: Status は AttemptStrategyB=false (= 正常デフォルト) なら Success、
-        # opt-in したが Strategy B 失敗なら Partial。
-        $popupStatus = if (-not $attemptStrategyB) { 'Success' } else { 'Partial' }
-        Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status $popupStatus
-    } catch { }
-
-    # v0.17.0: notepad.exe による RESTORE_INSTRUCTIONS.txt の自動オープンを削除。
-    # operator が popup の指示に従って明示的に開く運用に変更。
-}
+        # v0.32.0: same policy - popup only on the handoff-OFF legacy path.
+        if ($null -eq $operatorHandoffSubdir) {
+            Show-CompletionPopup -Title $popupTitle -Body $popupBody -Status 'Success'
+        } else {
+            Show-Info ("Outlook: PST placed; manual setup required. See " +
+                       "$operatorHandoffSubdir\RESTORE_INSTRUCTIONS.txt / _account_settings.txt")
+        }
+    }
+} catch { }
 
 # ----------------------------------------------------------
 # Stage 5.5: always-on per-profile account-settings file in target
@@ -1678,9 +1851,9 @@ try {
 
 $sw.Stop()
 
-$status = if ($strategyBSucceeded) {
-    'Success'
-} elseif ($failCount -gt 0 -and $successCount -eq 0) {
+# v0.32.0: status no longer reflects an in-engine import (import is deferred
+# to the operator-run batch). It reflects PST placement (Stage 2) success.
+$status = if ($failCount -gt 0 -and $successCount -eq 0) {
     'Failed'
 } elseif ($failCount -gt 0) {
     'Partial'
@@ -1695,12 +1868,19 @@ return [PSCustomObject]@{
         accountTotal           = $plannedAccounts.Count
         accountReady           = $successCount
         accountFail            = $failCount
-        strategy               = if ($strategyBSucceeded) { 'B (reg-import)' }
-                                 elseif ($strategyBAttempted) { 'A (fallback after B failure)' }
-                                 else { 'A (no regExports in manifest)' }
+        # v0.32.0: 'B (handoff batch)' = a Restore-Outlook.bat was generated for
+        # POP-only profiles; otherwise Strategy A (operator manual setup).
+        strategy               = if ($batchGenerated) { 'B (handoff batch)' }
+                                 elseif (-not $attemptStrategyB) { 'A (operator manual, opt-out)' }
+                                 else { 'A (no auto-restorable profiles)' }
+        batchGenerated         = [bool]$batchGenerated
+        autoProfileCount       = @($autoProfiles).Count
+        autoProfiles           = @($autoProfiles | ForEach-Object { $_.profileName })
+        manualProfileCount     = @($manualProfiles).Count
+        manualProfiles         = @($manualProfiles)
         instructionsFile       = $instructionsPath
         targetSettingsFiles    = @($targetSettingsWritten)
-        regProfilesImported    = @($strategyBDetails | Where-Object { $_.importSucceeded }).Count
+        handoffSubdir          = $operatorHandoffSubdir
         sourceOutlookFamily    = if ($sourceInstall) { $sourceInstall.productFamily } else { $null }
         targetOutlookFamily    = $targetInstall.ProductFamily
         targetOutlookType      = $targetInstall.InstallType
@@ -1714,7 +1894,7 @@ return [PSCustomObject]@{
                                  } else { $null }
     }
     Warnings             = $warnings
-    ExternalOutputDir    = $null
+    ExternalOutputDir    = if ($batchGenerated) { $operatorHandoffSubdir } else { $null }
     ExternalManifestPath = $null
     AccountResults       = @($resultsByAccount)
     StrategyBDetails     = @($strategyBDetails)
