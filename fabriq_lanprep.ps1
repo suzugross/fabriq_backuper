@@ -192,88 +192,106 @@ Show-Separator
 Write-Host ""
 
 # ============================================================
-# Fabriq main discovery (v0.30.0, REQUIRED)
-# Same auto-discovery logic as backuper/main.ps1: scan sibling
-# directories for one containing kernel/csv/hostlist.csv. Single
-# candidate -> auto-select; multiple -> Show-FabriqSelectForm.
-# Absence is fatal because the menu now needs hostlist.csv to
-# populate the host-pair combo.
+# v0.31.0: hostlist-driven mode is OFF by default
+# ------------------------------------------------------------
+# Set env FABRIQ_LANPREP_HOSTLIST=1 before launching to opt back
+# in to the v0.30.0 behaviour (fabriq main discovery + hostlist
+# load + passphrase prompt + host combo on the menu form).
+#
+# Default behaviour from v0.31.0 onwards: the menu shows only NIC
+# combo + Target / Source / Revert / Exit buttons. The
+# Find-FabriqRoot probe is skipped entirely, so the LAN-Prep tool
+# can launch without fabriq main being present (useful for the
+# USB-carry workflow). The hostlist-driven code below is gated by
+# a single env check so removal is straightforward when the seam
+# is no longer needed (see CHANGELOG v0.31.0 entry).
+#
+# Set $script:FabriqRoot and $script:HostRows for the gated path
+# below; both stay $null / @() in default mode.
 # ============================================================
-Set-Location -Path $script:RepoRoot
-$_parentDir = Split-Path -Parent $script:RepoRoot
-$_candidates = @(Find-FabriqRoot -ParentDir $_parentDir)
-if ($_candidates.Count -eq 0) {
-    Show-Error "Fabriq main directory not found under: $_parentDir"
-    Show-Error "Expected a sibling directory containing kernel\csv\hostlist.csv"
-    Show-Error "(e.g. E:\fabriq\) so Fabriq_LanPrep can read its hostlist."
-    return
-}
-elseif ($_candidates.Count -eq 1) {
-    $script:FabriqRoot = $_candidates[0].FullName
-    Show-Info "Fabriq main detected: $($_candidates[0].Name)"
-}
-else {
-    Show-Info "Multiple fabriq candidates found ($($_candidates.Count)). Opening picker."
-    $_picked = Show-FabriqSelectForm -Candidates $_candidates
-    if ([string]::IsNullOrWhiteSpace($_picked)) {
-        Show-Error "No fabriq root selected. Exiting."
+$script:HostlistDriven = ($env:FABRIQ_LANPREP_HOSTLIST -eq '1')
+$script:FabriqRoot     = $null
+$script:HostRows       = @()
+
+if ($script:HostlistDriven) {
+    # ----- Fabriq main discovery (v0.30.0, REQUIRED in this mode) -----
+    # Same auto-discovery logic as backuper/main.ps1: scan sibling
+    # directories for one containing kernel/csv/hostlist.csv. Single
+    # candidate -> auto-select; multiple -> Show-FabriqSelectForm.
+    # Absence is fatal in this mode because the menu now needs
+    # hostlist.csv to populate the host-pair combo.
+    Set-Location -Path $script:RepoRoot
+    $_parentDir = Split-Path -Parent $script:RepoRoot
+    $_candidates = @(Find-FabriqRoot -ParentDir $_parentDir)
+    if ($_candidates.Count -eq 0) {
+        Show-Error "Fabriq main directory not found under: $_parentDir"
+        Show-Error "Expected a sibling directory containing kernel\csv\hostlist.csv"
+        Show-Error "(e.g. E:\fabriq\) so Fabriq_LanPrep can read its hostlist."
         return
     }
-    $script:FabriqRoot = $_picked
-    Show-Info "Fabriq main selected: $script:FabriqRoot"
-}
-
-# ============================================================
-# Hostlist load (v0.30.0)
-# Read hostlist.csv via the backuper hostlist_reader (which uses
-# Import-ModuleCsv internally). Import-ModuleCsv transparently
-# decrypts ENC: values only when $global:FabriqMasterPassphrase
-# is set; otherwise ENC: strings are returned verbatim. We probe
-# the first load for ENC: residue and, on detection, prompt the
-# operator for the passphrase and re-load.
-#
-# Failure / cancel policy (back-compat mode):
-#   - hostlist file absent / parse error -> warning, HostRows=@()
-#   - ENC: detected + passphrase cancelled -> warning, HostRows=@()
-#   - ENC: detected + verify fails repeatedly -> operator can cancel
-# In all failure paths the menu still opens; role buttons remain
-# usable as long as migration_profile.json is present (= profile
-# drives everything just like v0.29.0).
-# ============================================================
-$script:HostRows = @()
-$_hostsRaw = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
-if ($null -ne $_hostsRaw -and $_hostsRaw.Count -gt 0) {
-    # Detect ENC: residue (Import-ModuleCsv left them undecrypted).
-    $_needsPp = $false
-    foreach ($_r in $_hostsRaw) {
-        foreach ($_p in $_r.PSObject.Properties) {
-            if ($_p.Value -is [string] -and $_p.Value.StartsWith('ENC:')) { $_needsPp = $true; break }
-        }
-        if ($_needsPp) { break }
+    elseif ($_candidates.Count -eq 1) {
+        $script:FabriqRoot = $_candidates[0].FullName
+        Show-Info "Fabriq main detected: $($_candidates[0].Name)"
     }
-    if ($_needsPp) {
-        $_verifyToken = Join-Path $script:FabriqRoot 'kernel\txt\passphrase_verify.txt'
-        Show-Info "Hostlist contains ENC: encrypted fields. Prompting for master passphrase..."
-        $_pp = Show-LanPrepPassphrasePrompt -VerifyTokenPath $_verifyToken
-        if ([string]::IsNullOrWhiteSpace($_pp)) {
-            Show-Warning "Passphrase prompt cancelled. Hostlist combo disabled (back-compat mode)."
+    else {
+        Show-Info "Multiple fabriq candidates found ($($_candidates.Count)). Opening picker."
+        $_picked = Show-FabriqSelectForm -Candidates $_candidates
+        if ([string]::IsNullOrWhiteSpace($_picked)) {
+            Show-Error "No fabriq root selected. Exiting."
+            return
+        }
+        $script:FabriqRoot = $_picked
+        Show-Info "Fabriq main selected: $script:FabriqRoot"
+    }
+
+    # ----- Hostlist load + ENC: passphrase prompt -----
+    # Read hostlist.csv via the backuper hostlist_reader (which uses
+    # Import-ModuleCsv internally). Import-ModuleCsv transparently
+    # decrypts ENC: values only when $global:FabriqMasterPassphrase
+    # is set; otherwise ENC: strings are returned verbatim. We probe
+    # the first load for ENC: residue and, on detection, prompt the
+    # operator for the passphrase and re-load.
+    #
+    # Failure / cancel policy:
+    #   - hostlist file absent / parse error -> warning, HostRows=@()
+    #   - ENC: detected + passphrase cancelled -> warning, HostRows=@()
+    #   - ENC: detected + verify fails repeatedly -> operator can cancel
+    $_hostsRaw = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
+    if ($null -ne $_hostsRaw -and $_hostsRaw.Count -gt 0) {
+        $_needsPp = $false
+        foreach ($_r in $_hostsRaw) {
+            foreach ($_p in $_r.PSObject.Properties) {
+                if ($_p.Value -is [string] -and $_p.Value.StartsWith('ENC:')) { $_needsPp = $true; break }
+            }
+            if ($_needsPp) { break }
+        }
+        if ($_needsPp) {
+            $_verifyToken = Join-Path $script:FabriqRoot 'kernel\txt\passphrase_verify.txt'
+            Show-Info "Hostlist contains ENC: encrypted fields. Prompting for master passphrase..."
+            $_pp = Show-LanPrepPassphrasePrompt -VerifyTokenPath $_verifyToken
+            if ([string]::IsNullOrWhiteSpace($_pp)) {
+                Show-Warning "Passphrase prompt cancelled. Hostlist combo disabled."
+            }
+            else {
+                $global:FabriqMasterPassphrase = $_pp
+                $_hostsRaw = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
+                if ($null -ne $_hostsRaw) {
+                    $script:HostRows = @($_hostsRaw)
+                    Show-Success "Hostlist decrypted: $($script:HostRows.Count) row(s)"
+                }
+            }
         }
         else {
-            $global:FabriqMasterPassphrase = $_pp
-            $_hostsRaw = Get-FabriqHostlist -FabriqRoot $script:FabriqRoot
-            if ($null -ne $_hostsRaw) {
-                $script:HostRows = @($_hostsRaw)
-                Show-Success "Hostlist decrypted: $($script:HostRows.Count) row(s)"
-            }
+            $script:HostRows = @($_hostsRaw)
+            Show-Success "Hostlist loaded: $($script:HostRows.Count) row(s) (no ENC: fields)"
         }
     }
     else {
-        $script:HostRows = @($_hostsRaw)
-        Show-Success "Hostlist loaded: $($script:HostRows.Count) row(s) (no ENC: fields)"
+        Show-Warning "Hostlist empty or unreadable. Hostlist combo will be disabled."
     }
 }
 else {
-    Show-Warning "Hostlist empty or unreadable. Hostlist combo will be disabled (back-compat mode)."
+    Show-Info "Hostlist-driven mode disabled (default). Set FABRIQ_LANPREP_HOSTLIST=1 to enable."
 }
 
 # ============================================================
@@ -312,13 +330,23 @@ if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.n
 #   .oldPCName       -> selected hostlist OldPCName  (or $null)
 #   .newPCName       -> selected hostlist NewPCName  (or $null)
 #   .interfaceAlias  -> selected NIC name            (or $null)
+#
+# v0.31.0: -HostRows / -ShowHostCombo are only forwarded in the
+# opt-in hostlist-driven mode. In the default mode the host combo
+# stays hidden and the menu returns $null for oldPCName/newPCName,
+# so the splat below naturally omits them from the child invocation.
 # ============================================================
-$result = Show-LanPrepMenu `
-    -Version               $script:LanPrepVersion `
-    -MigrationProfile      $script:MigrationProfile `
-    -HostRows              $script:HostRows `
-    -Nics                  $script:Nics `
-    -DefaultInterfaceAlias $_defaultAlias
+$_menuParams = @{
+    Version               = $script:LanPrepVersion
+    MigrationProfile      = $script:MigrationProfile
+    Nics                  = $script:Nics
+    DefaultInterfaceAlias = $_defaultAlias
+}
+if ($script:HostlistDriven) {
+    $_menuParams['HostRows']      = $script:HostRows
+    $_menuParams['ShowHostCombo'] = $true
+}
+$result = Show-LanPrepMenu @_menuParams
 
 # Build the optional-parameter splat once so target/source paths share it.
 $_childArgs = @{}

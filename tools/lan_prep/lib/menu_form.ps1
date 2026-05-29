@@ -42,14 +42,27 @@ function global:Show-LanPrepMenu {
         [array]$Nics = @(),
         # v0.30.0: optional initial selection for the NIC combo. Typically
         # the operator passes $MigrationProfile.network.source.interfaceAlias.
-        [string]$DefaultInterfaceAlias = $null
+        [string]$DefaultInterfaceAlias = $null,
+        # v0.31.0: hostlist combo is now hidden by default. Caller
+        # (fabriq_lanprep.ps1) sets this only when env var
+        # FABRIQ_LANPREP_HOSTLIST=1 is present. When $false (default), the
+        # host combo block + dynamic role-button label updater are skipped
+        # entirely, the form gets ~80px shorter, and role buttons keep a
+        # static "(profile)" label. The slated removal path is described in
+        # CHANGELOG v0.31.0 LAN-Prep entry; this switch is the seam.
+        [switch]$ShowHostCombo
     )
 
     $hasProfile = ($null -ne $MigrationProfile)
     $hasHosts   = ($HostRows -and $HostRows.Count -gt 0)
 
+    # v0.31.0: form height is dynamic on $ShowHostCombo. The host combo
+    # block (label + combo + back-compat note) consumes ~80px of vertical
+    # space; collapsing it shrinks the form to a tighter 3-button layout.
+    $formHeight = if ($ShowHostCombo) { 520 } else { 440 }
+
     $form = New-Object System.Windows.Forms.Form
-    Set-FormStyle -Form $form -Title 'Fabriq LAN-Prep - メニュー' -Width 560 -Height 520
+    Set-FormStyle -Form $form -Title 'Fabriq LAN-Prep - メニュー' -Width 560 -Height $formHeight
     $form.MaximizeBox  = $false
     $form.MinimizeBox  = $false
     $form.StartPosition = 'CenterScreen'
@@ -86,42 +99,47 @@ function global:Show-LanPrepMenu {
         $yPos += 24
     }
 
-    # ---- Hostlist combo ----
-    $hostLabel = New-StyledLabel -Text '対象 PC ペア (hostlist):' `
-        -X 20 -Y $yPos -Width 200 -Height 18 `
-        -Font $script:fontBold -FgColor $script:fgHeader
-    $form.Controls.Add($hostLabel)
-    $yPos += 22
+    # ---- Hostlist combo (v0.31.0: hidden unless -ShowHostCombo) ----
+    # When -ShowHostCombo is not set, $hostCombo stays $null and the
+    # closures below ($updateRoleLabels / $resolveHost) honour that.
+    $hostCombo = $null
+    if ($ShowHostCombo) {
+        $hostLabel = New-StyledLabel -Text '対象 PC ペア (hostlist):' `
+            -X 20 -Y $yPos -Width 200 -Height 18 `
+            -Font $script:fontBold -FgColor $script:fgHeader
+        $form.Controls.Add($hostLabel)
+        $yPos += 22
 
-    $hostCombo = New-StyledComboBox -X 20 -Y $yPos -Width 520 -Height 26
-    # First entry is a sentinel "no selection -> back-compat" choice.
-    [void]$hostCombo.Items.Add('(未選択 — profile 値で実行)')
-    if ($hasHosts) {
-        foreach ($h in $HostRows) {
-            $oldName = "$($h.OldPCName)"
-            $newName = if ($h.PSObject.Properties.Name -contains 'NewPCName') { "$($h.NewPCName)" } else { '' }
-            if ([string]::IsNullOrWhiteSpace($newName)) {
-                [void]$hostCombo.Items.Add($oldName)
-            }
-            else {
-                [void]$hostCombo.Items.Add("$oldName  ->  $newName")
+        $hostCombo = New-StyledComboBox -X 20 -Y $yPos -Width 520 -Height 26
+        # First entry is a sentinel "no selection -> back-compat" choice.
+        [void]$hostCombo.Items.Add('(未選択 — profile 値で実行)')
+        if ($hasHosts) {
+            foreach ($h in $HostRows) {
+                $oldName = "$($h.OldPCName)"
+                $newName = if ($h.PSObject.Properties.Name -contains 'NewPCName') { "$($h.NewPCName)" } else { '' }
+                if ([string]::IsNullOrWhiteSpace($newName)) {
+                    [void]$hostCombo.Items.Add($oldName)
+                }
+                else {
+                    [void]$hostCombo.Items.Add("$oldName  ->  $newName")
+                }
             }
         }
-    }
-    $hostCombo.SelectedIndex = 0
-    $hostCombo.Enabled = $hasHosts
-    $form.Controls.Add($hostCombo)
-    $yPos += 30
+        $hostCombo.SelectedIndex = 0
+        $hostCombo.Enabled = $hasHosts
+        $form.Controls.Add($hostCombo)
+        $yPos += 30
 
-    if (-not $hasHosts) {
-        $noHostLabel = New-StyledLabel `
-            -Text "(hostlist が読み込めなかったため後方互換モード。profile.json の値で実行されます)" `
-            -X 20 -Y $yPos -Width 520 -Height 16 -FgColor $script:fgDim
-        $form.Controls.Add($noHostLabel)
-        $yPos += 20
-    }
-    else {
-        $yPos += 4
+        if (-not $hasHosts) {
+            $noHostLabel = New-StyledLabel `
+                -Text "(hostlist が読み込めなかったため後方互換モード。profile.json の値で実行されます)" `
+                -X 20 -Y $yPos -Width 520 -Height 16 -FgColor $script:fgDim
+            $form.Controls.Add($noHostLabel)
+            $yPos += 20
+        }
+        else {
+            $yPos += 4
+        }
     }
 
     # ---- NIC combo ----
@@ -187,25 +205,28 @@ function global:Show-LanPrepMenu {
     $form.Controls.Add($btnExit)
 
     # ---- Dynamic role-button label updater ----
-    # Helper closures capture $hostCombo / $HostRows / $btnTarget / $btnSource
-    # from the enclosing scope. Re-evaluated on hostCombo.SelectedIndexChanged.
-    $updateRoleLabels = {
-        $idx = $hostCombo.SelectedIndex
-        if ($idx -le 0 -or -not $hasHosts) {
-            $btnTarget.Text = '移行先として設定  (profile 値)'
-            $btnSource.Text = '移行元として設定  (profile 値)'
-            return
+    # v0.31.0: only wired when -ShowHostCombo is on. In default mode the
+    # role buttons keep their static "移行先として設定" / "移行元として設定"
+    # labels from New-StyledButton above.
+    if ($ShowHostCombo -and $null -ne $hostCombo) {
+        $updateRoleLabels = {
+            $idx = $hostCombo.SelectedIndex
+            if ($idx -le 0 -or -not $hasHosts) {
+                $btnTarget.Text = '移行先として設定  (profile 値)'
+                $btnSource.Text = '移行元として設定  (profile 値)'
+                return
+            }
+            $row = $HostRows[$idx - 1]
+            $oldName = "$($row.OldPCName)"
+            $newName = if ($row.PSObject.Properties.Name -contains 'NewPCName') { "$($row.NewPCName)" } else { '' }
+            if ([string]::IsNullOrWhiteSpace($newName)) { $newName = '(未設定)' }
+            if ([string]::IsNullOrWhiteSpace($oldName)) { $oldName = '(未設定)' }
+            $btnTarget.Text = "移行先として設定`r`n(この PC = $newName)"
+            $btnSource.Text = "移行元として設定`r`n(この PC = $oldName)"
         }
-        $row = $HostRows[$idx - 1]
-        $oldName = "$($row.OldPCName)"
-        $newName = if ($row.PSObject.Properties.Name -contains 'NewPCName') { "$($row.NewPCName)" } else { '' }
-        if ([string]::IsNullOrWhiteSpace($newName)) { $newName = '(未設定)' }
-        if ([string]::IsNullOrWhiteSpace($oldName)) { $oldName = '(未設定)' }
-        $btnTarget.Text = "移行先として設定`r`n(この PC = $newName)"
-        $btnSource.Text = "移行元として設定`r`n(この PC = $oldName)"
+        & $updateRoleLabels
+        $hostCombo.Add_SelectedIndexChanged({ & $updateRoleLabels })
     }
-    & $updateRoleLabels
-    $hostCombo.Add_SelectedIndexChanged({ & $updateRoleLabels })
 
     # ---- Result object ----
     # Initial = exit, overwritten by button handlers.
@@ -217,8 +238,10 @@ function global:Show-LanPrepMenu {
     }
 
     # Resolve currently-selected host row to (oldPCName, newPCName), or
-    # ($null, $null) if the sentinel row is selected / no hosts loaded.
+    # ($null, $null) if the sentinel row is selected / no hosts loaded /
+    # the host combo is hidden (v0.31.0 default).
     $resolveHost = {
+        if (-not $ShowHostCombo -or $null -eq $hostCombo) { return @($null, $null) }
         $idx = $hostCombo.SelectedIndex
         if ($idx -le 0 -or -not $hasHosts) {
             return @($null, $null)

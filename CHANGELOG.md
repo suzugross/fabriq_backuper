@@ -132,6 +132,103 @@
        (= バッチ配備されない)、他 sections は通常動作
 
 ### Changed
+- backuper v0.31.0: **LAN-Prep の hostlist 駆動 + passphrase prompt + fabriq main
+  必須化を default OFF に切り替え** — v0.30.0 で追加した hostlist combo / NIC
+  combo のうち、現場運用で実利が薄いと判明した hostlist 関連 (PC ペア選択 + ENC:
+  暗号化フィールド用 passphrase ダイアログ + fabriq main 不在時の起動拒否) を
+  default で実行しないようにした。NIC combo + 移行先 / 移行元 / 元に戻す / 終了
+  ボタンだけのシンプルなメニュー画面に戻る。
+  - **Backuper への影響**: なし。本 entry の修正対象は LAN-Prep の entry script
+    と menu form のみ。`backuper/` 配下と VERSION ファイルは一切変更なし
+    (本 release は v0.31.0 据え置きで [アプリ移行チェック entry](#added) と
+    同 release に同梱)
+  - **隠しスイッチ**: 環境変数 `FABRIQ_LANPREP_HOSTLIST=1` を設定して
+    `Fabriq_LanPrep.exe` を起動すると v0.30.0 と同等の動作に復帰
+    (hostlist combo + passphrase prompt + fabriq main 必須化が全て有効)。
+    将来この機能を完全削除する際の seam として残置
+  - **修正ファイル**:
+    - [fabriq_lanprep.ps1](fabriq_lanprep.ps1): 起動時に
+      `$env:FABRIQ_LANPREP_HOSTLIST -eq '1'` を確認し `$script:HostlistDriven`
+      に格納。Find-FabriqRoot 必須ロジック + hostlist load + ENC: 検出 +
+      passphrase prompt の 3 ブロックを `if ($script:HostlistDriven)` で囲んだ。
+      Show-LanPrepMenu 呼び出しは splat (`@_menuParams`) 化、`-HostRows` と
+      `-ShowHostCombo` は hostlist-driven モード時のみ付加
+    - [tools/lan_prep/lib/menu_form.ps1](tools/lan_prep/lib/menu_form.ps1):
+      `Show-LanPrepMenu` に `[switch]$ShowHostCombo` パラメータを追加
+      (default $false)。host combo + label + 後方互換 note + dynamic
+      role-button label updater + resolveHost クロージャを
+      `if ($ShowHostCombo)` でガード。form 高さも条件付き
+      ($ShowHostCombo: 520 / OFF: 440) で動的に縮める
+  - **不変ファイル**:
+    - [tools/lan_prep/Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1):
+      `-OldPCName` / `-NewPCName` / `-InterfaceAlias` optional パラメータは
+      そのまま温存。default モードでは前 2 つが渡されず profile 値が使われる、
+      `-InterfaceAlias` は NIC combo 経由で従来通り渡る
+    - [tools/lan_prep/Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1):
+      もともと hostlist 無関係、変更なし
+    - [tools/lan_prep/lib/menu_form.ps1](tools/lan_prep/lib/menu_form.ps1) 後半
+      の `Show-LanPrepPassphrasePrompt` 関数定義: hostlist-driven モードでのみ
+      呼ばれるが定義は残置 (dead code 状態だが将来 seam 削除時に一括除去)
+    - [backuper/lib/hostlist_reader.ps1](backuper/lib/hostlist_reader.ps1) /
+      [backuper/lib/ui/fabriq_select_form.ps1](backuper/lib/ui/fabriq_select_form.ps1):
+      fabriq_lanprep.ps1 からの dot-source は残置 (副作用ゼロ、hostlist-driven
+      モードで使われる関数群)
+    - [backuper/data/migration_profile.sample.json](backuper/data/migration_profile.sample.json):
+      schema 不変
+  - **デフォルトモードの起動フロー**:
+    1. WinForms / Drawing assembly load
+    2. backuper common.ps1 / theme.ps1 / fabriq_select_form.ps1 /
+       hostlist_reader.ps1 を dot-source (関数定義の load のみ、I/O なし)
+    3. menu_form.ps1 を dot-source
+    4. VERSION 読込
+    5. migration_profile.json 読込 (existing optional load policy)
+    6. **`Find-FabriqRoot` を呼ばない** (env が立っていないため)
+    7. **hostlist load / passphrase prompt も走らない**
+    8. NIC enumeration (Get-NetAdapter) → 既存通り
+    9. Show-LanPrepMenu (host combo 非表示の縮小モード)
+    10. target / source 経路は v0.30.0 と同様に `-Force` + `exit 0` で
+        KeepAwake バトンタッチ
+  - **副次効果 (= 設計純化)**:
+    - fabriq main 不在でも LAN-Prep が起動できる (USB 持ち回り運用が綺麗)
+    - passphrase ダイアログが消える (operator の入力ステップ削減)
+    - メニュー画面が 80px 縮小 (520 → 440)、ボタン到達までの目線移動が短く
+  - **後方互換**:
+    - `FABRIQ_LANPREP_HOSTLIST=1` 起動時は v0.30.0 と同等動作 (UI / I/O / 子
+      スクリプト引数の全てを復元)
+    - profile.json の `interfaceAlias` は NIC combo の default 選択値として
+      引き続き機能 (default モードでも変わらず)
+    - 直接 `Prepare-LanMigration.ps1 -Role target` を呼ぶ運用も無影響
+    - Revert-LanMigration / KeepAwake / Transcript ログ / top-level trap も
+      全て無変更
+  - **VERSION**: 0.31.0 据え置き ([アプリ移行チェック entry](#added) と同
+    Unreleased サイクルに同梱、Backuper への影響なし)
+  - **配備**: `E:\fabriq_backuper\` 再配置のみ。EXE 無変更
+  - **検証**:
+    1. 環境変数なしで `Fabriq_LanPrep.exe` ダブルクリック → fabriq main 探索
+       なし、passphrase ダイアログなし、メニュー画面に NIC combo + 4 ボタン
+       (移行先 / 移行元 / 元に戻す / 終了) のみ、host combo + 「対象 PC ペア」
+       ラベルが消えていること
+    2. `set FABRIQ_LANPREP_HOSTLIST=1` してから EXE 起動 → fabriq main 探索が
+       走る、hostlist が ENC: ありなら passphrase ダイアログ表示、メニュー
+       画面に host combo + dynamic role-button label が復活
+    3. default モードで target/source → KeepAwake 別 window バトンタッチ
+       + 親 window 即 close 動作が維持されていること
+    4. default モードで revert → profile.rollback.snapshotPath を読んで
+       Revert-LanMigration が走ること
+    5. fabriq main 不在の PC で default モード起動 → エラーなしで menu まで
+       到達できること (= USB 持ち回り運用が成立)
+    6. `git diff` で `backuper/` 配下と VERSION に差分が無いこと
+  - **将来の seam 削除手順** (静かに削除する際の 4 ステップ):
+    1. fabriq_lanprep.ps1: env チェックと `if ($script:HostlistDriven)` ブロック
+       (Find-FabriqRoot + hostlist load + passphrase prompt) を削除
+    2. fabriq_lanprep.ps1: `backuper/lib/hostlist_reader.ps1` /
+       `backuper/lib/ui/fabriq_select_form.ps1` の dot-source 行を削除
+    3. menu_form.ps1: `-ShowHostCombo` / `-HostRows` パラメータと if-囲み
+       ブロック + `Show-LanPrepPassphrasePrompt` 関数定義を削除
+    4. Prepare-LanMigration.ps1: `-OldPCName` / `-NewPCName` optional
+       パラメータと plan banner の host pair 行を削除
+
+### Changed
 - backuper v0.30.0: **LAN-Prep の target/source 成功時に Y/N 確認 + 完了後
   Enter 押下を省略** — operator が menu の役割ボタン (「移行先として設定 /
   (この PC = NEW-PC-01)」) を押した後、`Apply the above changes? (y/N)` と
