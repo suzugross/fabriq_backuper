@@ -174,17 +174,23 @@ function global:Show-LanPrepMenu {
     $yPos += 32
 
     # ---- Action buttons ----
-    # Two role buttons (Target / Source), side by side, with dynamic labels.
+    # Two role buttons (Target / Source), side by side.
+    # v0.31.0 cosmetic update: labels condensed to "移行先（新PC）" /
+    # "移行元（旧PC）" so operators don't have to read the role from
+    # context. The source button uses $script:stripeYellow so the two
+    # PCs are colour-distinguished at a glance (target = lavender accent,
+    # source = warm yellow). Click handlers / return value / child-script
+    # arguments are unchanged.
     $btnTarget = New-StyledButton `
-        -Text '移行先として設定' `
+        -Text '移行先（新PC）' `
         -X 20 -Y $yPos -Width 254 -Height 50 -BgColor $script:bgAccent
     $btnTarget.Font = $script:fontBold
     $btnTarget.Enabled = $hasProfile
     $form.Controls.Add($btnTarget)
 
     $btnSource = New-StyledButton `
-        -Text '移行元として設定' `
-        -X 286 -Y $yPos -Width 254 -Height 50 -BgColor $script:bgAccent
+        -Text '移行元（旧PC）' `
+        -X 286 -Y $yPos -Width 254 -Height 50 -BgColor $script:stripeYellow
     $btnSource.Font = $script:fontBold
     $btnSource.Enabled = $hasProfile
     $form.Controls.Add($btnSource)
@@ -212,8 +218,8 @@ function global:Show-LanPrepMenu {
         $updateRoleLabels = {
             $idx = $hostCombo.SelectedIndex
             if ($idx -le 0 -or -not $hasHosts) {
-                $btnTarget.Text = '移行先として設定  (profile 値)'
-                $btnSource.Text = '移行元として設定  (profile 値)'
+                $btnTarget.Text = '移行先（新PC）  (profile 値)'
+                $btnSource.Text = '移行元（旧PC）  (profile 値)'
                 return
             }
             $row = $HostRows[$idx - 1]
@@ -221,8 +227,8 @@ function global:Show-LanPrepMenu {
             $newName = if ($row.PSObject.Properties.Name -contains 'NewPCName') { "$($row.NewPCName)" } else { '' }
             if ([string]::IsNullOrWhiteSpace($newName)) { $newName = '(未設定)' }
             if ([string]::IsNullOrWhiteSpace($oldName)) { $oldName = '(未設定)' }
-            $btnTarget.Text = "移行先として設定`r`n(この PC = $newName)"
-            $btnSource.Text = "移行元として設定`r`n(この PC = $oldName)"
+            $btnTarget.Text = "移行先（新PC）`r`n(この PC = $newName)"
+            $btnSource.Text = "移行元（旧PC）`r`n(この PC = $oldName)"
         }
         & $updateRoleLabels
         $hostCombo.Add_SelectedIndexChanged({ & $updateRoleLabels })

@@ -132,6 +132,29 @@
        (= バッチ配備されない)、他 sections は通常動作
 
 ### Changed
+- backuper v0.31.0: **LAN-Prep メニューの役割ボタン文言を短縮 + 移行元ボタンを
+  黄色に** — operator が役割をひと目で判別できるよう cosmetic 調整。
+  動作 (Click handler / 戻り値 / 子スクリプト呼び出し / 引数) は完全に不変、
+  ボタンの `.Text` プロパティと `.BgColor` プロパティのみ変更。
+  - **文言**: 「移行先として設定」→「移行先（新PC）」、「移行元として設定」→
+    「移行元（旧PC）」。dynamic role-button label updater (hostlist-driven
+    モードでのみ動作) の `(profile 値)` / `(この PC = ...)` 接尾も同じ
+    新文言で整合
+  - **色**: 移行先ボタン = `$script:bgAccent` (lavender #9366BD、不変)、
+    移行元ボタン = `$script:stripeYellow` (#F2C94C、既存 theme 定義をそのまま
+    使用)。New-StyledButton は bgAccent 以外を受けると ForeColor 自動で
+    濃色 (#222222) に切り替わるためコントラスト OK、テーマ整合性も維持
+  - **不変**: Backuper 配下 / VERSION / fabriq_lanprep.ps1 /
+    Prepare-LanMigration.ps1 / theme.ps1 / Click handler / 戻り値 /
+    `$script:_lanPrepMenuResult` の action 値 (`target`/`source`/`revert`/`exit`)
+    / FABRIQ_LANPREP_HOSTLIST=1 経路の hostlist combo の挙動
+  - **VERSION**: 0.31.0 据え置き (cosmetic、Backuper 無影響)
+  - **検証**: メニューを開いて移行先 = 紫、移行元 = 黄色の 2 色配色になる
+    こと、ボタンをクリックして従来通り Prepare-LanMigration.ps1 -Role
+    target/source が走ること、FABRIQ_LANPREP_HOSTLIST=1 起動で hostlist
+    combo 選択時に「移行先（新PC）`\r\n`(この PC = NEW-PC-01)」の改行 2 行
+    表示になること
+
 - backuper v0.31.0: **LAN-Prep の hostlist 駆動 + passphrase prompt + fabriq main
   必須化を default OFF に切り替え** — v0.30.0 で追加した hostlist combo / NIC
   combo のうち、現場運用で実利が薄いと判明した hostlist 関連 (PC ペア選択 + ENC:
