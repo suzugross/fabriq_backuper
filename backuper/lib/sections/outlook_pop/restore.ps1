@@ -357,7 +357,15 @@ function Convert-RegFileToStrategyBLight {
         [Parameter(Mandatory = $true)][string]$SourceUserName,
         [Parameter(Mandatory = $true)][string]$TargetUserName,
         [string]$SourceVersion = $null,
-        [string]$TargetVersion = $null
+        [string]$TargetVersion = $null,
+        # v0.33.1: full source/target profile paths for the path rebase. When
+        # both are supplied, the path rewrite rebases the FULL source profile
+        # prefix -> target profile prefix (matching the Stage 2 PST placement),
+        # so it also handles different-drive / redirected / non-\Users\
+        # ProfilesDirectory layouts. When absent, falls back to the
+        # \Users\<user>\ directory anchor.
+        [string]$SourceProfilePath = $null,
+        [string]$TargetProfilePath = $null
     )
 
     $intAcctRe = '\\9375CFF0413111d3B88A00104B2A6676\\[0-9A-Fa-f]{8}$'
@@ -425,21 +433,32 @@ function Convert-RegFileToStrategyBLight {
         }
     }
 
-    # v0.33.0 hardening: anchor the path rewrite to the "\Users\<user>\"
-    # DIRECTORY segment, NOT the bare username token. A bare-username replace
-    # over-matched the username inside the PST FILENAME -- e.g. Windows login
-    # 'suzuki' + account suzuki@... : the file "suzuki@....pst" was rewritten
-    # to "<target>@....pst" (a non-existent file), so that POP account bound to
-    # a missing store and collapsed (confirmed live 2026-05-30, suzuki->test;
-    # the GOLD case y_suzuki->test only escaped because 'y_suzuki' is absent
-    # from the filename). Anchoring to \Users\<u>\ rewrites only the profile
-    # directory, leaves the <email>.pst filename intact, and still byte-matches
-    # Outlook's own EID for clean usernames. NOTE: assumes the profile dir name
-    # == the username (standard C:\Users\<user>\ layout); a redirected /
-    # domain-suffixed profile dir is simply not rewritten (stale path, but
-    # NEVER a corrupted filename).
-    $srcDirHex = ([System.Text.Encoding]::Unicode.GetBytes("\Users\$SourceUserName\") | ForEach-Object { '{0:x2}' -f $_ }) -join ','
-    $dstDirHex = ([System.Text.Encoding]::Unicode.GetBytes("\Users\$TargetUserName\") | ForEach-Object { '{0:x2}' -f $_ }) -join ','
+    # v0.33.0/.1: rebase the PST path's profile-DIRECTORY prefix, anchored so
+    # the rewrite can NEVER touch the <email>.pst filename, the mspst header,
+    # or anything outside the directory prefix. A naive bare-username replace
+    # over-matched the username inside the filename (login 'suzuki' + suzuki@...
+    # -> the file "suzuki@....pst" became "<target>@....pst", a non-existent
+    # file, so that POP account collapsed; confirmed live 2026-05-30,
+    # suzuki->test).
+    #   Preferred (v0.33.1): rebase the FULL source profile prefix -> target
+    #   profile prefix (e.g. C:\Users\y_suzuki\ -> C:\Users\test\), exactly
+    #   like the Stage 2 PST file placement. This additionally handles
+    #   different-drive, redirected, and non-\Users\ ProfilesDirectory layouts.
+    #   Fallback (profile paths absent): the \Users\<user>\ directory anchor.
+    # Either way only the directory prefix is rewritten; the filename stays
+    # intact and the GOLD byte-match for the standard C:\Users\<user>\ case is
+    # preserved byte-for-byte (the full-prefix and \Users\ anchor produce the
+    # same output bytes when source/target are both C:\Users\<user>).
+    if (-not [string]::IsNullOrWhiteSpace($SourceProfilePath) -and
+        -not [string]::IsNullOrWhiteSpace($TargetProfilePath)) {
+        $srcRebase = $SourceProfilePath.TrimEnd('\','/') + '\'
+        $dstRebase = $TargetProfilePath.TrimEnd('\','/') + '\'
+    } else {
+        $srcRebase = "\Users\$SourceUserName\"
+        $dstRebase = "\Users\$TargetUserName\"
+    }
+    $srcDirHex = ([System.Text.Encoding]::Unicode.GetBytes($srcRebase) | ForEach-Object { '{0:x2}' -f $_ }) -join ','
+    $dstDirHex = ([System.Text.Encoding]::Unicode.GetBytes($dstRebase) | ForEach-Object { '{0:x2}' -f $_ }) -join ','
 
     # ---- Main pass: T2/T3/T4 inline, T5 section drop (cross-ver only),
     # T6 binary EntryID strip in OST subkey (same-ver POP-only) ----
@@ -1294,7 +1313,9 @@ if (-not $attemptStrategyB) {
                 -SourceUserName $blSrcUserName `
                 -TargetUserName $blDstUserName `
                 -SourceVersion $srcRegVer `
-                -TargetVersion $tgtRegVer
+                -TargetVersion $tgtRegVer `
+                -SourceProfilePath $sourceUserProfile `
+                -TargetProfilePath $targetUserProfilePath
             $perProfile.blTransformed = $true
 
             $sourcePrefix = Get-RegFileSourceHive -RegPath $blPath

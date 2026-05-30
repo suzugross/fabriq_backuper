@@ -16,6 +16,23 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.33.1: **Outlook パス書換を full profile-prefix rebase に統一 (別ドライブ/リダイレクト profile 対応)** —
+  v0.33.0 の T4/T8 パス書換は `\Users\<user>\` ディレクトリに anchor していたが、
+  **移行元と移行先でドライブが違う** (例 `D:\Users\…` → `C:\Users\…`) / **プロファイルが
+  非 `\Users\` 親にリダイレクト** (例 `D:\Profiles\suzuki`・ProfilesDirectory 変更・
+  ローミング) の場合に、PST パスの prefix が正しく rebase されず stale path
+  (= 当該 account が未バインド) になっていた。`Convert-RegFileToStrategyBLight` に
+  `-SourceProfilePath` / `-TargetProfilePath` を追加し、両方ある時は
+  **Stage 2 の PST 配置と同じ「フル profile prefix rebase」** (`$sourceUserProfile` →
+  `$targetUserProfilePath`) を行うよう統一。profile path が無い場合は従来の
+  `\Users\<user>\` anchor にフォールバック。
+  - **標準ケース (移行元/先とも `C:\Users\<user>`) はバイト同一**で挙動不変 (full-prefix
+    と `\Users\` anchor は同じ出力バイトを生成、GOLD バイト一致を再検証済)。
+  - ファイル名/mspst ヘッダは引き続き不可侵 (v0.33.0 の hardening を包含)。
+  - これで `.DOMAIN`/`.000`/リネーム/別ドライブ/リダイレクト/login==local-part の
+    全ケースで正しく rebase される (実関数で全ケース検証済)。
+  - **VERSION**: 0.33.0 → **0.33.1** (PATCH / 内部堅牢化)。
+
 - backuper v0.33.0: **複数POP×別PST プロファイルの配信先 collapse を修正 (T8: DSE 書換 + DFE 保持)** —
   2 つ以上の POP アカウントがそれぞれ別 PST を持つプロファイルを自動復元すると、
   全アカウントが同じ(先頭) PST に紐づいてしまう不具合を修正。**root-cause は
