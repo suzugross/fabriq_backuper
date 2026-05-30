@@ -88,19 +88,30 @@ if ($hkcuInfo.Redirected) {
 }
 
 # ----------------------------------------------------------
-# Locate the Outlook Profiles key (try 16.0 first, then 15.0)
+# Locate the Outlook Profiles key.
+#
+# v0.33.2: collect EVERY HKCU Office\<ver>\Outlook\Profiles key that
+# exists (do NOT break on the first one). An Outlook-2013-only machine
+# can carry a stale/empty Office\16.0\Outlook\Profiles key left behind by
+# a previously-removed Outlook 2016/365 (HKCU keys survive uninstall).
+# The old break-on-first probe latched onto that 16.0 key, selected 16.0,
+# enumerated zero profiles, and silently exported no reg. The real version
+# is chosen below by Select-OutlookProfilesVersion (after the HKLM install
+# probe), which prefers the version that actually holds profiles and the
+# machine-installed version.
 # ----------------------------------------------------------
 $outlookVersions = @('16.0', '15.0')
-$profilesKeyPath = $null
-$outlookVersion  = $null
+$presentVersions = @()
 foreach ($v in $outlookVersions) {
     $candidate = "$($hkcuInfo.PsDrivePath)\Software\Microsoft\Office\$v\Outlook\Profiles"
     if (Test-Path $candidate) {
-        $profilesKeyPath = $candidate
-        $outlookVersion  = $v
-        break
+        $presentVersions += [PSCustomObject]@{ Version = $v; KeyPath = $candidate }
     }
 }
+# Provisional pick (first present, legacy order); refined after the HKLM
+# probe. Keeps the existing null-check / diagnostic early-return contract.
+$profilesKeyPath = if (@($presentVersions).Count -gt 0) { $presentVersions[0].KeyPath } else { $null }
+$outlookVersion  = if (@($presentVersions).Count -gt 0) { $presentVersions[0].Version } else { $null }
 if ($null -eq $profilesKeyPath) {
     # v0.17.0 diag: profile detection failed. Walk each parent of the
     # 16.0/15.0 Profiles key with two independent surfaces:
@@ -186,8 +197,8 @@ if ($null -eq $profilesKeyPath) {
         ExternalManifestPath = $null
     }
 }
-Show-Info "Outlook version: $outlookVersion"
-Show-Info "Profiles root  : $profilesKeyPath"
+Show-Info ("Outlook Profiles keys present (HKCU): " +
+           ((@($presentVersions) | ForEach-Object { $_.Version }) -join ', '))
 
 # ----------------------------------------------------------
 # Helpers
@@ -548,12 +559,82 @@ function Resolve-AccountPst {
 }
 
 # ----------------------------------------------------------
+# v0.33.2: choose which Office <ver> Outlook Profiles key to back up when
+# more than one is present in the HKCU hive. The legacy probe broke on the
+# first existing key (16.0 before 15.0), which mis-selected a stale/empty
+# 16.0 key on Outlook-2013-only machines (HKCU keys survive an Outlook
+# uninstall). This selector ranks the present candidates by:
+#   1. the machine-installed version (HKLM registryVersion, authoritative)
+#      - but only if that version's Profiles key actually holds >=1 profile;
+#   2. otherwise the version whose Profiles key holds the most profiles;
+#   3. otherwise the first version present (legacy order) as a last resort,
+#      preserving the existing skip/diagnostic behaviour.
+# Returns { Version; KeyPath; ProfileCount; Reason; ShadowAvoided } or
+# $null when no candidate is supplied.
+# ----------------------------------------------------------
+function Select-OutlookProfilesVersion {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][array]$Candidates,
+        [string]$InstalledVersion = $null
+    )
+    if (@($Candidates).Count -eq 0) { return $null }
+
+    $ranked = @()
+    foreach ($c in $Candidates) {
+        $count = 0
+        try { $count = @(Get-ChildItem -LiteralPath $c.KeyPath -ErrorAction Stop).Count } catch { $count = 0 }
+        $ranked += [PSCustomObject]@{
+            Version      = $c.Version
+            KeyPath      = $c.KeyPath
+            ProfileCount = $count
+        }
+    }
+
+    $withProfiles = @($ranked | Where-Object { $_.ProfileCount -gt 0 })
+
+    $pick   = $null
+    $reason = $null
+
+    # 1. machine-installed version, but only if it actually carries profiles
+    if (-not [string]::IsNullOrWhiteSpace($InstalledVersion)) {
+        $pick = $withProfiles | Where-Object { $_.Version -eq $InstalledVersion } | Select-Object -First 1
+        if ($null -ne $pick) {
+            $reason = "HKLM-installed version $InstalledVersion holds $($pick.ProfileCount) profile(s)"
+        }
+    }
+    # 2. version with the most profiles (highest version breaks ties)
+    if ($null -eq $pick -and @($withProfiles).Count -gt 0) {
+        $pick = $withProfiles | Sort-Object -Property ProfileCount, Version -Descending | Select-Object -First 1
+        $reason = "version with most profiles ($($pick.Version): $($pick.ProfileCount))"
+    }
+    # 3. last resort: first present (legacy first-existing order)
+    if ($null -eq $pick) {
+        $pick = $ranked | Select-Object -First 1
+        $reason = "no present version holds profiles; using first present ($($pick.Version))"
+    }
+
+    # shadow: any OTHER present candidate holding zero profiles (i.e. a
+    # stale/empty key the legacy break-on-first probe could have latched onto)
+    $shadowAvoided = (@($ranked | Where-Object {
+        $_.Version -ne $pick.Version -and $_.ProfileCount -eq 0
+    }).Count -gt 0)
+
+    return [PSCustomObject]@{
+        Version       = $pick.Version
+        KeyPath       = $pick.KeyPath
+        ProfileCount  = $pick.ProfileCount
+        Reason        = $reason
+        ShadowAvoided = $shadowAvoided
+    }
+}
+
+# ----------------------------------------------------------
 # Phase 2.11.0: probe local Outlook installation for diagnostic recording.
 # Called here (after the helpers block) so the function definition is in
 # scope - PowerShell scripts are sequential and a function called before
 # its definition raises "term not recognized" at runtime.
-# No decisions branch on this yet; the data is recorded into the manifest
-# so that future restore-side logic (e.g. 2013 fallback path) can read it.
+# v0.33.2: the HKLM RegistryVersion now ALSO drives the Profiles-key
+# selection below (Select-OutlookProfilesVersion), not just the manifest.
 # ----------------------------------------------------------
 $outlookInstallInfo = Get-OutlookInstallInfo
 if ($outlookInstallInfo.Installed) {
@@ -571,6 +652,34 @@ if ($outlookInstallInfo.Installed) {
 } else {
     Show-Warning "Outlook install: not detected via HKLM probe (profile registry still found, continuing)"
 }
+
+# ----------------------------------------------------------
+# v0.33.2: finalize the Outlook version selection now that the HKLM
+# install probe has run. Prefer the version that actually holds profiles
+# and the machine-installed version over the first-present key, so a
+# stale/empty 16.0 key cannot shadow a real 15.0 (Outlook 2013) profile.
+# ----------------------------------------------------------
+$provisionalVersion = $outlookVersion
+$versionPick = Select-OutlookProfilesVersion `
+    -Candidates       $presentVersions `
+    -InstalledVersion $outlookInstallInfo.RegistryVersion
+if ($null -ne $versionPick) {
+    $outlookVersion  = $versionPick.Version
+    $profilesKeyPath = $versionPick.KeyPath
+    if ($versionPick.Version -ne $provisionalVersion) {
+        $msg = "Outlook Profiles version reselected $provisionalVersion -> $($versionPick.Version): " +
+               "$($versionPick.Reason). A stale/empty Office key was shadowing the real profile."
+        Show-Warning $msg
+        $warnings += $msg
+    } elseif ($versionPick.ShadowAvoided) {
+        $msg = "Stale/empty Outlook Profiles key present alongside the live $($versionPick.Version) " +
+               "profile (kept $($versionPick.Version), $($versionPick.ProfileCount) profile(s))."
+        Show-Warning $msg
+        $warnings += $msg
+    }
+}
+Show-Info "Outlook version: $outlookVersion"
+Show-Info "Profiles root  : $profilesKeyPath"
 
 # ----------------------------------------------------------
 # Walk profiles -> internet-account subkeys -> POP3 entries
@@ -847,6 +956,21 @@ foreach ($prof in $manifestProfiles) {
         sourceKey   = $regSrcPath
         sizeBytes   = [int]$regSize
     }
+}
+
+# ----------------------------------------------------------
+# v0.33.2: surface the previously-silent "installed but nothing captured"
+# case. If the HKLM probe says Outlook IS installed yet we captured zero
+# POP/IMAP accounts, record a warning (the section still Skips cleanly).
+# Expected when the user only has Exchange/Microsoft365 (OAuth) mail;
+# otherwise it usually means the live profile sits under a different Office
+# version key than the one enumerated.
+# ----------------------------------------------------------
+if ($outlookInstallInfo.Installed -and (($totalPop + $totalImap) -eq 0)) {
+    $warnings += ("Outlook $($outlookInstallInfo.RegistryVersion) is installed but no POP/IMAP " +
+                  "mail account was captured (profiles enumerated: $(@($manifestProfiles).Count)). " +
+                  'Expected if the user only uses Exchange/Microsoft365 (OAuth); otherwise the mail ' +
+                  'profile may live under a different Office version key.')
 }
 
 # ----------------------------------------------------------

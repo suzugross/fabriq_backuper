@@ -16,6 +16,29 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.33.2: **Outlook 2013 (15.0) のバックアップが profile_*.reg を出力しない不具合を修正
+  (空 16.0 キーによる version shadowing)** —
+  移行元が **Outlook 2013 (15.0) 専用機**でも、HKCU ユーザ hive に過去の Outlook 2016/365 が
+  残した**空の `Office\16.0\Outlook\Profiles` キー**があると、backup の Profiles probe が
+  **「16.0 を先に試し、存在したら即 break」**するため 16.0 を掴み、本物の 15.0 プロファイルを
+  一度も列挙せず **profile 0 件・reg 0 件を無警告で skip** していた (manifest は
+  `outlookVersion=16.0` だが `installedOutlook.registryVersion=15.0` という矛盾を記録)。
+  HKLM 実機 probe (`Get-OutlookInstallInfo`) は 15.0 を**正しく検出していたのに version 選択に
+  使われていなかった**のが核心。section 誕生時 (fabriq-main 2026-05-16) から潜在していたバグで、
+  v0.32.0 のバッチ化とは無関係 (移行元機に空 16.0 キーが現れた時のみ顕在化)。
+  - **修正**: probe を「存在する**全** version を収集 (break しない)」に変更し、HKLM probe 後に
+    新ヘルパ `Select-OutlookProfilesVersion` で最終選択 — **(1) HKLM 実機 version (profile を
+    実際に持つ場合のみ) → (2) profile 数が最多の version → (3) first present** の優先順位。
+    `manifest.outlookVersion` も実列挙 version を記録 (restore 側 T1 の cross-version rebase が
+    依存する load-bearing 値)。
+  - **silent-skip 再発防止**: 「Outlook は install 済みなのに POP/IMAP account 0 件」を warning に
+    格上げ (Exchange/M365 OAuth 専用なら正常、と明記)。shadow を検知・回避した場合も
+    operator-visible な warning を記録。
+  - **回帰なし**: 対照群 (2016/365 capture) は HKLM==enumerated==16.0 で選択結果が現行と同一、
+    side-by-side は HKLM 最上位版を優先、HKLM null 時はフォールバックで現行同等まで縮退するのみ。
+    restore 側・manifest schema は無変更。
+  - **VERSION**: 0.33.1 → **0.33.2** (PATCH / バグ修正)。
+
 - backuper v0.33.1: **Outlook パス書換を full profile-prefix rebase に統一 (別ドライブ/リダイレクト profile 対応)** —
   v0.33.0 の T4/T8 パス書換は `\Users\<user>\` ディレクトリに anchor していたが、
   **移行元と移行先でドライブが違う** (例 `D:\Users\…` → `C:\Users\…`) / **プロファイルが
