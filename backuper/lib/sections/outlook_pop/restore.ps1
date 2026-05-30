@@ -1042,6 +1042,48 @@ if ($manifest.sourceUser -and $manifest.sourceUser.profilePath) {
 }
 
 # ----------------------------------------------------------
+# v0.33.3: predicate for "this profile will be auto-restored via the
+# Strategy B-light handoff batch (reg import)" vs Strategy A (operator
+# manual wizard). Stage 2 uses it to SKIP the single-PST '<email>.pst'
+# rename for B-light profiles. Rationale: the reg import's per-account
+# Delivery Store EntryID (DSE) binds the account to its PST by the
+# dir-rebased ORIGINAL filename (T8 rebases only the directory prefix and
+# keeps the filename verbatim). Renaming the on-disk file to '<email>.pst'
+# would point that byte-proven DSE at a file that no longer exists (desync).
+# Multi-PST B-light profiles already skip the rename for the same reason;
+# this extends the same behaviour to single-PST B-light profiles so the
+# placed file stays where the (unchanged) DSE points. The final Stage 3
+# classification still applies its own checks (transform success / hive
+# prefix); this is the early rename-gating subset, all inputs known here.
+# Eligible == AttemptStrategyB AND handoff folder present AND the profile
+# has a regExport in the manifest AND the profile is POP-only (no IMAP).
+# ----------------------------------------------------------
+function Test-OutlookProfileAutoEligible {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfileName,
+        [bool]$AttemptStrategyB,
+        [bool]$HandoffPresent,
+        [string[]]$RegExportProfileNames = @(),
+        $PlannedAccounts = @()
+    )
+    if (-not $AttemptStrategyB) { return $false }
+    if (-not $HandoffPresent)   { return $false }
+    if (@($RegExportProfileNames) -notcontains $ProfileName) { return $false }
+    $hasImap = @($PlannedAccounts | Where-Object {
+        "$($_.ProfileName)" -eq $ProfileName -and "$($_.Account.type)" -eq 'imap'
+    }).Count -gt 0
+    if ($hasImap) { return $false }
+    return $true
+}
+
+# Stage-2-time inputs for the eligibility predicate (all known before Stage 2).
+$blRegExportNames = @()
+if ($manifest.items.PSObject.Properties.Name -contains 'regExports') {
+    $blRegExportNames = @($manifest.items.regExports | ForEach-Object { "$($_.profileName)" })
+}
+$handoffPresent = -not [string]::IsNullOrWhiteSpace($operatorHandoffSubdir)
+
+# ----------------------------------------------------------
 # Stage 2: PST placement (common to Strategy A and B)
 # Per account: verify PST exists at rebased target path and rename to
 # <email>.pst (idempotent). Records per-account result for use by
@@ -1172,8 +1214,31 @@ foreach ($pa in $plannedAccounts) {
         continue
     }
 
-    # Single-PST profile: 従来の path-collision-attach 用リネームを実施
+    # Single-PST profile: rename to <email>.pst for Strategy A's
+    # path-collision-attach. (従来の path-collision-attach 用リネーム)
     if ($rebasedPath -ine $renamedPath) {
+        # v0.33.3: SKIP the rename when this profile will be auto-restored via
+        # Strategy B-light (reg import). The imported Delivery Store EntryID
+        # binds the account to its PST by the dir-rebased ORIGINAL filename;
+        # renaming the file to <email>.pst points that byte-proven DSE at a
+        # missing file (desync). Keep the original name so the placed file
+        # matches the DSE -- identical to how multi-PST profiles already behave.
+        $autoEligible = Test-OutlookProfileAutoEligible `
+            -ProfileName           $profileName `
+            -AttemptStrategyB      $attemptStrategyB `
+            -HandoffPresent        $handoffPresent `
+            -RegExportProfileNames $blRegExportNames `
+            -PlannedAccounts       $plannedAccounts
+        if ($autoEligible) {
+            Show-Info "  Strategy B-light profile: keeping PST at original name (DSE binds it): $rebasedPath"
+            $accountResult.renameSkipped = $true
+            $accountResult.targetPstPath = $rebasedPath
+            $accountResult.status        = 'Success'
+            $resultsByAccount += $accountResult
+            $successCount++
+            try { Set-EntryStatus -Id $entryId -Status 'Done' } catch { }
+            continue
+        }
         if (Test-Path -LiteralPath $renamedPath) {
             Show-Info "  rename target already at <email>.pst (idempotent skip): $renamedPath"
             if (Test-Path -LiteralPath $rebasedPath) {

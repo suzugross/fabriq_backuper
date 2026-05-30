@@ -16,6 +16,29 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.33.3: **単一PST・カスタム名 PST の B-light 復元で DSE が欠落ファイルを指す
+  desync を修正 (Strategy B-light ではリネームを skip)** —
+  Stage 2 は単一PST profile の PST を `<email>.pst` にリネーム ([restore.ps1:1186]) する一方、
+  T8/001f6700 の DSE パス書換は**ディレクトリ prefix のみ rebase しファイル名は原名のまま**
+  ([restore.ps1:534-547])。このため**元PSTが `<email>.pst` 以外の名前**（`Outlook.pst`/
+  `個人用.pst` 等の legacy 名。backup の PST 解決は EntryID 主導なので普通に発生）だと、
+  reg import 後の **Delivery Store EntryID が実在しないファイルを指し**、Outlook がデータ
+  ファイルを再要求/既定 store へ再バインド → T8 の per-account binding 保持が無効化されていた。
+  - **修正 (案B)**: 新ヘルパ `Test-OutlookProfileAutoEligible`（`AttemptStrategyB AND handoff
+    present AND profile に regExport AND POP-only`）を Stage 2 前に追加し、**auto-eligible な
+    単一PST profile はリネームを skip**（既存の複数PST と同じ `renameSkipped=$true`／原名保持
+    ブランチを流用）。placed file が**byte-proven の DSE が指す rebased-原名のまま残り desync 解消**。
+  - **T8/byte-transform は一切無変更**（DSE/DFE バイト・GOLD 一致・複数POP collapse 修正
+    v0.33.0 は不変）。リネームが実際に起きる場合（元名 ≠ `<email>.pst`）だけを gate するため、
+    元名=`<email>.pst` の**最頻ケースは完全不変**（rename は元々 no-op）。
+  - **不変**: 複数PST（既に skip）／IMAP／pst 無し／Strategy A（IMAP混在・reg無・opt-out は
+    引き続きリネーム＝path-collision-attach 維持）。`_account_settings.txt` は既に
+    `renameSkipped` を扱えるため文言が原名基準に正確化するのみ。
+  - **唯一のトレードオフ**: Stage 2 で eligible だが Stage 3 で transform 失敗 → Strategy A
+    降格の稀ケースで、PST が原名のまま（自動 path-collision-attach は効かず operator が
+    RESTORE_INSTRUCTIONS の原名で browse）。機能喪失ではなく自動度がわずかに下がるのみ。
+  - **VERSION**: 0.33.2 → **0.33.3** (PATCH / desync バグ修正)。
+
 - backuper v0.33.2: **Outlook 2013 (15.0) のバックアップが profile_*.reg を出力しない不具合を修正
   (空 16.0 キーによる version shadowing)** —
   移行元が **Outlook 2013 (15.0) 専用機**でも、HKCU ユーザ hive に過去の Outlook 2016/365 が
