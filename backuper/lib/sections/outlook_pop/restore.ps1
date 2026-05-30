@@ -267,10 +267,26 @@ function Convert-RegFileToStrategyBLight {
     #     in every section header and value path. Applied only when
     #     SourceVersion -ne TargetVersion. No-op for same-version restore.
     #
-    #   T2 (Phase 2.10.3 baseline):
-    #     Strip "Delivery Store EntryID" / "Delivery Folder EntryID" from
-    #     POP/IMAP account subkeys (\9375CFF0...\NNNNNNNN). Scope-limited
-    #     so 365's native service-def subkeys are not affected.
+    #   T2 (Phase 2.10.3 baseline) -- SUPERSEDED by T8 in v0.33.0:
+    #     Originally stripped "Delivery Store EntryID" / "Delivery Folder
+    #     EntryID" from account subkeys. That strip is what caused the multi-
+    #     POP store-collapse (no per-account delivery pointer => Outlook re-
+    #     binds all accounts to the default store). REPLACED by T8 (see below
+    #     and the main pass): keep both, rewrite the DSE embedded path, keep
+    #     the DFE record key verbatim.
+    #
+    #   T8 (v0.33.0, multi-POP delivery-binding preservation):
+    #     For POP account subkeys (\9375CFF0...\NNNNNNNN), do NOT strip the
+    #     delivery binding. "Delivery Store EntryID" = 54-byte constant mspst
+    #     header + tail UTF-16LE PST path + 00 00 (no length field); rewrite
+    #     the source-user path segment to the target user (same pass as
+    #     001f6700). "Delivery Folder EntryID" = 00000000 + store PR_RECORD_KEY
+    #     (01020ff9) + 82800000; keep VERBATIM (path-free, valid across
+    #     import). Byte-proven 2026-05-30 against an operator-fixed target
+    #     export AND confirmed live (Outlook PST association correct). Each
+    #     POP account stays bound to its own PST. The shared 0a0d02 folder-set
+    #     index is intentionally left as-is (its stale source paths are
+    #     tolerated by Outlook, confirmed in the working target export + live).
     #
     #   T3 (Phase 2.12.0, IMAP cross-PC support):
     #     Strip "IMAP Store EID" from POP/IMAP account subkeys
@@ -409,11 +425,21 @@ function Convert-RegFileToStrategyBLight {
         }
     }
 
-    # Username UTF-16LE hex for T4 rewrite
-    $srcUserBytes = [System.Text.Encoding]::Unicode.GetBytes($SourceUserName)
-    $dstUserBytes = [System.Text.Encoding]::Unicode.GetBytes($TargetUserName)
-    $srcUserHex = ($srcUserBytes | ForEach-Object { '{0:x2}' -f $_ }) -join ','
-    $dstUserHex = ($dstUserBytes | ForEach-Object { '{0:x2}' -f $_ }) -join ','
+    # v0.33.0 hardening: anchor the path rewrite to the "\Users\<user>\"
+    # DIRECTORY segment, NOT the bare username token. A bare-username replace
+    # over-matched the username inside the PST FILENAME -- e.g. Windows login
+    # 'suzuki' + account suzuki@... : the file "suzuki@....pst" was rewritten
+    # to "<target>@....pst" (a non-existent file), so that POP account bound to
+    # a missing store and collapsed (confirmed live 2026-05-30, suzuki->test;
+    # the GOLD case y_suzuki->test only escaped because 'y_suzuki' is absent
+    # from the filename). Anchoring to \Users\<u>\ rewrites only the profile
+    # directory, leaves the <email>.pst filename intact, and still byte-matches
+    # Outlook's own EID for clean usernames. NOTE: assumes the profile dir name
+    # == the username (standard C:\Users\<user>\ layout); a redirected /
+    # domain-suffixed profile dir is simply not rewritten (stale path, but
+    # NEVER a corrupted filename).
+    $srcDirHex = ([System.Text.Encoding]::Unicode.GetBytes("\Users\$SourceUserName\") | ForEach-Object { '{0:x2}' -f $_ }) -join ','
+    $dstDirHex = ([System.Text.Encoding]::Unicode.GetBytes("\Users\$TargetUserName\") | ForEach-Object { '{0:x2}' -f $_ }) -join ','
 
     # ---- Main pass: T2/T3/T4 inline, T5 section drop (cross-ver only),
     # T6 binary EntryID strip in OST subkey (same-ver POP-only) ----
@@ -422,7 +448,7 @@ function Convert-RegFileToStrategyBLight {
     $inAcctSubkey  = $false
     $inOstSubkey   = $false
     $dropSection   = $false
-    $stripPop      = 0
+    $rewriteDse    = 0
     $stripImap     = 0
     $rewritePath   = 0
     $droppedSec    = 0
@@ -460,11 +486,27 @@ function Convert-RegFileToStrategyBLight {
         }
 
         if ($inAcctSubkey) {
-            if ($line -match '^"Delivery Store EntryID"=' -or
-                $line -match '^"Delivery Folder EntryID"=') {
-                $stripPop++
-                continue
-            }
+            # v0.33.0 T8: KEEP the per-account delivery binding instead of
+            # stripping it (the old T2 dropped both Delivery Store/Folder
+            # EntryID, which left every POP account with no delivery pointer
+            # so Outlook re-bound them all to the default store = the multi-
+            # POP collapse). Byte-proven 2026-05-30 against an operator-fixed
+            # target export AND confirmed live (Outlook PST association
+            # correct): the only per-account values Outlook writes for a
+            # correct binding are these two.
+            #   - "Delivery Store EntryID": 54-byte constant mspst header +
+            #     tail UTF-16LE PST path + 00 00, no length field. The source-
+            #     user segment in that path is rewritten to the target user
+            #     below (same dir-anchored \Users\<u>\ pass as 001f6700), so
+            #     each POP account stays bound to its OWN PST. The rewritten
+            #     EID is byte-identical to the one Outlook itself writes.
+            #   - "Delivery Folder EntryID": 00000000 + the store's 16-byte
+            #     PR_RECORD_KEY (01020ff9) + 82800000. Path-free and valid
+            #     across import (the store subkey is imported verbatim), so it
+            #     is KEPT VERBATIM (falls through to $processedLines.Add).
+            # IMAP-containing profiles never reach this function (gated at the
+            # main flow), so the mspst header always matches here; the IMAP
+            # Store EID strip is retained only defensively.
             if ($line -match '^"IMAP Store EID"=') {
                 $stripImap++
                 continue
@@ -474,8 +516,15 @@ function Convert-RegFileToStrategyBLight {
             $line -match '^"001f0433"=hex:' -or
             $line -match '^"001f6610"=hex:') {
             $before = $line
-            $line = $line -replace [regex]::Escape($srcUserHex), $dstUserHex
+            $line = $line -replace [regex]::Escape($srcDirHex), $dstDirHex
             if ($before -ne $line) { $rewritePath++ }
+        }
+        elseif ($inAcctSubkey -and $line -match '^"Delivery Store EntryID"=hex:') {
+            # T8 DSE path rewrite (header has no username; the source-user
+            # UTF-16LE hex occurs once, inside the tail path region).
+            $before = $line
+            $line = $line -replace [regex]::Escape($srcDirHex), $dstDirHex
+            if ($before -ne $line) { $rewriteDse++ }
         }
         $processedLines.Add($line)
     }
@@ -484,7 +533,7 @@ function Convert-RegFileToStrategyBLight {
                else { 'T5 OST-drop=0 (same-version)' }
     $t6Label = if ($isCrossVersion) { 'T6 OST-bin-strip=0 (skipped: cross-version)' }
                else { "T6 OST-bin-strip=$stripOstBin" }
-    Show-Info ("  [BL-transform] T1 version-path=$t1Count  T2 POP-strip=$stripPop  " +
+    Show-Info ("  [BL-transform] T1 version-path=$t1Count  T8 DSE-rewrite=$rewriteDse(DFE kept)  " +
                "T3 IMAP-strip=$stripImap  T4 path-rewrite=$rewritePath  $t5Label  $t6Label")
 
     # Re-flow hex value lines back to <=80 cols with '\' continuation

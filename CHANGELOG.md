@@ -15,6 +15,47 @@
 
 ## [Unreleased]
 
+### Fixed
+- backuper v0.33.0: **複数POP×別PST プロファイルの配信先 collapse を修正 (T8: DSE 書換 + DFE 保持)** —
+  2 つ以上の POP アカウントがそれぞれ別 PST を持つプロファイルを自動復元すると、
+  全アカウントが同じ(先頭) PST に紐づいてしまう不具合を修正。**root-cause は
+  `Convert-RegFileToStrategyBLight` の旧 T2 が各アカウントの "Delivery Store
+  EntryID" (DSE) と "Delivery Folder EntryID" (DFE) を strip していたこと**：
+  配信先ポインタが消えるため Outlook が初回起動で全アカウントを既定 store に
+  再 bind していた。
+  - **修正 (T8)**: POP アカウントの DSE/DFE を strip せず —
+    - **DSE** = 54byte 定数 mspst ヘッダ + 末尾 PST パス(UTF-16LE) + `00 00`
+      (長さフィールド無し)。埋め込みパスの **`\Users\<src>\` ディレクトリ部だけ**を
+      `\Users\<dst>\` に書換 (001f6700 と同じ anchor 付きパス)。各 POP
+      アカウントが自分の PST に bind されたまま残る。
+    - **path 書換の anchor 化 (hardening)**: 当初は username トークンの**盲目的
+      置換**だったが、ログイン名がメール local-part の substring の場合
+      (例 login `suzuki` + `suzuki@…`) に **PST ファイル名まで巻き込んで書換** →
+      存在しない `<dst>@…pst` を指して当該 account が collapse する不具合を
+      **実機で確認 (2026-05-30, suzuki→test)**。`\Users\<user>\` ディレクトリに
+      anchor することで**ファイル名・mspst ヘッダ・ドメイン**を巻き込まなくなり、
+      `l`/`n` 等の短いユーザ名によるヘッダ破壊も同時に根絶。**既存 T4
+      (001f6700/001f0433/001f6610) も同欠陥だったため一括で anchor 化**。GOLD の
+      バイト一致 (y_suzuki→test) は維持 (AST 抽出した実関数で再検証済)。
+    - **DFE** = `00000000` + store の `01020ff9` (PR_RECORD_KEY) + `82800000`。
+      パスを含まず import 後も valid なため **verbatim 保持**。
+    - 共有 `0a0d02` folder-set index は触らない (stale source パスは Outlook が
+      許容するため。実機 export + ライブ実機で確認済)。
+  - **エビデンス (BYTE-PROVEN + ライブ確認)**: 2026-05-30 に operator が target
+    側の before(collapse) / after(手動「フォルダーの変更」後 = 正常動作) を採取
+    (`E:\test\outlookbktest\2026_05_30`, 2-POP suzuki+sales1, y_suzuki→test の
+    cross-user)。実装した T8 コードを source に適用した出力 DSE/DFE が、Outlook
+    自身が正しく紐づけた時の値と**バイト完全一致**することを検証 (AST 抽出した
+    実関数、両アカウント DSE=174byte 一致・DFE 一致)。**さらに実機リストアで
+    Outlook の PST 関連付けが正常になることを確認 (ライブ合格)**。
+  - **修正ファイル**: [backuper/lib/sections/outlook_pop/restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1)
+    の `Convert-RegFileToStrategyBLight` (T2 部を T8 に置換、IMAP Store EID
+    strip は防御的に維持)。section interface / manifest schema 不変。
+  - **不変**: IMAP 混在プロファイルは引き続き Strategy A 手動 (本関数に来ない)。
+    handoff バッチモデル (v0.32.0) / 他 section / fabriq main への書込み (なし)。
+  - **VERSION**: 0.32.0 → **0.33.0** (MINOR / Changed)。
+  - **配備**: `E:\fabriq_backuper\` を再配置で反映 (EXE 無変更)。
+
 ### Changed
 - backuper v0.32.0: **Outlook プロファイル自動復元をバッチ化して handoff フォルダに移行** —
   これまで Strategy B-light は**リストア実行中 (engine コンテキスト)** に
