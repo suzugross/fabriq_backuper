@@ -15,6 +15,29 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.33.4: **自動復元 (POP-only) の operator 案内を実手順に刷新** —
+  従来の案内は「Restore-Outlook.bat 実行後 Outlook を 2 回起動・パスワード入力」
+  だったが、現場の実手順と乖離していた。実際の微調整作業（コントロールパネル
+  「メール」→「プロファイルの表示」を開いて閉じる〔プロファイル選択プロンプト回避〕
+  →「電子メール アカウント」で各アカウントの「変更」からパスワードのみ入力→
+  Outlook 起動時の仕分けルール・リセット〔全 OFF→適用→全 ON→適用→手動実行1回、
+  または「仕分けルールをクリア」ショートカットで一括クリア〕→送受信確認）に合わせて
+  案内文を書き換え。
+  - 対象 3 箇所: `New-OutlookHandoffReadme` の README.txt 本文 (common.ps1)、
+    生成バッチ Restore-Outlook.ps1 の "NEXT" コンソール文言 (ASCII)、完了 popup 本文
+    (restore.ps1、handoff-OFF legacy 経路のみ表示)。
+  - **仕分けルールクリア ショートカットの配置を集約フォルダに統一**: 従来は
+    対象ユーザの Desktop 直下に置いていた「Outlook を初回起動 (仕分けルールを
+    クリア).lnk」を、他の Outlook 復元ファイルと同じ操作者集約フォルダ
+    (02_outlook_アカウント情報) に配置するよう変更 (`New-OutlookRuleClearShortcut`
+    に `-DestinationDir` を追加、`$operatorHandoffSubdir` を渡す)。handoff フォルダが
+    無い legacy 経路では従来どおり Desktop にフォールバック (その経路の popup 文言は
+    Desktop 表記のまま正しい)。README はショートカット位置を「このフォルダ」に更新。
+  - **文言＋ショートカット配置のみの変更**。復元ロジック・manifest・バッチ動作・
+    ショートカットの中身 (/cleanclientrules) は不変。
+  - **VERSION**: 0.33.3 → **0.33.4** (PATCH / operator ドキュメント刷新 + 成果物配置統一)。
+
 ### Fixed
 - backuper v0.33.3: **単一PST・カスタム名 PST の B-light 復元で DSE が欠落ファイルを指す
   desync を修正 (Strategy B-light ではリネームを skip)** —

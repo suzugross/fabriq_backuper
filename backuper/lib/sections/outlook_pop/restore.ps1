@@ -617,7 +617,11 @@ function New-OutlookRuleClearShortcut {
     # Returns hashtable: @{ Success; ShortcutPath; Reason }
     param(
         [Parameter(Mandatory = $true)][string]$TargetUserProfilePath,
-        [Parameter(Mandatory = $true)][string]$OutlookExePath
+        [Parameter(Mandatory = $true)][string]$OutlookExePath,
+        # v0.33.4: where to place the .lnk. Prefer the operator handoff folder
+        # (02_outlook_アカウント情報) so it sits with the other Outlook restore
+        # files; fall back to the target user's Desktop (handoff-OFF legacy path).
+        [string]$DestinationDir = $null
     )
 
     $result = @{ Success = $false; ShortcutPath = $null; Reason = $null }
@@ -627,13 +631,22 @@ function New-OutlookRuleClearShortcut {
         return $result
     }
 
-    $desktopPath = Join-Path $TargetUserProfilePath 'Desktop'
-    if (-not (Test-Path -LiteralPath $desktopPath)) {
-        $result.Reason = "対象ユーザの Desktop が見つかりません: $desktopPath"
+    $destDir = $null
+    if (-not [string]::IsNullOrWhiteSpace($DestinationDir)) {
+        if (-not (Test-Path -LiteralPath $DestinationDir)) {
+            try { $null = New-Item -ItemType Directory -Path $DestinationDir -Force -ErrorAction Stop } catch {}
+        }
+        if (Test-Path -LiteralPath $DestinationDir) { $destDir = $DestinationDir }
+    }
+    if ($null -eq $destDir) {
+        $destDir = Join-Path $TargetUserProfilePath 'Desktop'
+    }
+    if (-not (Test-Path -LiteralPath $destDir)) {
+        $result.Reason = "ショートカット配置先フォルダが見つかりません: $destDir"
         return $result
     }
 
-    $shortcutPath = Join-Path $desktopPath 'Outlook を初回起動 (仕分けルールをクリア).lnk'
+    $shortcutPath = Join-Path $destDir 'Outlook を初回起動 (仕分けルールをクリア).lnk'
     $shell = $null
     try {
         $shell = New-Object -ComObject WScript.Shell
@@ -1687,11 +1700,15 @@ Write-Line "============================================================" Cyan
 Write-Line "  Done.  import OK=$importOk fail=$importFail  /  verify OK=$verifyOk NG=$verifyNg" Cyan
 Write-Line "============================================================" Cyan
 Write-Line ""
-Write-Line "  NEXT: launch Outlook TWICE."
-Write-Line "    1. First launch may show a 'restart required to link PST' notice and"
-Write-Line "       close itself. This is expected - just reopen Outlook."
-Write-Line "    2. Second launch: enter each account password when prompted (passwords"
-Write-Line "       cannot be migrated across PCs / DPAPI). Send/receive then works."
+Write-Line "  NEXT: finish setup via Control Panel > Mail (not by just launching Outlook):"
+Write-Line "    1. Control Panel > Mail (Microsoft Outlook) > Show Profiles: open it, then close."
+Write-Line "       (otherwise Outlook asks which profile to use at every launch)"
+Write-Line "    2. E-mail Accounts: for each account choose Change, enter the PASSWORD ONLY, finish."
+Write-Line "       (passwords cannot be migrated across PCs / DPAPI)"
+Write-Line "    3. Launch Outlook. If migrated rules error on run, reset them in"
+Write-Line "       Rules > Manage Rules: uncheck all + Apply, re-check all + Apply, then Run Rules once."
+Write-Line "       (or use the 'clear rules' shortcut in this folder to wipe them, if not needed)"
+Write-Line "    4. Run Send/Receive and confirm mail arrives."
 Write-Line "  Server / port / PST details are in _account_settings.txt."
 Write-Line ""
 Save-Report
@@ -1768,7 +1785,8 @@ if ($createRuleClearShortcut) {
         -not [string]::IsNullOrWhiteSpace($targetInstall.OutlookExePath)) {
         $shortcutResult = New-OutlookRuleClearShortcut `
             -TargetUserProfilePath $targetUserProfilePath `
-            -OutlookExePath        $targetInstall.OutlookExePath
+            -OutlookExePath        $targetInstall.OutlookExePath `
+            -DestinationDir        $operatorHandoffSubdir
         if ($shortcutResult.Success) {
             Show-Success "Rule-clear shortcut written: $($shortcutResult.ShortcutPath)"
         } else {
@@ -1831,15 +1849,16 @@ try {
         }
         $popupBody = "POP アカウントの自動復元バッチを操作者用フォルダに配置しました ($autoCount プロファイル)。`r`n`r`n" +
                      "*** 操作手順 ***`r`n" +
-                     "  1. 移行先 (新 PC) に【復元対象ユーザ】でログインしてください。`r`n" +
-                     "     (管理者として実行しないでください。レジストリは現在のユーザの`r`n" +
-                     "      HKCU に取り込まれます)`r`n" +
-                     "  2. デスクトップの集約フォルダ内`r`n" +
-                     "     02_outlook_アカウント情報\Restore-Outlook.bat をダブルクリック。`r`n" +
-                     "  3. インポート後、Outlook を 2 回起動します:`r`n" +
-                     "     - 1 回目: 'PST のリンクのため再起動が必要' と表示され自動終了 (想定動作)`r`n" +
-                     "     - 2 回目: 各アカウントでパスワードを入力`r`n" +
-                     "       (DPAPI 制約でパスワードは PC を跨いで移行できません)`r`n`r`n" +
+                     "  1. 移行先 (新 PC) に【復元対象ユーザ】でログイン (管理者では実行しない)。`r`n" +
+                     "  2. 02_outlook_アカウント情報\Restore-Outlook.bat をダブルクリック。`r`n" +
+                     "  3. コントロールパネル →「メール」→「プロファイルの表示」を開いて閉じる。`r`n" +
+                     "     (これをしないと起動時に毎回プロファイル選択を求められます)`r`n" +
+                     "  4. 「電子メール アカウント」→ 各アカウントの「変更」でパスワードのみ入力し完了。`r`n" +
+                     "     (DPAPI 制約でパスワードは PC を跨いで移行できません)`r`n" +
+                     "  5. Outlook 起動。仕分けルールでエラーが出る場合はルールを全 OFF→適用→`r`n" +
+                     "     全 ON→適用→手動で1回実行、でリセット (不要なら「仕分けルールをクリア」`r`n" +
+                     "     ショートカットで一括クリアも可)。`r`n" +
+                     "  6. 送受信で受信を確認。`r`n`r`n" +
                      "PST ファイル・メール履歴・連絡先は保持されます。`r`n" +
                      "サーバ / ポート / PST パスは同フォルダの _account_settings.txt に記載しています。"
         if ($manualCount -gt 0) {
