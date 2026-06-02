@@ -211,24 +211,33 @@ function global:Show-BackuperSessionForm {
     $yPos += 26
 
     # ========================================
-    # Action buttons (left -> right): Quit / Backup (lavender) / Restore (green)
-    # Backup precedes Restore in left-to-right reading order — backup is the
-    # natural first step of the kitting workflow, restore comes later.
+    # Action buttons (left -> right): Quit / Backup (lavender) / Restore
+    # (green) / Cleanup. Backup precedes Restore in left-to-right reading
+    # order -- backup is the natural first step of the kitting workflow,
+    # restore comes later; cleanup is the post-migration tidy-up step.
     # ========================================
     $btnQuit = New-StyledButton -Text '終了' `
-        -X 210 -Y $yPos -Width 100 -Height 34
+        -X 20 -Y $yPos -Width 80 -Height 34
     $form.Controls.Add($btnQuit)
 
     $btnBackup = New-StyledButton -Text 'バックアップ' `
-        -X 325 -Y $yPos -Width 130 -Height 34 -BgColor $script:bgAccent
+        -X 115 -Y $yPos -Width 130 -Height 34 -BgColor $script:bgAccent
     $btnBackup.Font = $script:fontBold
     $form.Controls.Add($btnBackup)
 
     $btnRestore = New-StyledButton -Text 'リストア' `
-        -X 470 -Y $yPos -Width 120 -Height 34 -BgColor $script:bgAdd
+        -X 258 -Y $yPos -Width 110 -Height 34 -BgColor $script:bgAdd
     $btnRestore.ForeColor = $script:fgWhite
     $btnRestore.Font = $script:fontBold
     $form.Controls.Add($btnRestore)
+
+    # v0.34.0: third action -- post-migration cleanup. Kept smaller and
+    # right-aligned (flush to the ~580 right margin) with a clear gap after
+    # Restore, so it reads as an independent maintenance action rather than
+    # part of the Backup/Restore session-start pair.
+    $btnCleanup = New-StyledButton -Text 'クリーンアップ' `
+        -X 460 -Y $yPos -Width 120 -Height 34
+    $form.Controls.Add($btnCleanup)
 
     # ========================================
     # Common submit scriptblock (parametrised by Mode)
@@ -288,6 +297,7 @@ function global:Show-BackuperSessionForm {
     # Event handlers
     $btnBackup.Add_Click({  & $doSubmit 'Backup' })
     $btnRestore.Add_Click({ & $doSubmit 'Restore' })
+    $btnCleanup.Add_Click({ & $doSubmit 'Cleanup' })
     $btnQuit.Add_Click({
         $result.Cancelled = $true
         $form.Close()

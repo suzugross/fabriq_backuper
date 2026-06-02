@@ -1229,3 +1229,410 @@ Save-Report
 '@
 }
 
+# ============================================================
+# v0.34.0: Artifact cleanup helpers
+#
+# A "cleanup artifact" is a leftover migration folder that may be
+# bulk-deleted after a kitting job: (1) a backup tree, (2) a Desktop
+# operator-handoff folder, (3) a LAN-Prep folder (C:\FabriqMigration).
+#
+# Model (English comments per rule 6; UI text lives in cleanup_view.ps1):
+#   - MARKER  _fabriq_artifact.json : per-folder self-describing sentinel
+#             written best-effort at placement time. Co-located with the
+#             folder it describes (= distributed ledger; no central index).
+#   - RECOGNITION two-tier: marker OR intrinsic self-ID file, so a failed
+#             marker write is never a miss:
+#               backup  -> manifest.json (manifestType fabriq-backuper-snapshot)
+#               lanprep -> _rollback_snapshot.json
+#               handoff -> name *_<OldPC>_BK AND (README.txt OR a 0N_ subdir)
+#   - REVERT GATE: a LAN-Prep folder also holds the network revert key
+#             (_rollback_snapshot.json) and is only safe to delete AFTER the
+#             PC has been reverted. Reliable signal = _revert_done.json
+#             written by Revert-LanMigration.ps1 (share-removal / IP are NOT
+#             reliable: removeShare is conditional and the snapshot persists).
+#   - PATH SAFETY: a deny/allow contract guards every recursive delete so
+#             fabriq main, the repo, system/user roots are never touched.
+# ============================================================
+
+$script:CleanupMarkerName        = '_fabriq_artifact.json'
+$script:LanPrepRevertMarkerName  = '_revert_done.json'
+
+function global:New-CleanupMarker {
+    # Best-effort write of the per-folder cleanup marker. Never throws;
+    # returns $true on success, $false on failure (caller continues).
+    param(
+        [Parameter(Mandatory = $true)][string]$Dir,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('backup-tree', 'handoff', 'lanprep')]
+        [string]$ArtifactKind,
+        [string]$OldPcName = '',
+        [string]$NewPcName = '',
+        [string]$BackuperVersion = ''
+    )
+    try {
+        if (-not (Test-Path -LiteralPath $Dir)) { return $false }
+        $marker = [ordered]@{
+            schemaVersion   = 1
+            manifestType    = 'fabriq-cleanup-marker'
+            artifactKind    = $ArtifactKind
+            oldPcName       = "$OldPcName"
+            newPcName       = "$NewPcName"
+            createdAt       = (Get-Date).ToString('o')
+            backuperVersion = "$BackuperVersion"
+            placedByHost    = "$env:COMPUTERNAME"
+            placedByUser    = "$env:USERDOMAIN\$env:USERNAME"
+        }
+        $path = Join-Path $Dir $script:CleanupMarkerName
+        $json = $marker | ConvertTo-Json -Depth 5
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+        return $true
+    }
+    catch {
+        try { Show-Warning "Cleanup marker write failed in ${Dir}: $($_.Exception.Message)" } catch {}
+        return $false
+    }
+}
+
+function global:Read-CleanupMarker {
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    $path = Join-Path $Dir $script:CleanupMarkerName
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try { return (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json) }
+    catch { return $null }
+}
+
+function global:Test-LanPrepReverted {
+    # The lan-prep folder is safe to delete only after Revert-LanMigration
+    # has restored the network and dropped a _revert_done.json marker.
+    # Returns @{ Reverted = [bool]; Source = 'marker' | 'no-marker' }.
+    param([Parameter(Mandatory = $true)][string]$LanPrepDir)
+    $m = Join-Path $LanPrepDir $script:LanPrepRevertMarkerName
+    if (Test-Path -LiteralPath $m) {
+        return @{ Reverted = $true; Source = 'marker' }
+    }
+    return @{ Reverted = $false; Source = 'no-marker' }
+}
+
+function global:Test-CleanupArtifactRecognized {
+    # Two-tier recognition. Returns @{ Kind; OldPcName; RecognizedBy } or
+    # $null when the directory is not a recognised fabriq artifact.
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return $null }
+
+    # 1. explicit marker
+    $marker = Read-CleanupMarker -Dir $Dir
+    if ($null -ne $marker -and "$($marker.manifestType)" -eq 'fabriq-cleanup-marker') {
+        return @{ Kind = "$($marker.artifactKind)"; OldPcName = "$($marker.oldPcName)"; RecognizedBy = 'marker' }
+    }
+    # 2. backup tree -> manifest.json
+    $mf = Join-Path $Dir 'manifest.json'
+    if (Test-Path -LiteralPath $mf) {
+        try {
+            $m = Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ("$($m.manifestType)" -eq 'fabriq-backuper-snapshot') {
+                return @{ Kind = 'backup-tree'; OldPcName = "$($m.oldPcName)"; RecognizedBy = 'manifest' }
+            }
+        }
+        catch {}
+    }
+    # 3. lan-prep -> _rollback_snapshot.json (host id is recovered later from
+    #    any nested backup; the snapshot itself carries no oldPcName)
+    if (Test-Path -LiteralPath (Join-Path $Dir '_rollback_snapshot.json')) {
+        return @{ Kind = 'lanprep'; OldPcName = ''; RecognizedBy = 'snapshot' }
+    }
+    # 4. handoff -> name *_<OldPC>_BK AND (README.txt OR a 0N_ subdir)
+    $leaf = Split-Path -Leaf $Dir
+    if ($leaf -match '_BK$') {
+        $hasReadme = Test-Path -LiteralPath (Join-Path $Dir 'README.txt')
+        $hasSub = $false
+        try {
+            $hasSub = @(Get-ChildItem -LiteralPath $Dir -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '^0\d_' }).Count -gt 0
+        }
+        catch {}
+        if ($hasReadme -or $hasSub) {
+            $oldPc = ''
+            if ($leaf -match '^\d{4}_\d{2}_\d{2}_(.+)_BK$') { $oldPc = $matches[1] }
+            return @{ Kind = 'handoff'; OldPcName = $oldPc; RecognizedBy = 'name+intrinsic' }
+        }
+    }
+    return $null
+}
+
+function global:Get-CleanupSourceLabel {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$BackuperRoot)
+    $p = $Path.ToLowerInvariant()
+    if ($p -match '\\desktop\\') { return 'Desktop' }
+    $bk = (Join-Path $BackuperRoot 'Backup').TrimEnd('\').ToLowerInvariant()
+    if ($p.StartsWith($bk + '\') -or $p -eq $bk) { return 'Backup(local/USB)' }
+    return 'LAN-share' #
+}
+
+function global:Test-CleanupPathSafe {
+    # Guards every recursive delete. Normalises the path, then denies:
+    #   - drive roots / shallow UNC roots (\\server, \\server\share)
+    #   - C:\Windows (+subtree) / C:\Users / a user-profile root / a Desktop root
+    #   - any SubtreeDenyRoot (fabriq main) and everything beneath it
+    #   - any ProtectedRoot exactly, or a path that is an ancestor of one
+    #     (BackuperRoot / RepoRoot / BackuperRoot\Backup -- their deep
+    #      children like Backup\<OldPC>\<ts> remain deletable)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$SubtreeDenyRoots = @(),
+        [string[]]$ProtectedRoots = @()
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
+    $norm = $full.TrimEnd('\')
+    if ([string]::IsNullOrWhiteSpace($norm)) { return $false }
+    $lower = $norm.ToLowerInvariant()
+
+    # drive root  (C:)
+    if ($norm -match '^[A-Za-z]:$') { return $false }
+    # shallow UNC root  (\\server  or  \\server\share)
+    if ($norm -match '^\\\\') {
+        $parts = @($norm.TrimStart('\') -split '\\' | Where-Object { $_ -ne '' })
+        if ($parts.Count -le 2) { return $false }
+    }
+    # system / user roots
+    $sysRoot   = "$env:SystemRoot".TrimEnd('\').ToLowerInvariant()
+    $usersRoot = (Join-Path $env:SystemDrive 'Users').TrimEnd('\').ToLowerInvariant()
+    if ($lower -eq $sysRoot -or $lower.StartsWith($sysRoot + '\')) { return $false }
+    if ($lower -eq $usersRoot) { return $false }
+    if ($lower.StartsWith($usersRoot + '\')) {
+        $rest = $norm.Substring($usersRoot.Length).Trim('\')
+        $restParts = @($rest -split '\\' | Where-Object { $_ -ne '' })
+        if ($restParts.Count -le 1) { return $false }                                   # <user> root
+        if ($restParts.Count -eq 2 -and $restParts[1].ToLowerInvariant() -eq 'desktop') { return $false }  # Desktop root
+    }
+    # subtree-deny roots (fabriq main): deny self + everything underneath
+    foreach ($sr in $SubtreeDenyRoots) {
+        if ([string]::IsNullOrWhiteSpace($sr)) { continue }
+        $srn = ''
+        try { $srn = ([System.IO.Path]::GetFullPath($sr)).TrimEnd('\').ToLowerInvariant() } catch { continue }
+        if ([string]::IsNullOrWhiteSpace($srn)) { continue }
+        if ($lower -eq $srn -or $lower.StartsWith($srn + '\')) { return $false }
+    }
+    # protected roots: deny exact, and deny if path is an ancestor of one
+    foreach ($pr in $ProtectedRoots) {
+        if ([string]::IsNullOrWhiteSpace($pr)) { continue }
+        $prn = ''
+        try { $prn = ([System.IO.Path]::GetFullPath($pr)).TrimEnd('\').ToLowerInvariant() } catch { continue }
+        if ([string]::IsNullOrWhiteSpace($prn)) { continue }
+        if ($lower -eq $prn) { return $false }
+        if ($prn.StartsWith($lower + '\')) { return $false }
+    }
+    return $true
+}
+
+function global:Remove-CleanupArtifactTree {
+    # Recursive delete that does NOT follow reparse points (junctions /
+    # symlinks): such children are unlinked, never recursed into, so the
+    # delete can never escape the target subtree.
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+    $item = Get-Item -LiteralPath $TargetPath -Force -ErrorAction Stop
+    if ([bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        [System.IO.Directory]::Delete($TargetPath, $false)
+        return
+    }
+    foreach ($child in @(Get-ChildItem -LiteralPath $TargetPath -Force -ErrorAction SilentlyContinue)) {
+        if ([bool]($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            if ($child.PSIsContainer) { [System.IO.Directory]::Delete($child.FullName, $false) }
+            else { [System.IO.File]::Delete($child.FullName) }
+        }
+        elseif ($child.PSIsContainer) {
+            Remove-CleanupArtifactTree -TargetPath $child.FullName
+        }
+        else {
+            [System.IO.File]::Delete($child.FullName)
+        }
+    }
+    [System.IO.Directory]::Delete($TargetPath, $false)
+}
+
+function global:Remove-CleanupArtifact {
+    # Path-safe delete of a single artifact. Returns
+    # @{ Path; Status('Deleted'|'Skipped'|'Failed'); Error }.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$SubtreeDenyRoots = @(),
+        [string[]]$ProtectedRoots = @()
+    )
+    $res = [PSCustomObject]@{ Path = $Path; Status = 'Failed'; Error = $null }
+    if (-not (Test-CleanupPathSafe -Path $Path -SubtreeDenyRoots $SubtreeDenyRoots -ProtectedRoots $ProtectedRoots)) {
+        $res.Error = 'Path failed safety check (protected/system path)'
+        return $res
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $res.Status = 'Skipped'; $res.Error = 'not found'
+        return $res
+    }
+    try {
+        Remove-CleanupArtifactTree -TargetPath $Path
+        $res.Status = 'Deleted'
+    }
+    catch {
+        $res.Error = $_.Exception.Message
+    }
+    return $res
+}
+
+function global:Get-CleanupCandidate {
+    # Scans the bounded set of known roots, recognises artifacts, attributes
+    # each to a host, links nested backups to their lan-prep parent, and
+    # filters to $OldPcName. Returns an array of candidate PSCustomObjects.
+    param(
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        $MigrationProfile = $null,
+        [Parameter(Mandatory = $true)][string]$OldPcName
+    )
+    $dirs = New-Object System.Collections.Generic.List[string]
+
+    # Root 1: USB / local backup  <BackuperRoot>\Backup\<OldPcName>\*
+    $localHostRoot = Join-Path (Join-Path $BackuperRoot 'Backup') $OldPcName
+    if (Test-Path -LiteralPath $localHostRoot) {
+        Get-ChildItem -LiteralPath $localHostRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.FullName) }
+    }
+
+    # Root 2: LAN-Prep folder from the profile (+ nested backups under it)
+    $lanPrepDir = $null
+    if ($null -ne $MigrationProfile) {
+        if ($MigrationProfile.share -and -not [string]::IsNullOrWhiteSpace("$($MigrationProfile.share.localPath)")) {
+            $lanPrepDir = "$($MigrationProfile.share.localPath)"
+        }
+        if ($MigrationProfile.rollback -and -not [string]::IsNullOrWhiteSpace("$($MigrationProfile.rollback.snapshotPath)")) {
+            $snapParent = Split-Path -Parent "$($MigrationProfile.rollback.snapshotPath)"
+            if (-not [string]::IsNullOrWhiteSpace($snapParent)) { $lanPrepDir = $snapParent }
+        }
+    }
+    if ($lanPrepDir -and (Test-Path -LiteralPath $lanPrepDir)) {
+        $dirs.Add($lanPrepDir)
+        $nested = Join-Path $lanPrepDir $OldPcName
+        if (Test-Path -LiteralPath $nested) {
+            Get-ChildItem -LiteralPath $nested -Directory -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.FullName) }
+        }
+    }
+
+    # Root 2b: shallow fixed-drive root scan for a renamed lan-prep folder
+    try {
+        foreach ($drv in @([System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady })) {
+            Get-ChildItem -LiteralPath $drv.RootDirectory.FullName -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                if (Test-Path -LiteralPath (Join-Path $_.FullName '_rollback_snapshot.json')) {
+                    $dirs.Add($_.FullName)
+                    $nb = Join-Path $_.FullName $OldPcName
+                    if (Test-Path -LiteralPath $nb) {
+                        Get-ChildItem -LiteralPath $nb -Directory -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.FullName) }
+                    }
+                }
+            }
+        }
+    }
+    catch {}
+
+    # Root 3: handoff folders on every local user's Desktop
+    try {
+        $usersDir = Join-Path $env:SystemDrive 'Users'
+        if (Test-Path -LiteralPath $usersDir) {
+            foreach ($prof in @(Get-ChildItem -LiteralPath $usersDir -Directory -ErrorAction SilentlyContinue)) {
+                $desk = Join-Path $prof.FullName 'Desktop'
+                if (Test-Path -LiteralPath $desk) {
+                    Get-ChildItem -LiteralPath $desk -Directory -Filter '*_BK' -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.FullName) }
+                }
+            }
+        }
+    }
+    catch {}
+
+    # Recognise + attribute
+    $list = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    foreach ($d in $dirs) {
+        $full = $null
+        try { $full = [System.IO.Path]::GetFullPath($d) } catch { $full = $d }
+        $key = $full.TrimEnd('\').ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $rec = Test-CleanupArtifactRecognized -Dir $full
+        if ($null -eq $rec) { continue }
+        $seen[$key] = $true
+        $size = 0L
+        try { $size = [long]((Get-ChildItem -LiteralPath $full -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum) } catch {}
+        $created = ''
+        try { $created = (Get-Item -LiteralPath $full -ErrorAction SilentlyContinue).CreationTime.ToString('yyyy-MM-dd HH:mm:ss') } catch {}
+        $reverted = $true
+        if ("$($rec.Kind)" -eq 'lanprep') { $reverted = [bool](Test-LanPrepReverted -LanPrepDir $full).Reverted }
+        $list.Add([PSCustomObject]@{
+            Path           = $full
+            Kind           = "$($rec.Kind)"
+            AttributedHost = "$($rec.OldPcName)"
+            Source         = (Get-CleanupSourceLabel -Path $full -BackuperRoot $BackuperRoot)
+            SizeBytes      = $size
+            CreatedAt      = $created
+            RecognizedBy   = "$($rec.RecognizedBy)"
+            ParentPath     = $null
+            IsLanPrep      = ("$($rec.Kind)" -eq 'lanprep')
+            Reverted       = $reverted
+            Unidentified   = $false
+        })
+    }
+
+    # Containment + recover lan-prep host from a nested backup
+    foreach ($c in $list) {
+        $cp = $c.Path.TrimEnd('\').ToLowerInvariant()
+        foreach ($p in $list) {
+            if ([object]::ReferenceEquals($c, $p)) { continue }
+            if (-not $p.IsLanPrep) { continue }
+            $pp = $p.Path.TrimEnd('\').ToLowerInvariant()
+            if ($cp.StartsWith($pp + '\')) {
+                $c.ParentPath = $p.Path
+                if ([string]::IsNullOrWhiteSpace($p.AttributedHost) -and "$($c.Kind)" -eq 'backup-tree' -and -not [string]::IsNullOrWhiteSpace($c.AttributedHost)) {
+                    $p.AttributedHost = $c.AttributedHost
+                }
+            }
+        }
+    }
+
+    # Host filter (lan-prep with no resolvable host is shown but flagged)
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($c in $list) {
+        $h = "$($c.AttributedHost)"
+        if ($h -ieq $OldPcName) { $out.Add($c) }
+        elseif ([string]::IsNullOrWhiteSpace($h) -and $c.IsLanPrep) {
+            $c.Unidentified = $true
+            $out.Add($c)
+        }
+    }
+    # NOTE: return $out.ToArray(), NOT @($out): in this PS 5.1 build the
+    # array-subexpression operator @() throws "argument types do not match"
+    # when applied directly to a List[object]. ToArray() is safe and the
+    # caller wraps the result in @() (which works on a real array).
+    return $out.ToArray()
+}
+
+function global:Write-CleanupHistory {
+    # Append a UTF-8 (BOM) line to the deletion history log. Falls back to
+    # %TEMP% when <BackuperRoot>\Backup is read-only (e.g. USB media).
+    param(
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        [Parameter(Mandatory = $true)][string]$Line
+    )
+    $targets = @(
+        (Join-Path (Join-Path $BackuperRoot 'Backup') '_cleanup_history.txt'),
+        (Join-Path $env:TEMP 'fabriq_backuper_cleanup_history.txt')
+    )
+    foreach ($p in $targets) {
+        try {
+            $dir = Split-Path -Parent $p
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+            $existing = ''
+            if (Test-Path -LiteralPath $p) { $existing = [System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8) }
+            $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+            [System.IO.File]::WriteAllText($p, $existing + $Line + "`r`n", $utf8Bom)
+            return $p
+        }
+        catch { continue }
+    }
+    return $null
+}
+

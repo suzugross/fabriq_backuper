@@ -130,6 +130,7 @@ $libsToLoad = @(
     'lib\ui\backup_view.ps1',
     'lib\ui\restore_view.ps1',
     'lib\ui\progress_view.ps1',
+    'lib\ui\cleanup_view.ps1',         # v0.34.0: post-migration artifact cleanup
     'lib\ui\main_form.ps1'
 )
 foreach ($rel in $libsToLoad) {

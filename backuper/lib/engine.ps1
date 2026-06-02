@@ -222,6 +222,14 @@ function Invoke-BackuperBackupCore {
         }
     }
 
+    # v0.34.0: best-effort cleanup marker so this backup tree can later be
+    # bulk-deleted from the Cleanup view. (It is also recognisable via its
+    # manifest.json, but the marker carries placedByHost / newPcName.)
+    $null = New-CleanupMarker -Dir $aggregateDir -ArtifactKind 'backup-tree' `
+        -OldPcName $SelectedHost.OldPCname `
+        -NewPcName $(if ($SelectedHost.PSObject.Properties.Name -contains 'NewPCname') { "$($SelectedHost.NewPCname)" } else { '' }) `
+        -BackuperVersion $BackuperVersion
+
     $sectionResults = @{}
     foreach ($s in $PickedSections) {
         $params = if ($SectionParamsBySection.ContainsKey($s.SectionName)) {

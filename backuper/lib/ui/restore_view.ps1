@@ -969,6 +969,11 @@ operator-facing な設定情報が番号順に集約されています。
 "@
             $utf8Bom = New-Object System.Text.UTF8Encoding($true)
             [System.IO.File]::WriteAllText($readmePath, $readmeText, $utf8Bom)
+            # v0.34.0: best-effort cleanup marker at the handoff root, written
+            # together with the README so the folder is recognised by the
+            # Cleanup view even when every section is skipped (no 0N_ subdir).
+            $null = New-CleanupMarker -Dir $script:RestoreHandoffRoot -ArtifactKind 'handoff' `
+                -OldPcName $script:RestoreHandoffOldPc -BackuperVersion $script:BackuperVersion
             Show-Info "Operator handoff folder ready: $script:RestoreHandoffRoot"
         }
         catch {

@@ -127,6 +127,34 @@ if ($willRemoveShare) {
     Remove-MigrationShare -ShareName $migProfile.share.shareName
 }
 
+# v0.34.0: drop a revert-completion marker next to the snapshot. Revert
+# intentionally does NOT delete the LAN-Prep folder / snapshot (see the
+# note below), so Fabriq BackUper's Cleanup view uses this marker as the
+# trustworthy signal that the folder is now safe to bulk-delete. Share
+# removal and IP restoration are NOT reliable signals (removeShare is
+# conditional and the snapshot persists). ASCII-only per CLAUDE.md rule 5.
+try {
+    $revertDir = Split-Path -Parent $SnapshotPath
+    if ($revertDir -and (Test-Path -LiteralPath $revertDir)) {
+        $revertDone = [ordered]@{
+            schemaVersion  = 1
+            manifestType   = 'fabriq-lanprep-revert-done'
+            revertedAt     = (Get-Date).ToString('o')
+            role           = "$($snapshot.role)"
+            interfaceAlias = "$($snapshot.interfaceAlias)"
+            revertedOnHost = "$env:COMPUTERNAME"
+        }
+        $rdPath = Join-Path $revertDir '_revert_done.json'
+        $rdJson = $revertDone | ConvertTo-Json -Depth 5
+        $rdUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($rdPath, $rdJson, $rdUtf8NoBom)
+        Write-Host "[ok] revert marker written: $rdPath" -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "[warn] could not write revert marker: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host "  Revert complete." -ForegroundColor Cyan

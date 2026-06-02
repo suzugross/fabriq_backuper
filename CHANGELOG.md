@@ -15,6 +15,75 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.34.0: **移行成果物の一括クリーンアップ機能を追加 (削除マーカー + 自己識別ファイルの二段認識)** —
+  移行作業後に各所へ散在する機密フォルダ (① backup ツリー = 平文ユーザデータ、
+  ② デスクトップ集約フォルダ = 資格情報/Outlook/PC情報、③ 移行先 LAN-Prep フォルダ
+  `C:\FabriqMigration`) を、Backuper の新「クリーンアップ」モードからホスト単位で
+  まとめて削除できるようにした。手作業で散在フォルダを探して消していた運用を、
+  確認付きワンボタンに置き換える (Revert-LanMigration が明示的に残す「手動削除して
+  ください」のフォルダを肩代わりする位置づけ)。
+  - **設計判断 (operator 確認済み)**:
+    - **台帳なし・マーカーあり**: 中央索引は持たず、各フォルダ root に自己記述 marker
+      `_fabriq_artifact.json` を best-effort で配置 (= 分散台帳。フォルダと共に移動し
+      desync しない)。認識は **marker OR 既存の自己識別ファイルの二段**: backup =
+      `manifest.json` (`fabriq-backuper-snapshot`)、lanprep = `_rollback_snapshot.json`、
+      handoff = 名前 `*_<OldPC>_BK` ＋ (README.txt or `0N_` subdir)。marker 書込失敗でも
+      取りこぼさない。
+    - **ホスト識別子は成果物が自持ち** (`oldPcName` / フォルダ名) なので別表不要。
+      lanprep のみ snapshot に host id が無いため、内包する backup の `oldPcName` から
+      間接帰属。
+    - **走査 root は有界**: `<BackuperRoot>\Backup\`(USB は相対でドライブレター非依存) /
+      profile `share.localPath`(＋固定ドライブ root を1階層走査してリネーム保険) /
+      全ローカルプロファイルの Desktop。移行先 PC 1台でスコープ内を全網羅。
+    - **revert ゲート**: lanprep フォルダは network 復元の生命線 (`_rollback_snapshot.json`)
+      を同居するため、**`_revert_done.json` (Revert-LanMigration が成功時に配置) がある時のみ
+      削除可**。共有消滅/IP は removeShare 条件付き・snapshot 永続のため不採用。未配置時は
+      行を選択不可にし「先に『元に戻す』を実行」へ誘導 (ack で手動解除可)。
+    - **削除安全弁**: `Test-CleanupPathSafe` がドライブ root / UNC root / `C:\Windows` /
+      `C:\Users` / ユーザ profile root / Desktop root / fabriq main 配下 / repo /
+      BackuperRoot / `Backup` root を deny。`Backup\<OldPC>\<ts>` 等の深い子のみ許可。
+      `Remove-Item -Recurse` は ReparsePoint (junction/symlink) を辿らない再帰削除で
+      ツリー外への波及を防止。**強確認** (対象ホスト名のタイプ入力一致) を要求。
+  - **新規ファイル**:
+    - [backuper/lib/ui/cleanup_view.ps1](backuper/lib/ui/cleanup_view.ps1): クリーンアップ
+      画面 (候補グリッド / LAN-Prep ack / 強確認ダイアログ / 削除結果サマリ)。UTF-8 BOM。
+  - **修正ファイル**:
+    - [backuper/common.ps1](backuper/common.ps1): cleanup ヘルパ群を追加 (`New-CleanupMarker`
+      / `Read-CleanupMarker` / `Test-CleanupArtifactRecognized` / `Test-CleanupPathSafe` /
+      `Test-LanPrepReverted` / `Get-CleanupCandidate` / `Remove-CleanupArtifact` /
+      `Remove-CleanupArtifactTree` / `Write-CleanupHistory` / `Get-CleanupSourceLabel`)。
+    - [backuper/lib/engine.ps1](backuper/lib/engine.ps1): backup の aggregateDir 生成直後に
+      backup-tree marker を best-effort 書込。
+    - [backuper/lib/ui/restore_view.ps1](backuper/lib/ui/restore_view.ps1): handoff root の
+      mkdir + README 直後に handoff marker を best-effort 書込 (全 section skip でも認識可)。
+    - [backuper/lib/ui/session_form.ps1](backuper/lib/ui/session_form.ps1): 第3アクション
+      ボタン「クリーンアップ」追加 (`Mode='Cleanup'`)。Backup/Restore ボタンを再配置。
+    - [backuper/lib/ui/main_form.ps1](backuper/lib/ui/main_form.ps1): `InitialMode` の
+      ValidateSet に `Cleanup` を追加、`$script:Views['Cleanup']=New-CleanupView` を登録。
+    - [backuper/main.ps1](backuper/main.ps1): `lib\ui\cleanup_view.ps1` を dot-source 対象に追加。
+    - [tools/lan_prep/Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1): 成功時に
+      snapshot 隣へ `_revert_done.json` (`fabriq-lanprep-revert-done`) を配置 (ASCII)。
+  - **不変**:
+    - 既存 backup/restore/lanprep の挙動 (marker 書込は best-effort で失敗しても本処理継続)。
+    - aggregate / section manifest schema、section interface、fabriq main への書込み (なし)。
+    - `main.ps1` の `Start-FabriqBackuperGui` シグネチャ (cleanup_view は dot-source スコープ
+      の `$script:MigrationProfile` を既存 view 同様に直接参照、新パラメータ不要)。
+    - EXE は無変更 (再ビルド不要)。
+  - **VERSION**: 0.33.4 → **0.34.0** (MINOR / 後方互換な機能追加)。
+  - **配備**: `E:\fabriq_backuper\` を customer 端末に再配置で反映。
+  - **検証 (実関数で自動テスト済 = 37 アサーション PASS)**:
+    1. marker round-trip / 3 種別の認識 / revert ゲート (marker 有無)
+    2. `Test-CleanupPathSafe`: ドライブ・UNC・Windows・Users・profile・Desktop・fabriq subtree・
+       repo・BackuperRoot・Backup root の deny と、`Backup\<host>\<ts>` / Desktop `*_BK` /
+       `C:\FabriqMigration` の allow
+    3. `Get-CleanupCandidate`: USB backup / lanprep / ネスト backup の発見、ネスト backup から
+       の lanprep host 帰属、containment (ParentPath)、未revert フラグ
+    4. `Remove-CleanupArtifact`: 再帰削除 / 保護パス拒否 (backuper root・fabriq subtree) /
+       欠落 Skipped、`Write-CleanupHistory` 追記
+    5. (要実機) GUI: セッション画面「クリーンアップ」→ 候補表示 → チェック → ホスト名
+       タイプ確認 → 削除 → 結果サマリ。LAN-Prep 行は `_revert_done.json` 不在時 選択不可。
+
 ### Changed
 - backuper v0.33.4: **自動復元 (POP-only) の operator 案内を実手順に刷新** —
   従来の案内は「Restore-Outlook.bat 実行後 Outlook を 2 回起動・パスワード入力」
