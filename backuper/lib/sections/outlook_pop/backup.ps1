@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # FabriqBackUper Section: outlook_pop / backup (Phase 2.9.0 Phase A)
 #
 # Enumerates Outlook (classic 2016/2019/2021/365, registry version
@@ -1054,6 +1054,127 @@ $manifest = [ordered]@{
 $manifestPath = Join-Path $sectionDir 'manifest.json'
 $manifest | ConvertTo-Json -Depth 8 | Out-File -FilePath $manifestPath -Encoding UTF8 -Force
 
+# ----------------------------------------------------------
+# v0.35.0: recover saved account passwords for the operator handoff.
+#
+# The POP3/IMAP/SMTP Password values are user-scoped DPAPI blobs (0x02 tag +
+# CryptProtectData output) decryptable ONLY in the source user's own logon
+# session. We therefore run a self-contained child (dump_outlook_pw.ps1) AS
+# the source user: directly when admin == source user (Redirected=$false), or
+# via a LogonType=Interactive scheduled task when the source user differs from
+# the elevated admin (Resolve-HkcuRoot Redirected=$true) -- same mechanism the
+# credentials section uses.
+#
+# Recovered plaintext is written ONLY to a sidecar (_account_secrets.json),
+# never the manifest or the .reg export; restore folds it into the operator
+# handoff text. Failure (e.g. source user not logged on) is non-fatal -- the
+# operator falls back to manual password entry exactly as before.
+# ----------------------------------------------------------
+$secretsCaptured = 0
+if (($totalPop + $totalImap) -gt 0) {
+    $dumpScript      = Join-Path $PSScriptRoot 'dump_outlook_pw.ps1'
+    $pwTargetUser    = $null
+    $pwResolveFailed = $false
+    if ($hkcuInfo.Redirected -and -not [string]::IsNullOrWhiteSpace($hkcuInfo.SID)) {
+        try {
+            $sidObj       = New-Object System.Security.Principal.SecurityIdentifier($hkcuInfo.SID)
+            $pwTargetUser = $sidObj.Translate([System.Security.Principal.NTAccount]).Value
+        } catch {
+            # SID->account translation failure (this message carries no secret).
+            $pwResolveFailed = $true
+            $warnings += "Password recovery: could not resolve source SID to account: $($_.Exception.Message)"
+        }
+    }
+    if ($pwResolveFailed) {
+        # Cross-user (Redirected) but we cannot name the source user. We must NOT
+        # fall through to self-mode -- that would decrypt as the elevated admin
+        # and silently recover nothing. Report unavailable honestly.
+        Show-Warning ('Password recovery unavailable (could not resolve source user from SID); ' +
+                      'operator will re-enter passwords manually.')
+    } elseif (-not (Test-Path $dumpScript)) {
+        $warnings += "Password recovery skipped: child script not found ($dumpScript)"
+    } else {
+        $ctxLabel = if ($pwTargetUser) { "$pwTargetUser via schtasks /IT" } else { 'self' }
+        Show-Info "Recovering saved passwords as source user ($ctxLabel)..."
+        $childRes = Invoke-ChildAsTargetUser -ChildScriptPath $dumpScript -TargetUser $pwTargetUser
+        foreach ($w in $childRes.Warnings) { $warnings += "Password recovery: $w" }
+        if ($childRes.Ok -and -not [string]::IsNullOrWhiteSpace($childRes.RawJson)) {
+            $childData = $null
+            try {
+                $childData = $childRes.RawJson | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                # Do NOT interpolate the exception message: a malformed-JSON error
+                # can echo a fragment of the child output (which holds plaintext
+                # passwords) into the persisted manifest + _execution_log.txt.
+                $warnings += 'Password recovery: failed to parse child output (malformed JSON)'
+            }
+
+            # Identity guard: a schtasks /IT spawn must have run as the source
+            # user. If the child reports a different identity, discard its output
+            # (never write another user's passwords).
+            $identityOk = $true
+            if ($null -ne $childData -and $childRes.Method -eq 'schtasks-it' -and `
+                -not [string]::IsNullOrWhiteSpace($pwTargetUser)) {
+                $childIdent = "$($childData.userDomain)\$($childData.userName)"
+                if ($childIdent -ine $pwTargetUser) {
+                    $warnings += "Password recovery: child ran as '$childIdent' not source '$pwTargetUser'; discarding recovered passwords"
+                    $identityOk = $false
+                }
+            }
+
+            $secretAccounts = @()
+            if ($null -ne $childData -and $identityOk) {
+                foreach ($prof in $manifestProfiles) {
+                    foreach ($acct in @($prof.accounts)) {
+                        $childAcct = @($childData.accounts | Where-Object {
+                            $_.version -eq $outlookVersion -and `
+                            $_.profile -eq $prof.name -and $_.subKey -eq $acct.subKey
+                        }) | Select-Object -First 1
+                        if ($null -eq $childAcct) { continue }
+                        $pwObj = [ordered]@{}
+                        foreach ($proto in @('pop3', 'imap', 'smtp')) {
+                            if ($childAcct.passwords.PSObject.Properties[$proto]) {
+                                $val = $childAcct.passwords.$proto
+                                if (-not [string]::IsNullOrEmpty($val)) { $pwObj[$proto] = $val }
+                            }
+                        }
+                        if ($pwObj.Count -gt 0) {
+                            $secretAccounts += [ordered]@{
+                                profile   = $prof.name
+                                subKey    = $acct.subKey
+                                email     = $acct.email
+                                type      = $acct.type
+                                passwords = $pwObj
+                            }
+                            $secretsCaptured += $pwObj.Count
+                        }
+                    }
+                }
+            }
+
+            if (@($secretAccounts).Count -gt 0) {
+                $secretsDoc = [ordered]@{
+                    schemaVersion = 1
+                    type          = 'fabriq-outlook-account-secrets'
+                    collectedAt   = (Get-Date).ToString('o')
+                    sourceUserSid = $hkcuInfo.SID
+                    method        = $childRes.Method
+                    accounts      = @($secretAccounts)
+                }
+                $secretsPath = Join-Path $sectionDir '_account_secrets.json'
+                $secretsDoc | ConvertTo-Json -Depth 6 | Out-File -FilePath $secretsPath -Encoding UTF8 -Force
+                Show-Success ("Recovered $secretsCaptured password(s) for " +
+                              "$(@($secretAccounts).Count) account(s) -> _account_secrets.json")
+            } elseif ($null -ne $childData -and $identityOk) {
+                Show-Info 'Password recovery: child ran but found no decryptable passwords.'
+            }
+        } else {
+            Show-Warning ('Password recovery unavailable (source user not logged on or spawn failed); ' +
+                          'operator will re-enter passwords manually.')
+        }
+    }
+}
+
 $sw.Stop()
 
 $status = if (($totalPop + $totalImap) -eq 0) { 'Skipped' } else { 'Success' }
@@ -1067,6 +1188,7 @@ return [PSCustomObject]@{
         popAccountCount     = $totalPop
         imapAccountCount    = $totalImap
         otherSkipped        = $totalOther
+        passwordsRecovered  = $secretsCaptured
         outlookVersion      = $outlookVersion
         installedFamily     = $outlookInstallInfo.ProductFamily
         installedType       = $outlookInstallInfo.InstallType

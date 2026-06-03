@@ -412,6 +412,136 @@ function global:Resolve-HkcuRoot {
 }
 
 # ============================================================
+# Run-as-target-user child runner (v0.35.0)
+#
+# Generalizes the "decrypt in the source user's own session" pattern: some
+# secrets (DPAPI / Credential Manager / Protected Storage) can only be read
+# inside the owning user's logon session, but the backup itself runs as an
+# elevated operator that merely mounts the source user's HKU hive. This
+# helper runs a self-contained child .ps1 AS the source user and collects its
+# JSON output through a ProgramData IPC file.
+#
+# First used by outlook_pop (dump_outlook_pw.ps1); the credentials section's
+# inline schtasks /IT logic can adopt this in a later round.
+#
+# Child contract: the child accepts -OutputPath <file> and writes a UTF-8
+# JSON document there. It MUST be self-contained (separate process, possibly
+# a different, less-privileged user; no dependency on this common.ps1).
+#
+# Modes:
+#   self        : TargetUser empty -> the current process already is the
+#                 target user (admin == interactive user). Direct child.
+#   schtasks-it : TargetUser = 'DOMAIN\user' -> register a scheduled task with
+#                 LogonType=Interactive ("/IT": runs only while the target is
+#                 logged on, no password needed), fire it, poll for the file.
+#
+# Returns @{ Ok; Method; RawJson; IpcPath; Warnings }:
+#   Ok      : $true when a JSON file was produced and read.
+#   Method  : 'self' | 'schtasks-it' | 'unavailable'
+#   RawJson : file contents (string) or $null.
+#   Warnings: diagnostic strings (caller logs via Show-*; this helper does not).
+# ============================================================
+function global:Invoke-ChildAsTargetUser {
+    param(
+        [Parameter(Mandatory = $true)][string]$ChildScriptPath,
+        [string]$TargetUser = $null,
+        [int]$TimeoutSeconds = 30,
+        [string]$ChildArguments = $null
+    )
+
+    $warnings = @()
+    $result = @{ Ok = $false; Method = 'self'; RawJson = $null; IpcPath = $null; Warnings = $warnings }
+
+    if (-not (Test-Path -LiteralPath $ChildScriptPath)) {
+        $result.Method = 'unavailable'
+        $result.Warnings = @("Child script not found: $ChildScriptPath")
+        return $result
+    }
+
+    $selfMode = [string]::IsNullOrWhiteSpace($TargetUser)
+    $result.Method = if ($selfMode) { 'self' } else { 'schtasks-it' }
+
+    # IPC dir: ProgramData is readable/writable by admin and any logged-on
+    # user, so the cross-user child can drop its output where the parent reads.
+    $ipcDir = Join-Path $env:ProgramData 'FabriqBackUper\ipc'
+    if (-not (Test-Path $ipcDir)) {
+        try { New-Item -ItemType Directory -Path $ipcDir -Force -ErrorAction Stop | Out-Null }
+        catch {
+            $result.Method = 'unavailable'
+            $result.Warnings = @("Could not create IPC dir $ipcDir : $($_.Exception.Message)")
+            return $result
+        }
+    }
+    # Best-effort sweep of stale child_*.json left by a crashed prior run (a run
+    # killed between child-write and parent-read would otherwise leave plaintext
+    # at rest; timestamped names are never reclaimed otherwise).
+    try {
+        $ipcCutoff = (Get-Date).AddMinutes(-10)
+        Get-ChildItem -LiteralPath $ipcDir -Filter 'child_*.json' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $ipcCutoff } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    } catch { }
+
+    $stamp   = (Get-Date).ToString('yyyyMMdd_HHmmss_fff')
+    $ipcJson = Join-Path $ipcDir "child_$stamp.json"
+    $result.IpcPath = $ipcJson
+
+    $argStr = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -OutputPath "{1}"' -f $ChildScriptPath, $ipcJson
+    if (-not [string]::IsNullOrWhiteSpace($ChildArguments)) {
+        $argStr = "$argStr $ChildArguments"
+    }
+
+    if ($selfMode) {
+        try {
+            $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argStr `
+                -Wait -WindowStyle Hidden -PassThru -ErrorAction Stop
+            if ($proc.ExitCode -ne 0) { $warnings += "child (self) exited with code $($proc.ExitCode)" }
+        } catch {
+            $warnings += "Failed to launch child (self): $($_.Exception.Message)"
+        }
+    } else {
+        $taskName = "FabriqBackUper_Child_$stamp"
+        $taskRegistered = $false
+        try {
+            $action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argStr
+            # Dummy far-future trigger required by Register-ScheduledTask; we
+            # fire immediately via Start-ScheduledTask.
+            $trigger   = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(1)
+            $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Limited
+            $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                            -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+            Register-ScheduledTask -TaskName $taskName `
+                -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+                -Force -ErrorAction Stop | Out-Null
+            $taskRegistered = $true
+            Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            while (-not (Test-Path $ipcJson) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
+            if (-not (Test-Path $ipcJson)) {
+                $warnings += "Target user '$TargetUser' did not produce output within ${TimeoutSeconds}s (likely not logged on, GPO restriction, or AppLocker)"
+                $result.Method = 'unavailable'
+            }
+        } catch {
+            $warnings += "schtasks /IT spawn failed: $($_.Exception.Message)"
+            $result.Method = 'unavailable'
+        } finally {
+            if ($taskRegistered) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    if (Test-Path $ipcJson) {
+        try { $result.RawJson = Get-Content $ipcJson -Raw -ErrorAction Stop; $result.Ok = $true }
+        catch { $warnings += "Failed to read IPC JSON: $($_.Exception.Message)" }
+        Remove-Item $ipcJson -Force -ErrorAction SilentlyContinue
+    }
+
+    $result.Warnings = $warnings
+    return $result
+}
+
+# ============================================================
 # Outlook Running Detection / Graceful Shutdown
 #
 # v0.23.0 addition (NOT vendored from kernel/common.ps1). Used by

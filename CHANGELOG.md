@@ -16,6 +16,44 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.35.0: **Outlook 保存パスワードの自動復元を backup に追加 (DPAPI, run-as-source-user)** —
+  現代 Outlook (2016/2019/2021/365 = 16.0, 2013 = 15.0) は POP3/IMAP/SMTP の保存パスワードを
+  レジストリ値内の **user-scoped DPAPI blob** (`0x02` タグ + `CryptProtectData` 出力、AES-256/
+  SHA-512) として保持する (実機バイト解析で確定。Credential Manager でも XOR でもない)。これを
+  backup 時に復号し、operator handoff のアカウント設定に出力することで、従来「operator が知らない
+  パスワードを手入力」していた痛点を解消する。
+  - **復号は移行元ユーザのセッション内でのみ可能** (DPAPI はユーザ束縛。operator が HKU\<SID> を
+    オフライン読みしても復号不可)。→ `credentials` セクションと同型の **run-as-source-user 子
+    プロセス**で実行: admin==移行元ユーザ時は直接子起動、別ユーザ昇格時は
+    `Register-ScheduledTask -LogonType Interactive` (`/IT`)。移行元ユーザ未ログオン時は honest
+    Failed (操作者が従来どおり手入力にフォールバック)。
+  - **新規ファイル**:
+    - [backuper/lib/sections/outlook_pop/dump_outlook_pw.ps1](backuper/lib/sections/outlook_pop/dump_outlook_pw.ps1):
+      self-contained 子。移行元ユーザ文脈で各 `*Password*` 値を `CryptUnprotectData` (0x02 剥がし、
+      entropy 無し) → UTF-16LE デコードし `{accountKey→plaintext}` を IPC JSON で返す。UTF-8 BOM。
+  - **修正ファイル**:
+    - [backuper/common.ps1](backuper/common.ps1): 汎用ヘルパ `Invoke-ChildAsTargetUser` を追加
+      (schtasks-/IT + ProgramData IPC の子実行を一般化。`credentials` の inline ロジックも将来
+      これへ移行可能)。stale IPC ファイルの best-effort sweep 付き。
+    - [backuper/lib/sections/outlook_pop/backup.ps1](backuper/lib/sections/outlook_pop/backup.ps1):
+      子を spawn し、復号平文を **サイドカー `_account_secrets.json` のみ**へ書込 (version+profile+
+      subKey で突合、schtasks-/IT 時は子 identity 検証)。
+    - [backuper/lib/sections/outlook_pop/restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1):
+      サイドカーを読み、handoff の `RESTORE_INSTRUCTIONS.txt` / `_account_settings.txt` の各
+      ユーザ名行直後に `パスワード :` 行を出力 (`New-OutlookAccountInfoText` に `-SecretsByKey`)。
+  - **セキュリティ**: 平文は **サイドカー (backup ツリー) と handoff テキストのみ**。manifest.json /
+    .reg / `_credentials_list.csv` / コンソール (Show-*) / ユーザ Documents の legacy per-folder
+    `_account_settings.txt` には **入れない**。JSON parse 失敗時に例外メッセージを補間しない (壊れた
+    JSON 断片＝平文が集約 manifest / `_execution_log.txt` へ漏れるのを防止)。サイドカー・handoff・
+    集約フォルダはいずれも v0.34.0 一括クリーンアップの対象。
+  - **不変**: 既存 backup/restore の挙動 (復元失敗は非致命)、manifest/.reg schema、section
+    interface、`New-OutlookAccountInfoText` の既存呼び出し (`-SecretsByKey` は既定 `@{}`)、EXE。
+  - **VERSION**: 0.34.0 → **0.35.0** (MINOR / 後方互換な機能追加)。
+  - **配備**: `E:\fabriq_backuper\` を customer 端末に再配置で反映。
+  - **検証**: 実機で POP/IMAP 2 アカウントの DPAPI 復号→実パスワード一致を確認 (probe)。実関数の
+    自動テスト 14 アサーション PASS (DPAPI 0x02 decode / 実 `Invoke-ChildAsTargetUser`+実子の
+    self end-to-end / 親マージ→サイドカー→restore ローダ→profile|subKey 突合)。敵対レビュー反映済
+    (平文漏れ監査・identity 検証・honest unavailable)。
 - backuper v0.34.0: **移行成果物の一括クリーンアップ機能を追加 (削除マーカー + 自己識別ファイルの二段認識)** —
   移行作業後に各所へ散在する機密フォルダ (① backup ツリー = 平文ユーザデータ、
   ② デスクトップ集約フォルダ = 資格情報/Outlook/PC情報、③ 移行先 LAN-Prep フォルダ

@@ -692,7 +692,12 @@ function New-OutlookAccountInfoText {
         [Parameter(Mandatory = $true)][string]$TargetUserProfilePath,
         [Parameter(Mandatory = $true)]$PlannedAccounts,
         [Parameter(Mandatory = $true)]$ResultsByAccount,
-        [string]$ProfileFilter = $null
+        [string]$ProfileFilter = $null,
+        # v0.35.0: optional recovered plaintext passwords, keyed
+        # "<profile>|<subKey>" -> object with .pop3/.imap/.smtp. When a key is
+        # present its password is rendered after the matching username line.
+        # Empty by default (older backups / password-free outputs unaffected).
+        [hashtable]$SecretsByKey = @{}
     )
 
     # Optional per-profile filter: when writing the target-folder copy
@@ -727,6 +732,10 @@ function New-OutlookAccountInfoText {
         $acct = ($PlannedAccounts | Where-Object {
             $_.ProfileName -eq $r.profile -and $_.Account.subKey -eq $r.accountSubKey
         } | Select-Object -First 1).Account
+
+        # v0.35.0: recovered plaintext for this account (or $null).
+        $secKey = "$($r.profile)|$($r.accountSubKey)"
+        $acctSecrets = if ($SecretsByKey.ContainsKey($secKey)) { $SecretsByKey[$secKey] } else { $null }
 
         $lines.Add('----------------------------------------') | Out-Null
         # Status enum stays English to match the manifest/section result
@@ -789,6 +798,9 @@ function New-OutlookAccountInfoText {
                 $lines.Add("    Secure Connection   : $(& $fmtSecCon $acct.imap.secureConnection)") | Out-Null
             }
             $lines.Add("    ユーザ名            : $($acct.imap.userName)") | Out-Null
+            if ($acctSecrets -and $acctSecrets.imap) {
+                $lines.Add("    パスワード          : $($acctSecrets.imap)") | Out-Null
+            }
             if (-not [string]::IsNullOrWhiteSpace("$($acct.imap.folderPath)")) {
                 $lines.Add("    ルートフォルダパス  : $($acct.imap.folderPath)") | Out-Null
             }
@@ -802,6 +814,9 @@ function New-OutlookAccountInfoText {
             }
             $lines.Add("    SPA (Sicily)        : $(& $fmtSsl $acct.pop3.useSPA)") | Out-Null
             $lines.Add("    ユーザ名            : $($acct.pop3.userName)") | Out-Null
+            if ($acctSecrets -and $acctSecrets.pop3) {
+                $lines.Add("    パスワード          : $($acctSecrets.pop3)") | Out-Null
+            }
             # v0.16: POP3 specific "Leave on Server" bit field.
             if ($null -ne $acct.PSObject.Properties['options'] -and `
                 $null -ne $acct.options.leaveOnServer) {
@@ -822,6 +837,9 @@ function New-OutlookAccountInfoText {
         $sameAsLabel = if ($isImap) { '(IMAP と同じ)' } else { '(POP3 と同じ)' }
         $smtpUser = if ($acct.smtp.userName) { $acct.smtp.userName } else { $sameAsLabel }
         $lines.Add("    SMTP ユーザ名       : $smtpUser") | Out-Null
+        if ($acctSecrets -and $acctSecrets.smtp) {
+            $lines.Add("    SMTP パスワード     : $($acctSecrets.smtp)") | Out-Null
+        }
         $lines.Add('') | Out-Null
 
         if ($isImap) {
@@ -929,6 +947,30 @@ if ($manifest.manifestType -ne 'fabriq-outlook-pop-backup') {
     return [PSCustomObject]@{
         Status = 'Failed'; ElapsedMs = [int]$sw.ElapsedMilliseconds
         Summary = [ordered]@{}; Warnings = @("Unexpected manifestType: $($manifest.manifestType)")
+    }
+}
+
+# ----------------------------------------------------------
+# v0.35.0: load recovered account passwords (sidecar, optional). Keyed
+# "<profile>|<subKey>" so New-OutlookAccountInfoText can render each password
+# next to its account in the operator handoff text. Absent for older backups
+# or when password recovery was unavailable at backup time.
+# ----------------------------------------------------------
+$secretsByKey = @{}
+$secretsPath = Join-Path $sectionDir '_account_secrets.json'
+if (Test-Path -LiteralPath $secretsPath) {
+    try {
+        $secretsDoc = Get-Content -Path $secretsPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($sa in @($secretsDoc.accounts)) {
+            if ([string]::IsNullOrWhiteSpace($sa.profile) -or [string]::IsNullOrWhiteSpace($sa.subKey)) { continue }
+            $secretsByKey["$($sa.profile)|$($sa.subKey)"] = $sa.passwords
+        }
+        Show-Info "Loaded recovered passwords for $(@($secretsDoc.accounts).Count) account(s) from _account_secrets.json"
+    } catch {
+        # No exception-message interpolation: a malformed-JSON error could echo a
+        # fragment of the sidecar (which holds plaintext passwords) into the
+        # persisted restore warnings / _execution_log.txt.
+        $warnings += 'Failed to parse _account_secrets.json (malformed JSON; passwords omitted)'
     }
 }
 
@@ -1829,7 +1871,8 @@ try {
         -Manifest $manifest `
         -TargetUserProfilePath $targetUserProfilePath `
         -PlannedAccounts $plannedAccounts `
-        -ResultsByAccount $resultsByAccount
+        -ResultsByAccount $resultsByAccount `
+        -SecretsByKey $secretsByKey
     $instructionsText | Out-File -FilePath $instructionsPath -Encoding UTF8 -Force
     Show-Info "Wrote instruction file: $instructionsPath"
 } catch {
@@ -1959,7 +2002,8 @@ try {
                 -Manifest $manifest `
                 -TargetUserProfilePath $targetUserProfilePath `
                 -PlannedAccounts $plannedAccounts `
-                -ResultsByAccount $resultsByAccount
+                -ResultsByAccount $resultsByAccount `
+                -SecretsByKey $secretsByKey
             $settingsText | Out-File -FilePath $settingsPath -Encoding UTF8 -Force
             $targetSettingsWritten += $settingsPath
             Show-Info "Wrote consolidated settings file: $settingsPath"
