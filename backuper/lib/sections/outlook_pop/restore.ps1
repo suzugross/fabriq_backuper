@@ -1633,7 +1633,7 @@ Write-Line ""
 if ($autoProfiles.Count -eq 0) {
     Write-Line "  No POP-only profiles to auto-restore." Yellow
     Write-Line "  Set up your account(s) manually via Outlook (File > Add Account)." Yellow
-    Write-Line "  See _account_settings.txt for server / port / PST details." Yellow
+    Write-Line "  See the per-account .bat files in this folder, or _data\_account_settings.txt, for server / port / PST details." Yellow
     Write-Line ""
     Save-Report; Read-Host "  Press Enter to close"; exit 0
 }
@@ -1751,7 +1751,7 @@ Write-Line "    3. Launch Outlook. If migrated rules error on run, reset them in
 Write-Line "       Rules > Manage Rules: uncheck all + Apply, re-check all + Apply, then Run Rules once."
 Write-Line "       (or use the 'clear rules' shortcut in this folder to wipe them, if not needed)"
 Write-Line "    4. Run Send/Receive and confirm mail arrives."
-Write-Line "  Server / port / PST details are in _account_settings.txt."
+Write-Line "  Per-account settings: double-click the per-account .bat files in this folder (or see _data\_account_settings.txt)."
 Write-Line ""
 Save-Report
 Read-Host "  Press Enter to close"
@@ -2048,33 +2048,38 @@ try {
 }
 
 # ----------------------------------------------------------
-# Stage 5.7 (v0.36.0): emit the Outlook account viewer (a dark pseudo-screen
-# GUI) into the operator handoff folder, next to _account_settings.txt. The
-# operator double-clicks the launcher .bat, which runs the .ps1 with
-# -ExecutionPolicy Bypass (sidestepping the machine policy without changing
-# any system setting). At runtime the viewer reads _data\manifest.json
-# (structured fields) + _account_settings.txt (recovered passwords) and
-# renders the migrated accounts.
+# Stage 5.7 (v0.37.0): emit the Outlook account viewer (a dark pseudo-screen
+# GUI) into the operator handoff folder, and make the folder FRONT show mostly
+# launcher batches so the on-site operator can see at a glance how many
+# accounts must be (re)registered.
 #
-# Emitted for BOTH strategies (A and B) whenever the handoff folder exists.
-# G1: Strategy A does not go through the Stage 4 batch block, so the handoff
-# _data\manifest.json may be absent here -- ensure it. Best-effort: every
-# failure only warns; the viewer is a convenience artifact and must never
-# fail the section. The viewer .ps1 + the sample JSON carry NO real
-# passwords (the only plaintext sink remains _account_settings.txt).
+#   FRONT (02_outlook_account\):
+#     ① <email> の設定を表示.bat   <- one per account; double-click opens the
+#     ② <email> の設定を表示.bat      viewer pre-selected to that account.
+#     Restore-Outlook.bat           <- the (optional) auto-restore batch.
+#   _data\  (everything non-batch, tucked away):
+#     Show-OutlookAccounts.ps1, manifest.json, _account_settings.txt,
+#     RESTORE_INSTRUCTIONS.txt, README.txt, profile_*.reg, Restore-Outlook.ps1
+#
+# The per-account .bat runs the viewer with -ExecutionPolicy Bypass (sidesteps
+# the machine policy without changing any system setting) and -AccountIndex N.
+# The viewer reads _data\manifest.json (structured) + _data\_account_settings.txt
+# (recovered passwords). Emitted for BOTH strategies (A and B). G1: Strategy A
+# may not have created _data\ -- ensure it. Best-effort: every failure only
+# warns; the viewer is a convenience artifact and must never fail the section.
+# No new plaintext sink (the only one stays _account_settings.txt, now relocated
+# into _data\).
 # ----------------------------------------------------------
 if ($null -ne $operatorHandoffSubdir -and (Test-Path -LiteralPath $operatorHandoffSubdir)) {
     try {
-        $assetsDir   = Join-Path $PSScriptRoot 'assets'
-        $viewerSrc   = Join-Path $assetsDir 'Show-OutlookAccounts.ps1'
-        $launcherSrc = Join-Path $assetsDir 'アカウント情報を表示.bat'
+        $assetsDir = Join-Path $PSScriptRoot 'assets'
+        $viewerSrc = Join-Path $assetsDir 'Show-OutlookAccounts.ps1'
 
         if (-not (Test-Path -LiteralPath $viewerSrc)) {
             $warnings += "Account viewer asset not found: $viewerSrc (viewer not emitted)"
             Show-Warning "  $($warnings[-1])"
         } else {
-            # (a) G1: ensure the handoff _data\manifest.json the viewer reads
-            #     exists (Strategy A may not have created _data\ yet).
+            # (a) G1: ensure _data\ + _data\manifest.json (the viewer's source).
             $viewerDataDir = Join-Path $operatorHandoffSubdir '_data'
             if (-not (Test-Path -LiteralPath $viewerDataDir)) {
                 $null = New-Item -ItemType Directory -Path $viewerDataDir -Force -ErrorAction Stop
@@ -2083,20 +2088,59 @@ if ($null -ne $operatorHandoffSubdir -and (Test-Path -LiteralPath $operatorHando
             if (-not (Test-Path -LiteralPath $viewerManifest)) {
                 Copy-Item -LiteralPath $manifestPath -Destination $viewerManifest -Force -ErrorAction Stop
             }
-            # (b) copy the viewer .ps1 (UTF-8 BOM preserved by a byte copy).
+            # (b) viewer .ps1 lives in _data\ (declutter the front).
             Copy-Item -LiteralPath $viewerSrc `
-                -Destination (Join-Path $operatorHandoffSubdir 'Show-OutlookAccounts.ps1') `
-                -Force -ErrorAction Stop
-            # (c) copy the launcher .bat (the double-click entry point).
-            if (Test-Path -LiteralPath $launcherSrc) {
-                Copy-Item -LiteralPath $launcherSrc `
-                    -Destination (Join-Path $operatorHandoffSubdir 'アカウント情報を表示.bat') `
-                    -Force -ErrorAction Stop
-                Show-Success "Account viewer emitted: Show-OutlookAccounts.ps1 + アカウント情報を表示.bat"
-            } else {
-                $warnings += "Account viewer launcher asset not found: $launcherSrc (viewer .ps1 emitted without a .bat)"
-                Show-Warning "  $($warnings[-1])"
+                -Destination (Join-Path $viewerDataDir 'Show-OutlookAccounts.ps1') -Force -ErrorAction Stop
+
+            # (c) relocate the non-batch support files from the front into _data\
+            #     so the front is "mostly batches". _account_settings.txt MUST
+            #     land in _data\ because the viewer reads it from there.
+            foreach ($fn in @('_account_settings.txt', 'RESTORE_INSTRUCTIONS.txt', 'README.txt')) {
+                $frontFile = Join-Path $operatorHandoffSubdir $fn
+                if (Test-Path -LiteralPath $frontFile) {
+                    try {
+                        Move-Item -LiteralPath $frontFile -Destination (Join-Path $viewerDataDir $fn) -Force -ErrorAction Stop
+                    } catch {
+                        $warnings += "Account viewer: could not relocate $fn into _data\: $($_.Exception.Message)"
+                        Show-Warning "  $($warnings[-1])"
+                    }
+                }
             }
+            # remove the legacy single launcher from earlier builds, if present.
+            $legacyLauncher = Join-Path $operatorHandoffSubdir 'アカウント情報を表示.bat'
+            if (Test-Path -LiteralPath $legacyLauncher) {
+                Remove-Item -LiteralPath $legacyLauncher -Force -ErrorAction SilentlyContinue
+            }
+
+            # (d) one launcher .bat per account at the FRONT. Count == account
+            #     count, so the operator sees how many to register. Order matches
+            #     the viewer's flatten order (profiles -> accounts).
+            $viewerEmails = @()
+            foreach ($prof in @($manifest.items.profiles)) {
+                foreach ($acct in @($prof.accounts)) { $viewerEmails += "$($acct.email)" }
+            }
+            $asciiNoBom = New-Object System.Text.ASCIIEncoding
+            $batCount = 0
+            for ($i = 0; $i -lt $viewerEmails.Count; $i++) {
+                $num    = $i + 1
+                $circle = if ($i -lt 20) { [string][char](0x2460 + $i) } else { "($num)" }
+                $safeEmail = ($viewerEmails[$i] -replace '[<>:"/\\|?*]', '_')
+                $batName = "$circle $safeEmail の設定を表示.bat"
+                $batLines = @(
+                    '@echo off'
+                    'chcp 65001 > nul 2>&1'
+                    ('powershell -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%~dp0_data\Show-OutlookAccounts.ps1" -AccountIndex ' + $num)
+                )
+                $batBody = ($batLines -join "`r`n") + "`r`n"
+                try {
+                    [System.IO.File]::WriteAllText((Join-Path $operatorHandoffSubdir $batName), $batBody, $asciiNoBom)
+                    $batCount++
+                } catch {
+                    $warnings += "Account viewer: failed to write launcher for $($viewerEmails[$i]): $($_.Exception.Message)"
+                    Show-Warning "  $($warnings[-1])"
+                }
+            }
+            Show-Success "Account viewer: support files -> _data\; emitted $batCount per-account launcher(s) at the front"
         }
     } catch {
         $warnings += "Account viewer emit failed: $($_.Exception.Message)"

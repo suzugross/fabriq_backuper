@@ -48,6 +48,23 @@
   - **対象ファイル**: 新規 assets 3 点 (viewer.ps1 / launcher.bat / accounts.sample.json) ＋
     [restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1) (Stage 5.7 追加)。
 
+### Changed
+- backuper v0.37.0: **Outlook handoff をアカウント別ランチャ中心に再構成 (登録すべき件数を可視化)** —
+  v0.36.0 の疑似画面ビューアを、移行先で「何件のアカウントを登録すべきか」が一目で分かる構成へ変更。
+  - **アカウント別の起動バッチ**: handoff フロントに `① <email> の設定を表示.bat` …を **アカウント数
+    だけ**生成 (バッチ本数 = 登録件数)。ダブルクリックで疑似画面がそのアカウントを選択した状態で
+    開く ([Show-OutlookAccounts.ps1](backuper/lib/sections/outlook_pop/assets/Show-OutlookAccounts.ps1)
+    に `-AccountIndex N` を新設、1 始まり。上部コンボで他アカウントへの切替も可)。
+  - **フロントの整理**: 非バッチの補助ファイル (`Show-OutlookAccounts.ps1` / `_account_settings.txt` /
+    `RESTORE_INSTRUCTIONS.txt` / `README.txt`) を `_data\` へ集約。フロントは「アカウント別バッチ ＋
+    Restore-Outlook.bat」だけになり、作業員が迷わない。
+  - viewer は `_data\` から manifest ＋ `_account_settings.txt` を読む。`_data` 名は維持
+    (Restore-Outlook.bat の `%~dp0_data\` 依存のため)。平文パスワードの新規ディスク sink は増やさない
+    (`_account_settings.txt` を front から `_data\` へ移設しただけ)。生成 `Restore-Outlook.ps1` の
+    案内文も `_data\` ＋ アカウント別バッチを指すよう更新。
+  - **対象**: assets viewer (`-AccountIndex`) ＋
+    [restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1) (Stage 5.7 再構成)。
+
 ### Fixed
 - backuper v0.35.0: **クリーンアップ機能の LAN-Prep / バックアップ削除バグを修正 (実機テストで顕在化)** —
   v0.34.0 で追加した一括クリーンアップで報告された 2 件を修正:

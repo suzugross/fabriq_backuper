@@ -36,6 +36,8 @@
 # Switches:
 #   -DataDir <path>      folder to read from (default: script dir)
 #   -AccountsFile <path> explicit self-authored JSON (overrides auto-detect)
+#   -AccountIndex <n>    pre-select the n-th account (1-based) on open; used by
+#                        the per-account launcher .bat files. Combo stays usable.
 #   -Dump                print parsed/normalized accounts as JSON and exit
 #   -SelfTest            build the forms headlessly (no ShowDialog) and exit
 # ============================================================
@@ -43,6 +45,7 @@
 param(
     [string]$DataDir,
     [string]$AccountsFile,
+    [int]$AccountIndex = 0,
     [switch]$Dump,
     [switch]$SelfTest,
     [string]$Shot
@@ -876,7 +879,14 @@ function New-MainForm {
     $cmb.Add_SelectedIndexChanged({
         Set-MainFields $script:accounts[$script:cmb.SelectedIndex]
     })
-    if ($script:accounts.Count -gt 0) { $cmb.SelectedIndex = 0 }
+    # Pre-select the account requested by the per-account launcher (-AccountIndex
+    # is 1-based; 0 / out-of-range falls back to the first account). The combo
+    # stays switchable so the operator can still cross-reference others.
+    if ($script:accounts.Count -gt 0) {
+        $sel = 0
+        if ($AccountIndex -ge 1 -and $AccountIndex -le $script:accounts.Count) { $sel = $AccountIndex - 1 }
+        $cmb.SelectedIndex = $sel
+    }
 
     return $form
 }
