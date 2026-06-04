@@ -780,6 +780,47 @@ function global:Resolve-OperatorHandoffSectionDir {
 }
 
 # ============================================================
+# Printer port classification helpers (shared, v0.39.0)
+#
+# Single source of truth for "what kind of port is this" and "can a WSD
+# port be rescued to a TCP/IP IP". Both the printer backup section
+# (backuper/lib/sections/printer/backup.ps1) and the backup view's
+# default-selection logic (backuper/lib/ui/backup_view.ps1) call these,
+# so the printers the UI default-checks are exactly the ones restore can
+# recreate. Previously these lived as local copies inside backup.ps1;
+# centralized in v0.39.0 to avoid duplicate-logic divergence.
+# ============================================================
+
+function global:Get-PortType {
+    param($Port)
+    $monitor = $Port.PortMonitor
+    if ([string]::IsNullOrEmpty($monitor)) { return 'Other' }
+    $m = $monitor.ToLower()
+    if ($m -like 'tcpmon*')   { return 'TCPIP' }
+    if ($m -like 'lprmon*' -or $m -like 'lpr*') { return 'LPR' }
+    if ($m -like 'wsd*')      { return 'WSD' }
+    if ($m -like 'localmon*' -or $m -like 'local*') { return 'Local' }
+    if ($m -like '*bonjour*' -or $m -like '*mdns*') { return 'Bonjour' }
+    return 'Other'
+}
+
+# Extract IPv4 from a printer Location string. WSD-discovered printers
+# typically store "http://<ip>:80/wsd/mex" (or similar) in Location; we
+# mine it so restore can substitute a TCP/IP standard port when the
+# source PC was using WSD. Hostnames are skipped: cross-PC restore needs
+# an address that survives DNS/WINS asymmetry, and the vast majority of
+# WSD-MFP deployments use static IPs anyway.
+function global:Get-IPv4FromLocation {
+    param([string]$Location)
+    if ([string]::IsNullOrWhiteSpace($Location)) { return $null }
+    $m = [System.Text.RegularExpressions.Regex]::Match(
+        $Location,
+        '(?<!\d)((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?!\d)')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+
+# ============================================================
 # v0.29.0 Phase 4a: printer section handoff text generators
 #
 # These two helpers exist in common.ps1 (BOM-tagged UTF-8) so the

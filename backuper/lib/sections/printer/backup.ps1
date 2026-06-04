@@ -196,39 +196,18 @@ function Write-JsonArray {
     $json = ConvertTo-Json -InputObject @($Data) -Depth 6
     $json | Out-File -FilePath $Path -Encoding UTF8 -Force
 }
-function Get-PortType {
-    param($Port)
-    $monitor = $Port.PortMonitor
-    if ([string]::IsNullOrEmpty($monitor)) { return 'Other' }
-    $m = $monitor.ToLower()
-    if ($m -like 'tcpmon*')   { return 'TCPIP' }
-    if ($m -like 'lprmon*' -or $m -like 'lpr*') { return 'LPR' }
-    if ($m -like 'wsd*')      { return 'WSD' }
-    if ($m -like 'localmon*' -or $m -like 'local*') { return 'Local' }
-    if ($m -like '*bonjour*' -or $m -like '*mdns*') { return 'Bonjour' }
-    return 'Other'
-}
+# v0.39.0: Get-PortType moved to backuper/common.ps1 (global:Get-PortType)
+# so the backup view can share the exact same port classification for its
+# default-selection logic. Definition is identical; do not re-add locally.
 function Get-SafeFileName {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return "unnamed" }
     return ($Name -replace '[^\w\-]', '_')
 }
 
-# v0.21.0: Extract IPv4 from a printer Location string. WSD-discovered
-# printers typically store "http://<ip>:80/wsd/mex" (or similar) in
-# Location; we mine it so restore can substitute a TCP/IP standard port
-# when the source PC was using WSD. Hostnames are skipped: cross-PC
-# restore needs an address that survives DNS/WINS asymmetry, and the
-# vast majority of WSD-MFP deployments use static IPs anyway.
-function Get-IPv4FromLocation {
-    param([string]$Location)
-    if ([string]::IsNullOrWhiteSpace($Location)) { return $null }
-    $m = [System.Text.RegularExpressions.Regex]::Match(
-        $Location,
-        '(?<!\d)((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?!\d)')
-    if ($m.Success) { return $m.Groups[1].Value }
-    return $null
-}
+# v0.39.0: Get-IPv4FromLocation moved to backuper/common.ps1
+# (global:Get-IPv4FromLocation) and shared with the backup view's
+# default-selection logic. Definition is identical; do not re-add locally.
 
 # ----------------------------------------------------------
 # Write printers.json

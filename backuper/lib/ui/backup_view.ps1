@@ -42,6 +42,29 @@ function Test-BackupViewVirtualPrinter {
     return $false
 }
 
+# v0.39.0: A port is "restorable" (and therefore default-checked in the
+# backup grid) only if the printer restore pipeline can recreate it
+# programmatically: TCP/IP and LPR ports directly, and WSD ports whose
+# Location yields an IPv4 (WSD -> TCP/IP 9100 rescue). USB / WSD-without-IP
+# / Local / Bonjour / Other cannot be recreated on the target (they end up
+# skipped + manual re-add) so they are left UNCHECKED by default. Operators
+# can still tick them individually or via 全選択. Get-PortType and
+# Get-IPv4FromLocation are the shared classifiers in backuper/common.ps1 --
+# the same ones the printer backup section uses -- so the default selection
+# matches exactly what restore can handle.
+function Test-BackupViewRestorablePort {
+    param($Printer, [hashtable]$PortMap)
+    if ($null -eq $PortMap) { return $false }
+    $port = $PortMap[$Printer.PortName]
+    if ($null -eq $port) { return $false }
+    switch (Get-PortType -Port $port) {
+        'TCPIP' { return $true }
+        'LPR'   { return $true }
+        'WSD'   { return (-not [string]::IsNullOrWhiteSpace((Get-IPv4FromLocation -Location $Printer.Location))) }
+        default { return $false }
+    }
+}
+
 function New-BackupView {
     $panel = New-Object System.Windows.Forms.Panel
     $panel.BackColor = $script:bgForm
@@ -273,9 +296,18 @@ function Update-BackupPrinterGrid {
     $script:BackupPrinterRows = @()
     $allPrinters = @()
     try { $allPrinters = @(Get-Printer -ErrorAction Stop) } catch { return }
+
+    # v0.39.0: build a port-name -> port object map once so each printer's
+    # port type can be classified (Get-PortType in common.ps1). Default
+    # check = not-virtual AND restorable port (TCP/IP / LPR / WSD-with-IP);
+    # USB and other non-recreatable ports start unchecked.
+    $portMap = @{}
+    try { foreach ($pt in @(Get-PrinterPort -ErrorAction Stop)) { $portMap[$pt.Name] = $pt } } catch { }
+
     foreach ($p in $allPrinters) {
-        $isVirtual = Test-BackupViewVirtualPrinter -P $p
-        $defaultChecked = -not $isVirtual
+        $isVirtual      = Test-BackupViewVirtualPrinter -P $p
+        $isRestorable   = Test-BackupViewRestorablePort -Printer $p -PortMap $portMap
+        $defaultChecked = (-not $isVirtual) -and $isRestorable
         $null = $grid.Rows.Add($defaultChecked, $p.Name, $p.DriverName, $p.PortName)
         $script:BackupPrinterRows += $p
     }

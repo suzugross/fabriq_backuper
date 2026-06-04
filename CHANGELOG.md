@@ -65,6 +65,18 @@
     既存 登録.bat / README.txt 更新。
 
 ### Changed
+- backuper v0.39.0: **バックアップ画面のプリンタ初期チェックを「自動復元できるポート」に限定** —
+  従来は仮想プリンタ (PDF/XPS/Fax/OneNote/RDP) だけを初期チェックから外し、それ以外は全て
+  チェック済みだった。restore が programmatic に再現できるのは TCP/IP 標準ポート・LPR・IP 解決
+  できる WSD (→ TCP/IP 9100 救済) のみで、USB / IP 不明 WSD / ローカル / Bonjour / その他は
+  ポート再作成も Add-Printer もできず手動再追加になるため、**これらを初期チェックから外す**よう
+  既定選択ロジックを変更 ([backup_view.ps1](backuper/lib/ui/backup_view.ps1) の
+  `Update-BackupPrinterGrid` ＋ 新 `Test-BackupViewRestorablePort`)。初期状態のみの変更で、
+  operator は従来どおり個別チェック / 全選択で USB・WSD なども選べる (後方互換)。
+  - **判定ロジックの共通化**: ポート種別判定 `Get-PortType` と WSD の IPv4 抽出
+    `Get-IPv4FromLocation` を [backup.ps1](backuper/lib/sections/printer/backup.ps1) のローカル定義
+    から [common.ps1](backuper/common.ps1) の `global:` 関数へ移設し、backup section と backup view
+    で共用。UI の初期チェック対象が「backup が分類し restore が扱える範囲」と完全一致する。
 - backuper v0.37.0: **Outlook handoff をアカウント別ランチャ中心に再構成 (登録すべき件数を可視化)** —
   v0.36.0 の疑似画面ビューアを、移行先で「何件のアカウントを登録すべきか」が一目で分かる構成へ変更。
   - **アカウント別の起動バッチ**: handoff フロントに `① <email> の設定を表示.bat` …を **アカウント数
