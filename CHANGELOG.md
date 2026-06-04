@@ -15,6 +15,35 @@
 
 ## [Unreleased]
 
+### Fixed
+- backuper v0.35.0: **クリーンアップ機能の LAN-Prep / バックアップ削除バグを修正 (実機テストで顕在化)** —
+  v0.34.0 で追加した一括クリーンアップで報告された 2 件を修正:
+  - **(1) グリッドのチェックボックスが対話的に切り替えられない**: `Set-GridStyle`
+    ([theme.ps1](backuper/lib/ui/theme.ps1)) が DataGridView を `ReadOnly=$true` に設定するため、
+    cleanup グリッドのチェックボックス列が編集不可になり、**pre-check 済みの集約/バックアップ行
+    しか選択できず、LAN-Prep 行に手動チェックを入れられなかった** (集約フォルダが消えたのは
+    pre-check のため)。[cleanup_view.ps1](backuper/lib/ui/cleanup_view.ps1) で Set-GridStyle 後に
+    `$grid.ReadOnly = $false` を明示し、列/セル単位の ReadOnly (テキスト列=不可、選択列=可、
+    未revert LAN-Prep セル=不可) を効かせる。
+  - **(2) バックアップツリーの削除が失敗**: `Remove-CleanupArtifactTree`
+    ([common.ps1](backuper/common.ps1)) が `[IO.File]::Delete` を直叩きしていたため、
+    **robocopy /COPYALL backup が保持する読み取り専用属性**ファイルで UnauthorizedAccessException、
+    深いユーザデータツリーで **長パス (>260 文字)** にも失敗していた (handoff は通常ファイルのため
+    成功していた)。削除前に属性を Normal 化 + `\\?\` 長パス prefix (`ConvertTo-CleanupLongPath` 新設)
+    + `[IO.Directory]::EnumerateFileSystemEntries` 列挙で堅牢化。**reparse point 非追従**
+    (junction/symlink はツリー外へ波及しない) は維持。
+  - **(3) 失敗内容が不可視だった**: 結果 popup に**失敗したパスとエラー内容 (先頭 5 件) + 履歴ログ
+    パス**を表示し、失敗時は警告アイコンにするよう改善。全削除結果は引き続き
+    `<BackuperRoot>\Backup\_cleanup_history.txt` に追記。
+  - **修正ファイル**: [backuper/common.ps1](backuper/common.ps1) (Remove-CleanupArtifactTree 書換 +
+    ConvertTo-CleanupLongPath 追加)、[backuper/lib/ui/cleanup_view.ps1](backuper/lib/ui/cleanup_view.ps1)
+    (grid ReadOnly 解除 + 失敗詳細表示)。
+  - **不変**: marker/認識/discovery/containment/revert ゲート/`Test-CleanupPathSafe` 安全弁の
+    ロジック。section interface / manifest schema。
+  - **検証**: read-only/hidden ファイル込みの再帰削除・長パス prefix・保護パス拒否を実関数テストで
+    PASS、既存 31 アサーション回帰 PASS。GUI のチェック操作は要実機再確認。
+  - **VERSION**: 0.35.0 据え置き (同 unreleased サイクル内のバグ修正)。
+
 ### Added
 - backuper v0.35.0: **Outlook 保存パスワードの自動復元を backup に追加 (DPAPI, run-as-source-user)** —
   現代 Outlook (2016/2019/2021/365 = 16.0, 2013 = 15.0) は POP3/IMAP/SMTP の保存パスワードを

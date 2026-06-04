@@ -1557,29 +1557,56 @@ function global:Test-CleanupPathSafe {
     return $true
 }
 
+function global:ConvertTo-CleanupLongPath {
+    # Win32 \\?\ long-path prefix so the .NET BCL (PS 5.1) can act on paths
+    # longer than MAX_PATH (deep robocopy'd backup trees exceed 260 chars).
+    # UNC -> \\?\UNC\server\share ; local -> \\?\C:\...
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if ([string]::IsNullOrEmpty($Path)) { return $Path }
+    if ($Path.StartsWith('\\?\')) { return $Path }
+    if ($Path.StartsWith('\\'))   { return ('\\?\UNC\' + $Path.Substring(2)) }
+    return ('\\?\' + $Path)
+}
+
 function global:Remove-CleanupArtifactTree {
-    # Recursive delete that does NOT follow reparse points (junctions /
-    # symlinks): such children are unlinked, never recursed into, so the
-    # delete can never escape the target subtree.
+    # Recursive delete that:
+    #   (a) clears the read-only attribute before deleting each file -- backup
+    #       trees are copied with robocopy /COPYALL, which preserves ReadOnly,
+    #       and [IO.File]::Delete throws UnauthorizedAccessException on those;
+    #   (b) is long-path safe via the \\?\ prefix (deep user-data trees);
+    #   (c) does NOT follow reparse points (junctions/symlinks are unlinked,
+    #       never recursed into), so the delete can never escape the subtree.
     param([Parameter(Mandatory = $true)][string]$TargetPath)
-    $item = Get-Item -LiteralPath $TargetPath -Force -ErrorAction Stop
-    if ([bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-        [System.IO.Directory]::Delete($TargetPath, $false)
+    $lp = ConvertTo-CleanupLongPath -Path $TargetPath
+
+    $attrs = [System.IO.File]::GetAttributes($lp)
+    if ([bool]($attrs -band [System.IO.FileAttributes]::ReparsePoint)) {
+        [System.IO.Directory]::Delete($lp, $false)
         return
     }
-    foreach ($child in @(Get-ChildItem -LiteralPath $TargetPath -Force -ErrorAction SilentlyContinue)) {
-        if ([bool]($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-            if ($child.PSIsContainer) { [System.IO.Directory]::Delete($child.FullName, $false) }
-            else { [System.IO.File]::Delete($child.FullName) }
+    # EnumerateFileSystemEntries on a \\?\ path returns \\?\-prefixed children,
+    # so they remain long-path safe when passed back into this function.
+    foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($lp)) {
+        $eAttrs = [System.IO.File]::GetAttributes($entry)
+        $isDir  = [bool]($eAttrs -band [System.IO.FileAttributes]::Directory)
+        if ([bool]($eAttrs -band [System.IO.FileAttributes]::ReparsePoint)) {
+            if ($isDir) { [System.IO.Directory]::Delete($entry, $false) }
+            else {
+                try { [System.IO.File]::SetAttributes($entry, [System.IO.FileAttributes]::Normal) } catch {}
+                [System.IO.File]::Delete($entry)
+            }
         }
-        elseif ($child.PSIsContainer) {
-            Remove-CleanupArtifactTree -TargetPath $child.FullName
+        elseif ($isDir) {
+            Remove-CleanupArtifactTree -TargetPath $entry
         }
         else {
-            [System.IO.File]::Delete($child.FullName)
+            try { [System.IO.File]::SetAttributes($entry, [System.IO.FileAttributes]::Normal) } catch {}
+            [System.IO.File]::Delete($entry)
         }
     }
-    [System.IO.Directory]::Delete($TargetPath, $false)
+    # clear the directory's own read-only bit (keep the Directory flag) then drop it
+    try { [System.IO.File]::SetAttributes($lp, [System.IO.FileAttributes]::Directory) } catch {}
+    [System.IO.Directory]::Delete($lp, $false)
 }
 
 function global:Remove-CleanupArtifact {

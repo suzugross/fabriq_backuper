@@ -66,6 +66,11 @@ function global:New-CleanupView {
     $grid.Location = New-Object System.Drawing.Point(24, 92)
     $grid.Size     = New-Object System.Drawing.Size(900, 470)
     Set-GridStyle -Grid $grid
+    # Set-GridStyle forces $grid.ReadOnly = $true (display-only grids). We
+    # need the checkbox column interactively editable, so re-enable cell
+    # editing here; per-column ReadOnly (text cols ReadOnly, checkbox col
+    # editable) and per-cell ReadOnly (disabled LAN-Prep rows) still apply.
+    $grid.ReadOnly = $false
     $grid.AllowUserToAddRows = $false
     $grid.RowHeadersVisible  = $false
     $grid.SelectionMode      = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
@@ -274,25 +279,35 @@ function global:Invoke-CleanupDelete {
     $roots = Get-CleanupProtectedRoots
 
     $deleted = 0; $failed = 0; $skipped = 0
+    $failLines = New-Object System.Collections.Generic.List[string]
+    $logPath = $null
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     foreach ($c in $toDelete) {
         $r = Remove-CleanupArtifact -Path $c.Path -SubtreeDenyRoots $roots.Subtree -ProtectedRoots $roots.Protected
         switch ($r.Status) {
             'Deleted' { $deleted++ }
             'Skipped' { $skipped++ }
-            default   { $failed++ }
+            default {
+                $failed++
+                $failLines.Add(("  ・{0}`n      {1}" -f $c.Path, $(if ($r.Error) { $r.Error } else { '(原因不明)' })))
+            }
         }
         $line = "[{0}] {1} kind={2} host={3} -> {4}{5}" -f `
             $stamp, $c.Path, $c.Kind, $c.AttributedHost, $r.Status, `
             $(if ($r.Error) { " ($($r.Error))" } else { '' })
-        $null = Write-CleanupHistory -BackuperRoot $script:BackuperRoot -Line $line
+        $logPath = Write-CleanupHistory -BackuperRoot $script:BackuperRoot -Line $line
     }
 
-    [System.Windows.Forms.MessageBox]::Show(
-        "削除結果`n`n  成功 : $deleted`n  失敗 : $failed`n  スキップ : $skipped",
-        "Fabriq BackUper - クリーンアップ",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    $msg = "削除結果`n`n  成功 : $deleted`n  失敗 : $failed`n  スキップ : $skipped"
+    if ($failed -gt 0) {
+        $shown = @($failLines | Select-Object -First 5)
+        $msg += "`n`n【失敗の詳細】`n" + ($shown -join "`n")
+        if ($failLines.Count -gt 5) { $msg += "`n  ... 他 $($failLines.Count - 5) 件" }
+        if ($logPath) { $msg += "`n`n全ログ: $logPath" }
+    }
+    $icon = if ($failed -gt 0) { [System.Windows.Forms.MessageBoxIcon]::Warning } else { [System.Windows.Forms.MessageBoxIcon]::Information }
+    [System.Windows.Forms.MessageBox]::Show($msg, "Fabriq BackUper - クリーンアップ",
+        [System.Windows.Forms.MessageBoxButtons]::OK, $icon) | Out-Null
 
     Update-CleanupGrid
 }
