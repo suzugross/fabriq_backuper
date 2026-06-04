@@ -1,16 +1,17 @@
 ﻿# ============================================================
 # FabriqBackUper Section: credentials / restore (v0.19.0 initial)
 #
-# Deploys an operator-runnable credential re-registration payload
-# to the target user's Documents folder:
+# Deploys an operator-runnable credential payload. v0.38.0: the folder FRONT
+# shows mostly batches; all support files live in _data\.
 #
-#   <TargetUserProfilePath>\Documents\
-#     FabriqCredentialsBackup_<oldHost>_<timestamp>\
-#       credentials_list.csv         (copied from the backup)
-#       register_credentials.ps1     (operator-facing PS1)
-#       登録.bat                      (ASCII wrapper that launches
-#                                     PS1 with -ExecutionPolicy Bypass)
-#       README.txt                   (operator instructions, JP)
+#   <deploy root>\   (handoff 01_資格情報\, or legacy Documents\FabriqCredentialsBackup_<host>_<ts>\)
+#     登録.bat                  (register-all; runs _data\register_credentials.ps1)
+#     資格情報を表示.bat        (read-only viewer; runs _data\Show-Credentials.ps1)
+#     _data\
+#       credentials_list.csv      (from the backup; NO passwords)
+#       register_credentials.ps1  (operator-facing PS1, CredWrite, -ExecutionPolicy Bypass)
+#       Show-Credentials.ps1      (read-only WinForms list of the source-PC credentials)
+#       README.txt                (operator instructions, JP)
 #
 # The actual re-registration into Windows Credential Manager
 # happens later, when the operator double-clicks 登録.bat in their
@@ -145,8 +146,11 @@ $payloadDir = Join-Path $PSScriptRoot 'operator_payload'
 $payloadPs1 = Join-Path $payloadDir 'register_credentials.ps1'
 $payloadBat = Join-Path $payloadDir '登録.bat'
 $payloadReadme = Join-Path $payloadDir 'README.txt'
+# v0.38.0: read-only viewer (lists the source-PC credentials) + its launcher.
+$payloadViewer = Join-Path $payloadDir 'Show-Credentials.ps1'
+$payloadViewerBat = Join-Path $payloadDir '資格情報を表示.bat'
 
-foreach ($p in @($payloadPs1, $payloadBat, $payloadReadme)) {
+foreach ($p in @($payloadPs1, $payloadBat, $payloadReadme, $payloadViewer, $payloadViewerBat)) {
     if (-not (Test-Path $p)) {
         return [PSCustomObject]@{
             Status               = 'Failed'
@@ -216,9 +220,18 @@ try {
 $copied         = @()
 $deployedCount  = 0
 $srcRowCount    = 0
-$deployCsvPath  = Join-Path $deployDir 'credentials_list.csv'
+# v0.38.0: keep the folder FRONT mostly batches (登録.bat = register-all,
+# 資格情報を表示.bat = the read-only viewer). All support files (CSV, the
+# register/viewer .ps1, README) go into _data\, which the front batches
+# reference via "%~dp0_data\".
+$deployDataDir  = Join-Path $deployDir '_data'
+$deployCsvPath  = Join-Path $deployDataDir 'credentials_list.csv'
 
 try {
+    if (-not (Test-Path -LiteralPath $deployDataDir)) {
+        $null = New-Item -ItemType Directory -Path $deployDataDir -Force -ErrorAction Stop
+    }
+
     if ($null -eq $includeTargetSet) {
         # v0.19.x behavior: copy source CSV verbatim
         Copy-Item -LiteralPath $srcCsv -Destination $deployCsvPath -Force -ErrorAction Stop
@@ -244,16 +257,21 @@ try {
         $csvBytes = $bomBytes + [System.Text.Encoding]::UTF8.GetBytes($csvText)
         [System.IO.File]::WriteAllBytes($deployCsvPath, $csvBytes)
     }
-    $copied += 'credentials_list.csv'
+    $copied += '_data\credentials_list.csv'
 
-    Copy-Item -LiteralPath $payloadPs1  -Destination (Join-Path $deployDir 'register_credentials.ps1') -Force -ErrorAction Stop
-    $copied += 'register_credentials.ps1'
+    # --- support files -> _data\ ---
+    Copy-Item -LiteralPath $payloadPs1    -Destination (Join-Path $deployDataDir 'register_credentials.ps1') -Force -ErrorAction Stop
+    $copied += '_data\register_credentials.ps1'
+    Copy-Item -LiteralPath $payloadViewer -Destination (Join-Path $deployDataDir 'Show-Credentials.ps1') -Force -ErrorAction Stop
+    $copied += '_data\Show-Credentials.ps1'
+    Copy-Item -LiteralPath $payloadReadme -Destination (Join-Path $deployDataDir 'README.txt') -Force -ErrorAction Stop
+    $copied += '_data\README.txt'
 
-    Copy-Item -LiteralPath $payloadBat  -Destination (Join-Path $deployDir '登録.bat') -Force -ErrorAction Stop
+    # --- launcher batches -> FRONT ---
+    Copy-Item -LiteralPath $payloadBat       -Destination (Join-Path $deployDir '登録.bat') -Force -ErrorAction Stop
     $copied += '登録.bat'
-
-    Copy-Item -LiteralPath $payloadReadme -Destination (Join-Path $deployDir 'README.txt') -Force -ErrorAction Stop
-    $copied += 'README.txt'
+    Copy-Item -LiteralPath $payloadViewerBat -Destination (Join-Path $deployDir '資格情報を表示.bat') -Force -ErrorAction Stop
+    $copied += '資格情報を表示.bat'
 } catch {
     $warnings += "File copy failed: $($_.Exception.Message)"
 }
@@ -291,7 +309,9 @@ try {
 # Decide Status
 # ----------------------------------------------------------
 $status = 'Success'
-if ($copied.Count -lt 4) {
+# v0.38.0: 6 files expected (_data\: csv + register.ps1 + viewer.ps1 + README;
+# front: 登録.bat + 資格情報を表示.bat).
+if ($copied.Count -lt 6) {
     $status = 'Partial'
 }
 if ($copied.Count -eq 0) {

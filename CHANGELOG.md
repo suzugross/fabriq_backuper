@@ -47,6 +47,22 @@
     UI 構築・画面外観を確認。実機 manifest (2 POP アカウント) で backup / JSON 両モード描画合格。
   - **対象ファイル**: 新規 assets 3 点 (viewer.ps1 / launcher.bat / accounts.sample.json) ＋
     [restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1) (Stage 5.7 追加)。
+- backuper v0.38.0: **資格情報セクションにも一覧ビューア＋フロント整理を適用** —
+  Outlook と同方針で、移行先で「旧 PC にどの資格情報が有ったか」を一目で確認できる簡素な GUI
+  ビューア
+  ([Show-Credentials.ps1](backuper/lib/sections/credentials/operator_payload/Show-Credentials.ps1)) を
+  追加。`credentials_list.csv` を読み、ダークなグリッドで Target / Type / UserName / Persist と
+  **推奨アクション (登録対象 / 要確認(トークン・参照系) / スキップ(証明書)) を色分け**表示
+  (パスワードは元々バックアップに含まれない、純粋な情報表示)。
+  - **フロント整理**: 資格情報 handoff (`01_資格情報\`) の補助ファイル (credentials_list.csv /
+    register_credentials.ps1 / Show-Credentials.ps1 / README.txt) を `_data\` へ集約し、フロントは
+    **`登録.bat` (全件登録) ＋ `資格情報を表示.bat` (ビューア)** の 2 バッチだけに。`登録.bat` /
+    viewer launcher は `%~dp0_data\` を起動するよう更新。
+  - 作業員は「① ビューアで旧 PC の内容を確認 → ② 全件 `登録.bat`、または別途用意済みのバッチを
+    選んで実行」の双方に対応 (ビューアは確認専用でバッチ生成はしない)。
+  - **対象**: 新規 operator_payload 2 点 (Show-Credentials.ps1 / 資格情報を表示.bat) ＋
+    [credentials/restore.ps1](backuper/lib/sections/credentials/restore.ps1) (deploy を _data\ 構成へ) ＋
+    既存 登録.bat / README.txt 更新。
 
 ### Changed
 - backuper v0.37.0: **Outlook handoff をアカウント別ランチャ中心に再構成 (登録すべき件数を可視化)** —
