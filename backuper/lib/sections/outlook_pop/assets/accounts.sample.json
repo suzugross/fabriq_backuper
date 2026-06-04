@@ -1,0 +1,55 @@
+{
+  "_README": "Fabriq BackUper - Outlook アカウント疑似画面ビューア用の自作データ。このファイルを accounts.json という名前でコピーし、値を自分の設定に書き換えて、Show-OutlookAccounts.ps1 と同じフォルダ（または _data\\）に置くと、その内容が疑似画面に表示されます。バックアップ由来でない自作の設定確認に使えます。不要な項目は省略可（省略・空値はグレーアウト表示）。文字コードは UTF-8 で保存してください。",
+  "_fields": {
+    "type": "POP3 または IMAP",
+    "incomingSsl": "true=SSL/TLS 必須, false=なし, 省略=不明(グレー)",
+    "smtpEncryption": "none / STARTTLS / SSL/TLS / auto （または 0-3 の数値）",
+    "smtpUser": "null または省略 = 受信メールサーバーと同じ設定を使用",
+    "leaveOnServer": "true でサーバーにコピーを残す。leaveDays に削除日数",
+    "password / smtpPassword": "平文。GUI 表示のみでディスクには書き込みません"
+  },
+  "meta": {
+    "sourcePc": "OLD-PC-01",
+    "sourceUser": "yamada",
+    "outlookVer": "16.0"
+  },
+  "accounts": [
+    {
+      "type": "POP3",
+      "displayName": "山田 太郎",
+      "email": "taro@example.co.jp",
+      "accountName": "taro@example.co.jp",
+      "organization": "",
+      "replyEmail": "",
+      "incomingServer": "pop.example.co.jp",
+      "incomingPort": 995,
+      "incomingSsl": true,
+      "incomingUser": "taro@example.co.jp",
+      "password": "P@ssw0rd!",
+      "spa": false,
+      "smtpServer": "smtp.example.co.jp",
+      "smtpPort": 587,
+      "smtpEncryption": "STARTTLS",
+      "smtpAuth": true,
+      "smtpUser": null,
+      "smtpPassword": null,
+      "leaveOnServer": true,
+      "leaveDays": 14,
+      "pstFile": "taro@example.co.jp.pst"
+    },
+    {
+      "type": "IMAP",
+      "displayName": "佐藤 花子",
+      "email": "hanako@example.com",
+      "incomingServer": "imap.example.com",
+      "incomingPort": 993,
+      "incomingSsl": true,
+      "incomingUser": "hanako@example.com",
+      "password": "secret123",
+      "smtpServer": "smtp.example.com",
+      "smtpPort": 465,
+      "smtpEncryption": "SSL/TLS",
+      "smtpAuth": true
+    }
+  ]
+}

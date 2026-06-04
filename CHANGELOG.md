@@ -15,6 +15,39 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.36.0: **Outlook アカウント設定ビューア (疑似画面 GUI) を operator handoff に同梱** —
+  移行先での再設定を支援する軽量・依存ゼロの WinForms ビューア
+  ([Show-OutlookAccounts.ps1](backuper/lib/sections/outlook_pop/assets/Show-OutlookAccounts.ps1))。
+  Outlook の「アカウントの追加 (POP と IMAP)」画面と遷移先「インターネット電子メール設定」
+  (全般 / 送信サーバー / 詳細設定タブ) を **ダークな疑似画面**として再現し、移行アカウントの
+  設定値を一覧表示する。
+  - **データソース 2 モード自動判別**: ① 自作 `accounts.json` (設定＋パスワード入りの 1 枚、
+    スキーマは [accounts.sample.json](backuper/lib/sections/outlook_pop/assets/accounts.sample.json)、
+    `-AccountsFile` で明示指定も可) を優先 → ② backup handoff の `_data\manifest.json` (構造化) ＋
+    `_account_settings.txt` (復元済み平文パスワードを行から抽出)。前者により backup 専用でなく
+    **自作設定の汎用ビューア**としても再利用可能。
+  - **疑似画面であることを明示**: 全面ダーク配色 ＋ 上部赤帯。設定が必要な画面遷移を強調
+    (詳細設定ボタン=赤丸＋「要設定」、送信サーバー/詳細設定タブ=赤 ●)。抽出済みデータは明色、
+    未取得項目 (テスト系・タイムアウト・組織/返信 等) はグレーアウトして作業員を迷わせない。
+  - **配信先**は実紐づけを表示: per-account の PST (`pst.sourceFileName`) を「既存の Outlook データ
+    ファイル」選択＋ファイル名で反映 (IMAP はローカルデータファイルなし表示)。
+  - **各値欄に 📋 コピーボタン** (クリックでクリップボードへ)。ポートは値が無い場合のみ「(推定)」を
+    付記し、SSL 不明時は非 SSL 標準ポート (POP3=110 / IMAP=143 / SMTP=25) を採用。
+  - **配布後の入口は launcher .bat**
+    ([アカウント情報を表示.bat](backuper/lib/sections/outlook_pop/assets/アカウント情報を表示.bat)) で
+    `powershell -ExecutionPolicy Bypass -STA -File "%~dp0Show-OutlookAccounts.ps1"` 起動。生 .ps1 を
+    触らせず実行ポリシーを (システム設定を変えずに) 回避。Restore-Outlook.bat と同方式。
+  - **restore.ps1 Stage 5.7**: Strategy A/B を問わず operator handoff フォルダがあれば viewer ＋
+    launcher ＋ `_data\manifest.json` を同梱 (Strategy A 経路の `_data` 欠落を補完)。best-effort で、
+    失敗しても warn のみ・セクションは継続。
+  - **セキュリティ**: 平文パスワードの新規ディスク sink を増やさない (viewer は実行時に既存ファイルを
+    読むのみ、メモリ保持。sample JSON は架空値)。.ps1 は UTF-8 BOM、`Copy-Item` でバイト無劣化配置。
+  - **検証**: ヘッドレス `-Dump` / `-SelfTest` / `-Shot` (フォーム→PNG レンダリング) で構文・データ層・
+    UI 構築・画面外観を確認。実機 manifest (2 POP アカウント) で backup / JSON 両モード描画合格。
+  - **対象ファイル**: 新規 assets 3 点 (viewer.ps1 / launcher.bat / accounts.sample.json) ＋
+    [restore.ps1](backuper/lib/sections/outlook_pop/restore.ps1) (Stage 5.7 追加)。
+
 ### Fixed
 - backuper v0.35.0: **クリーンアップ機能の LAN-Prep / バックアップ削除バグを修正 (実機テストで顕在化)** —
   v0.34.0 で追加した一括クリーンアップで報告された 2 件を修正:

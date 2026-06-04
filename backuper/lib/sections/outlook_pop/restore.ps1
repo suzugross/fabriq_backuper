@@ -2047,6 +2047,63 @@ try {
     Show-Warning "Failed to write target settings file(s): $($_.Exception.Message)"
 }
 
+# ----------------------------------------------------------
+# Stage 5.7 (v0.36.0): emit the Outlook account viewer (a dark pseudo-screen
+# GUI) into the operator handoff folder, next to _account_settings.txt. The
+# operator double-clicks the launcher .bat, which runs the .ps1 with
+# -ExecutionPolicy Bypass (sidestepping the machine policy without changing
+# any system setting). At runtime the viewer reads _data\manifest.json
+# (structured fields) + _account_settings.txt (recovered passwords) and
+# renders the migrated accounts.
+#
+# Emitted for BOTH strategies (A and B) whenever the handoff folder exists.
+# G1: Strategy A does not go through the Stage 4 batch block, so the handoff
+# _data\manifest.json may be absent here -- ensure it. Best-effort: every
+# failure only warns; the viewer is a convenience artifact and must never
+# fail the section. The viewer .ps1 + the sample JSON carry NO real
+# passwords (the only plaintext sink remains _account_settings.txt).
+# ----------------------------------------------------------
+if ($null -ne $operatorHandoffSubdir -and (Test-Path -LiteralPath $operatorHandoffSubdir)) {
+    try {
+        $assetsDir   = Join-Path $PSScriptRoot 'assets'
+        $viewerSrc   = Join-Path $assetsDir 'Show-OutlookAccounts.ps1'
+        $launcherSrc = Join-Path $assetsDir 'アカウント情報を表示.bat'
+
+        if (-not (Test-Path -LiteralPath $viewerSrc)) {
+            $warnings += "Account viewer asset not found: $viewerSrc (viewer not emitted)"
+            Show-Warning "  $($warnings[-1])"
+        } else {
+            # (a) G1: ensure the handoff _data\manifest.json the viewer reads
+            #     exists (Strategy A may not have created _data\ yet).
+            $viewerDataDir = Join-Path $operatorHandoffSubdir '_data'
+            if (-not (Test-Path -LiteralPath $viewerDataDir)) {
+                $null = New-Item -ItemType Directory -Path $viewerDataDir -Force -ErrorAction Stop
+            }
+            $viewerManifest = Join-Path $viewerDataDir 'manifest.json'
+            if (-not (Test-Path -LiteralPath $viewerManifest)) {
+                Copy-Item -LiteralPath $manifestPath -Destination $viewerManifest -Force -ErrorAction Stop
+            }
+            # (b) copy the viewer .ps1 (UTF-8 BOM preserved by a byte copy).
+            Copy-Item -LiteralPath $viewerSrc `
+                -Destination (Join-Path $operatorHandoffSubdir 'Show-OutlookAccounts.ps1') `
+                -Force -ErrorAction Stop
+            # (c) copy the launcher .bat (the double-click entry point).
+            if (Test-Path -LiteralPath $launcherSrc) {
+                Copy-Item -LiteralPath $launcherSrc `
+                    -Destination (Join-Path $operatorHandoffSubdir 'アカウント情報を表示.bat') `
+                    -Force -ErrorAction Stop
+                Show-Success "Account viewer emitted: Show-OutlookAccounts.ps1 + アカウント情報を表示.bat"
+            } else {
+                $warnings += "Account viewer launcher asset not found: $launcherSrc (viewer .ps1 emitted without a .bat)"
+                Show-Warning "  $($warnings[-1])"
+            }
+        }
+    } catch {
+        $warnings += "Account viewer emit failed: $($_.Exception.Message)"
+        Show-Warning "  $($warnings[-1])"
+    }
+}
+
 $sw.Stop()
 
 # v0.32.0: status no longer reflects an in-engine import (import is deferred
