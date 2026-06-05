@@ -38,10 +38,11 @@
     "autoConnectOnLaunch": true
   },
   "rollback": {
-    "_comment": "snapshotPath '<AUTO>' = <BackuperRoot>\\_lanprep\\_rollback_snapshot.json に自動派生 (ローカル・共有外)。",
+    "_comment": "snapshotPath '<AUTO>' = <BackuperRoot>\\_lanprep\\_rollback_snapshot.json に自動派生。autoRevert=true でリストア成功後に移行先で自動ネットワーク復元 (元IP復帰)。false で無効。revertNetwork/removeShare は Revert 実行時の挙動。",
     "snapshotPath": "<AUTO>",
     "revertNetwork": true,
-    "removeShare": true
+    "removeShare": true,
+    "autoRevert": true
   },
   "restore": {
     "_comment": "freeSpaceHeadroomBytes = リストア後にディスクに残すべき空き容量。(空き - リストアデータ) がこれ未満ならリストアをブロック。既定 10GB=10737418240。UI 設定は廃止 (profile のみ)。",

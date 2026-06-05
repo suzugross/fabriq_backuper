@@ -13,7 +13,12 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$ProfilePath,
 
-    [switch]$Force
+    [switch]$Force,
+
+    # v0.53.0 (A): suppress the interactive "Press Enter to exit" prompts so the
+    # script can run fully headless (the auto IP revert after a successful
+    # restore passes -Force -Unattended). Pair with -Force to skip all prompts.
+    [switch]$Unattended
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,7 +56,7 @@ catch {
     Write-Host "[FATAL] Failed to read snapshot file: $SnapshotPath" -ForegroundColor Red
     Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    if (-not $Unattended) { Read-Host "Press Enter to exit" }
     exit 1
 }
 
@@ -194,6 +199,6 @@ catch {
     Write-Host "Stack trace:" -ForegroundColor DarkGray
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    if (-not $Unattended) { Read-Host "Press Enter to exit" }
     exit 1
 }

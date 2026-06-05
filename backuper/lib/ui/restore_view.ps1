@@ -38,6 +38,10 @@ $script:RestoreBrowseMode      = $false
 $script:RestoreBrowseLabel     = $null
 $script:RestoreUserCombo       = $null
 $script:RestoreUserList        = @()
+# v0.53.0 (A): last restore status (Success/Partial/Failed), set by
+# Invoke-RestoreStart; read by the Progress view's 完了 button to decide whether
+# to fire the post-restore auto network revert.
+$script:RestoreLastStatus      = $null
 # Phase 0.15.0: checkbox controlling whether outlook_pop restore should
 # generate a "/cleanclientrules" launcher shortcut on the target user's
 # Desktop. v0.17.0: default OFF (実機観察で「ルール手動実行 1 回で復活」が
@@ -1473,6 +1477,11 @@ operator-facing な設定情報が番号順に集約されています。
         Add-ProgressLog ("  項目     : 成功 {0} / スキップ {1} / 失敗 {2}" -f $aggSuccess, $aggSkip, $aggFail)
     }
 
+    # v0.53.0 (A): record the status so the Progress view's 完了 button can fire
+    # the post-restore auto network revert (only on Success). Partial/Failed ->
+    # the operator uses the D6 'return to restore' button instead (no revert).
+    $script:RestoreLastStatus = "$($result.Status)"
+
     Set-ProgressFinished
 
     # Phase 2.7.5: completion popup (same pattern as Backup).
@@ -1493,4 +1502,88 @@ operator-facing な設定情報が番号順に集約されています。
         -Title  "Fabriq BackUper - リストア完了 ($(Get-LocalizedStatusLabel $result.Status))" `
         -Body   ($popupLines -join "`n") `
         -Status $result.Status
+    # v0.53.0 (A): the auto network revert fires when the operator presses the
+    # Progress view's 完了 button (see progress_view.ps1) -- not here -- so the
+    # migration LAN stays up until the operator explicitly finishes.
+}
+
+# v0.53.0 (A): post-restore auto network revert (auto IP restore) ----------
+function Invoke-RestoreAutoRevert {
+    param([string]$Status)
+    # Gate: target role + local profile (schema 2) + restore Success + rollback
+    # snapshot present + not already reverted + profile allows. Destructive (the
+    # migration LAN drops), so it runs only after the restore + handoff are done.
+    try {
+        if ($Status -ne 'Success') { return }
+        $prof = $script:MigrationProfile
+        if ($null -eq $prof -or "$($prof.schemaVersion)" -ne '2') { return }
+
+        $role = "$env:FABRIQ_BACKUPER_ROLE".Trim().ToLower()
+        $hostRole = ''
+        if ($null -ne $prof.share) { $hostRole = "$($prof.share.hostRole)".Trim().ToLower() }
+        if ($role -ne 'target' -and $hostRole -ne 'target') { return }
+
+        if ($null -ne $prof.rollback) {
+            if ($prof.rollback.revertNetwork -eq $false) { return }
+            if ($prof.rollback.autoRevert   -eq $false) { return }
+        }
+
+        # Snapshot path: main.ps1 resolved <AUTO>; fall back to the derived path.
+        $snapPath = ''
+        if ($null -ne $prof.rollback -and `
+            -not [string]::IsNullOrWhiteSpace("$($prof.rollback.snapshotPath)") -and `
+            "$($prof.rollback.snapshotPath)" -ne '<AUTO>') {
+            $snapPath = "$($prof.rollback.snapshotPath)"
+        } else {
+            $snapPath = Join-Path (Join-Path $script:BackuperRoot '_lanprep') '_rollback_snapshot.json'
+        }
+        if (-not (Test-Path -LiteralPath $snapPath)) { return }     # nothing to revert
+
+        $doneMarker = Join-Path (Split-Path -Parent $snapPath) '_revert_done.json'
+        if (Test-Path -LiteralPath $doneMarker) { return }          # idempotent: already reverted
+
+        $repoRoot  = Split-Path -Parent $script:BackuperRoot
+        $revertPs1 = Join-Path $repoRoot 'tools\lan_prep\Revert-LanMigration.ps1'
+        $profPath  = Join-Path $script:BackuperRoot 'data\migration_profile.json'
+        if (-not (Test-Path -LiteralPath $revertPs1)) { return }
+
+        # --- gate passed: notify (GUI, not a batch prompt), then run revert ---
+        [System.Windows.Forms.MessageBox]::Show(
+            ("リストアが完了しました。`n`nこれからネットワーク設定を移行前 (元の IP) に自動で戻します。`n" +
+             "完了後、この PC は元の IP に復帰し、移行用 LAN / 共有は切断されます。`n`n[OK] で開始します。"),
+            "Fabriq BackUper - ネットワーク自動復元",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+
+        $revertArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $revertPs1,
+                        '-SnapshotPath', $snapPath, '-ProfilePath', $profPath, '-Force', '-Unattended')
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $revertArgs -Wait -PassThru -WindowStyle Hidden
+
+        if ($null -ne $proc -and $proc.ExitCode -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "ネットワーク設定を元に戻しました (元の IP に復帰)。移行作業は完了です。",
+                "Fabriq BackUper - ネットワーク復元完了",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        } else {
+            $code = if ($null -ne $proc) { "$($proc.ExitCode)" } else { '?' }
+            [System.Windows.Forms.MessageBox]::Show(
+                ("ネットワークの自動復元に失敗しました (exit $code)。`n`n" +
+                 "管理者権限の PowerShell で tools\lan_prep\Revert-LanMigration.ps1 を実行するか、" +
+                 "LAN-Prep メニューの Revert で手動復元してください。`n`n※ リストア自体は完了しています。"),
+                "Fabriq BackUper - ネットワーク復元失敗",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
+    } catch {
+        # Never let an auto-revert error disrupt the already-completed restore.
+        try {
+            [System.Windows.Forms.MessageBox]::Show(
+                ("ネットワーク自動復元の起動に失敗しました: $($_.Exception.Message)`n`n" +
+                 "手動で Revert してください。リストアは完了しています。"),
+                "Fabriq BackUper",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        } catch {}
+    }
 }

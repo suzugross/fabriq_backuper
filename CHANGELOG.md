@@ -58,6 +58,25 @@
   - 括弧 366/366 balanced、BOM 維持。静的検証のみ (PowerShell 実行不可環境)。
 
 ### Added
+- backuper v0.53.0: **リストア後のネットワーク自動復元 (要件 A / 自動IP復元)** —
+  移行先でリストアが成功したら、LAN-Prep のネットワーク復元 (元の IP に戻す) を**自動実行**。
+  オペレータにバッチ操作 (press any key 等) をさせない。ローカル運用フローの finale。
+  - **発火ゲート (全条件)**: role=target (`FABRIQ_BACKUPER_ROLE` or `share.hostRole`) ＋ local mode
+    (profile schemaVersion 2) ＋ **`$result.Status == 'Success'`** (Partial/Failed は D6 ループへ) ＋
+    ロールバックスナップショット存在 ＋ **未 revert (`_revert_done.json` 不在＝冪等)** ＋
+    `rollback.revertNetwork != false` ＋ `rollback.autoRevert != false`。
+  - **UX**: 進捗画面の **[完了] ボタン押下を「移行を終える」操作**とし、その時に revert を実行
+    (GUI 通知「元の IP に戻す・移行用 LAN は切断」→ OK → 実行 → 結果表示 → アプリ終了)。
+    Partial/Failed は [リストア画面へ戻る](D6) で revert せず継続。バッチ prompt は一切なし。
+  - **`Revert-LanMigration.ps1` に `-Unattended` 追加**: "Press Enter to exit" 2 箇所をガードし完全無人化
+    (確認 y/N は既存 `-Force`)。`Invoke-RestoreAutoRevert` が `-Force -Unattended` で起動 (親プロセスの
+    昇格を継承・同期待ち・exit code で成否表示)。
+  - 破壊的だがゲート厳格＋冪等。失敗時は手動 Revert を案内 (リストア自体は完了済み)。GUI はローカル
+    完結のため IP 変更後も生存。手動 restore / source / 非 local / Partial・Failed は不変。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1) (`Invoke-RestoreAutoRevert` ＋ status 記録) ＋
+    [progress_view.ps1](backuper/lib/ui/progress_view.ps1) (完了ボタンで発火) ＋
+    [Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1) (`-Unattended`) ＋
+    [migration_profile.sample.json](backuper/data/migration_profile.sample.json) (`rollback.autoRevert`)。
 - backuper v0.50.0: **部分リストア後のやりなおしループ (要件 D6)** —
   リストア完了後にリストア画面へ戻り、未済/Partial だけ再リストアしたり、不要データを削除してから
   再実行できるようにした。従来は完了画面の「完了」=アプリ終了のみで反復不能だった。
