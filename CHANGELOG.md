@@ -16,6 +16,19 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.52.0: **リストア前の空き容量チェックを「実データ比較＋ブロック」に作り直し (要件 必須1)** —
+  v0.48.0 の「しきい値超で警告のみ (続行可)」を廃止し、**容量不足なら リストアを中止 (ブロック)** に変更。
+  - 判定式: **`空き容量 − 選択リストアデータ ≥ 10GB` で許可、未満はブロック**。ローカル運用ではバックアップ
+    データは既に対象ディスク上にあり、リストアで増えるのは戻したコピーの **+1×** のみ → ×2 は不要 (×1)。
+  - サイズは**オペレータが選択したエントリに追随** (`Get-RestoreSelectionSizeBytes`、harvest 後に算出)。
+  - 余裕 (headroom) は**既定 10GB**。`profile.restore.freeSpaceHeadroomBytes` で上書き可 (UI 設定は廃止)。
+  - **fail-open**: 測定不能時 (UNC ソース / ドライブ取得失敗 / サイズ 0) はブロックせず通過。DriveInfo は
+    対象ユーザの profile ドライブのみ (`RestoreExplicitDir`(UNC 可) には当てない)。
+  - 不足時のダイアログは数値 (データ量 / 空き / 不足) ＋「不要データ削除・分割リストアで対応」を明示。
+  - UI の「空き容量しきい値(MB)」フィールド＋状態変数を撤去。`Get-RestoreFreeSpaceMarginBytes` →
+    `Get-RestoreFreeSpaceHeadroomBytes` に作り替え。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1) ＋ [migration_profile.sample.json](backuper/data/migration_profile.sample.json)
+    (`restore.freeSpaceMarginBytes` → `freeSpaceHeadroomBytes`=10GB)。engine / section interface 不変。
 - backuper v0.51.0: **リストア画面のエントリ表示を単一リストに集約** —
   従来バラバラだった「セクションチェックグリッド / ユーザデータ選択モーダル / 資格情報選択モーダル /
   プリンタ別グリッド」を、**1つの DataGridView (セクション見出し行 + エントリ行)** に統合。見づらさを解消。

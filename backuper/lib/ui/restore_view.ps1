@@ -38,9 +38,6 @@ $script:RestoreBrowseMode      = $false
 $script:RestoreBrowseLabel     = $null
 $script:RestoreUserCombo       = $null
 $script:RestoreUserList        = @()
-# v0.48.0 (C): editable free-space margin (MB) for the pre-restore check;
-# seeded from migration_profile restore.freeSpaceMarginBytes (default 1 GB).
-$script:RestoreFreeSpaceMarginBox = $null
 # Phase 0.15.0: checkbox controlling whether outlook_pop restore should
 # generate a "/cleanclientrules" launcher shortcut on the target user's
 # Desktop. v0.17.0: default OFF (実機観察で「ルール手動実行 1 回で復活」が
@@ -277,24 +274,6 @@ function New-RestoreView {
     $script:RestoreSectionContainer.Size = New-Object System.Drawing.Size(10, 10)
     $script:RestoreSectionContainer.Visible = $false
     $panel.Controls.Add($script:RestoreSectionContainer)
-
-    # ---- Free-space margin field (v0.48.0 C), left of the start button ----
-    $marginLbl = New-StyledLabel -Text "空き容量しきい値(MB):" `
-        -X 24 -Y 694 -Width 170 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
-    $panel.Controls.Add($marginLbl)
-    $marginBox = New-Object System.Windows.Forms.TextBox
-    $marginBox.Location = New-Object System.Drawing.Point(198, 690)
-    $marginBox.Size = New-Object System.Drawing.Size(90, 24)
-    Set-TextBoxStyle -TextBox $marginBox
-    # Seed from the migration profile (bytes -> MB), else 1024 MB (1 GB).
-    $seedMb = 1024
-    if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.restore `
-        -and $script:MigrationProfile.restore.freeSpaceMarginBytes) {
-        try { $seedMb = [int]([long]$script:MigrationProfile.restore.freeSpaceMarginBytes / 1MB) } catch {}
-    }
-    $marginBox.Text = "$seedMb"
-    $panel.Controls.Add($marginBox)
-    $script:RestoreFreeSpaceMarginBox = $marginBox
 
     # ---- Start button (Y shifted +30 by v0.25.0 + further +30 by v0.26.0) ----
     $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 684 -Width 204 -Height 44 -BgColor $script:bgAdd
@@ -1042,19 +1021,15 @@ function Show-RestoreBackupWarnings {
     }
 }
 
-# v0.48.0 (C): pre-restore free-space sizing ----------------------
-function Get-RestoreFreeSpaceMarginBytes {
-    # UI MB field wins; else migration_profile restore.freeSpaceMarginBytes;
-    # else 1 GB. Always returns a [long] byte count.
-    $defaultBytes = [long](1GB)
-    if ($null -ne $script:RestoreFreeSpaceMarginBox) {
-        $txt = "$($script:RestoreFreeSpaceMarginBox.Text)".Trim()
-        $mb = 0
-        if ([int]::TryParse($txt, [ref]$mb) -and $mb -ge 0) { return ([long]$mb * 1MB) }
-    }
+# v0.52.0 (C rework): pre-restore free-space sizing --------------
+function Get-RestoreFreeSpaceHeadroomBytes {
+    # Disk breathing-room to keep FREE after the restore. profile override
+    # restore.freeSpaceHeadroomBytes wins; else 10 GB. No operator UI (the old
+    # editable threshold was dropped as meaningless). Always returns [long].
+    $defaultBytes = [long](10GB)
     if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.restore `
-        -and $script:MigrationProfile.restore.freeSpaceMarginBytes) {
-        try { return [long]$script:MigrationProfile.restore.freeSpaceMarginBytes } catch {}
+        -and $script:MigrationProfile.restore.freeSpaceHeadroomBytes) {
+        try { return [long]$script:MigrationProfile.restore.freeSpaceHeadroomBytes } catch {}
     }
     return $defaultBytes
 }
@@ -1301,10 +1276,13 @@ function Invoke-RestoreStart {
         "対象ユーザ: $targetUserProfilePath"
     }
 
-    # v0.48.0 (C): pre-restore free-space check (warn-only; folded into the
-    # confirm dialog). Fail-open on any error / UNC source / unknown drive --
-    # never blocks restore.
-    $freeWarn = ""
+    # v0.52.0 (C rework): pre-restore free-space check. In local operation the
+    # backup data already occupies disk, so the restore adds ~1x (the restored
+    # copy) to the TARGET profile drive. Require free - selectedData >= headroom
+    # (default 10 GB) else BLOCK (abort). Fail-open when undeterminable (UNC
+    # source / unknown drive / size 0) so a broken check never blocks a
+    # legitimate restore; the DriveInfo probe targets the user-profile drive,
+    # never RestoreExplicitDir (which may be UNC).
     try {
         $aggDirC   = Get-RestoreCurrentAggregateDir
         $needBytes = Get-RestoreSelectionSizeBytes -Picked $picked -AggregateDir $aggDirC
@@ -1313,21 +1291,28 @@ function Invoke-RestoreStart {
             $qual = $null
             if (-not [string]::IsNullOrWhiteSpace($probe)) { $qual = Split-Path -Qualifier $probe -ErrorAction SilentlyContinue }
             if (-not [string]::IsNullOrWhiteSpace($qual)) {
-                $free   = ([System.IO.DriveInfo]::new($qual + '\')).AvailableFreeSpace
-                $margin = Get-RestoreFreeSpaceMarginBytes
-                if (($free - $needBytes) -lt $margin) {
-                    $needMb   = [math]::Round($needBytes / 1MB, 1)
-                    $freeMb   = [math]::Round($free / 1MB, 1)
-                    $slackMb  = [math]::Round(($free - $needBytes) / 1MB, 1)
-                    $marginMb = [math]::Round($margin / 1MB, 1)
-                    $freeWarn = "`n`n⚠ 空き容量不足の恐れ ($qual): 必要 $needMb MB / 空き $freeMb MB / 余裕 $slackMb MB (しきい値 $marginMb MB)"
+                $free     = ([System.IO.DriveInfo]::new($qual + '\')).AvailableFreeSpace
+                $headroom = Get-RestoreFreeSpaceHeadroomBytes
+                if (($free - $needBytes) -lt $headroom) {
+                    $needGb  = [math]::Round($needBytes / 1GB, 2)
+                    $freeGb  = [math]::Round($free / 1GB, 2)
+                    $shortGb = [math]::Round(($headroom - ($free - $needBytes)) / 1GB, 2)
+                    $headGb  = [math]::Round($headroom / 1GB, 1)
+                    [System.Windows.Forms.MessageBox]::Show(
+                        ("空き容量不足のためリストアできません (ドライブ $qual)。`n`n" +
+                         "リストアデータ: $needGb GB`n空き容量: $freeGb GB`n必要な空き: データ + $headGb GB の余裕`n不足: 約 $shortGb GB`n`n" +
+                         "不要なデータの削除、または項目を分割してのリストアで対応してください。"),
+                        "Fabriq BackUper - 空き容量不足",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+                    return
                 }
             }
         }
-    } catch { }
+    } catch { }   # fail-open: never block restore on a check error
 
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary$freeWarn",
+        "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary",
         "Fabriq BackUper - 確認",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question
