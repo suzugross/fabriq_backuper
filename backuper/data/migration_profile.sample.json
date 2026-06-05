@@ -42,5 +42,9 @@
     "snapshotPath": "<AUTO>",
     "revertNetwork": true,
     "removeShare": true
+  },
+  "restore": {
+    "_comment": "freeSpaceMarginBytes = リストア先ドライブに残すべき余裕。(空き - リストアサイズ) がこれ未満で警告。リストア画面の MB フィールドでも変更可。既定 1GB=1073741824。",
+    "freeSpaceMarginBytes": 1073741824
   }
 }

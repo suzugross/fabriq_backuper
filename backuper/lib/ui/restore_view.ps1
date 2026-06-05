@@ -18,6 +18,13 @@ $script:RestoreManifestLabel   = $null
 $script:RestoreSectionContainer = $null
 $script:RestorePrinterGrid     = $null
 $script:RestoreCurrentManifest = $null
+# v0.47.0 (B): colored label that warns when the selected backup itself had
+# failures/partials (read from the aggregate manifest). Read-only, never blocks.
+$script:RestoreBackupWarningLabel = $null
+# v0.47.0 (B): count of userdata entries that could NOT be backed up (status
+# Failed/Partial/Skipped = missing source). Cached at source change because a
+# Success-status userdata section can still hide individual missing entries.
+$script:RestoreUserdataProblemCount = 0
 $script:RestoreExplicitDir     = $null
 # v0.27.0: explicit Browse-mode flag (previously inferred from whether
 # RestoreExplicitDir was set; now ExplicitDir is *always* set even in
@@ -28,6 +35,9 @@ $script:RestoreBrowseMode      = $false
 $script:RestoreBrowseLabel     = $null
 $script:RestoreUserCombo       = $null
 $script:RestoreUserList        = @()
+# v0.48.0 (C): editable free-space margin (MB) for the pre-restore check;
+# seeded from migration_profile restore.freeSpaceMarginBytes (default 1 GB).
+$script:RestoreFreeSpaceMarginBox = $null
 # Phase 0.15.0: checkbox controlling whether outlook_pop restore should
 # generate a "/cleanclientrules" launcher shortcut on the target user's
 # Desktop. v0.17.0: default OFF (実機観察で「ルール手動実行 1 回で復活」が
@@ -42,6 +52,14 @@ $script:RestoreCredentialsIncludeTargets = $null
 $script:RestoreCredentialsLastSource     = $null
 $script:RestoreCredentialsButton         = $null
 $script:RestoreCredentialsStatusLabel    = $null
+# v0.46.0 (D1): userdata entry selection state. null = all entries (default,
+# = pre-D1 behaviour). Mirrors the credentials selection trio. Passed to
+# userdata/restore.ps1 as IncludeEntries (matched by sourcePath, already
+# honored at userdata/restore.ps1:28-33,94-96 -- selection was a pure UI gap).
+$script:RestoreUserdataIncludeTargets = $null
+$script:RestoreUserdataLastSource     = $null
+$script:RestoreUserdataButton         = $null
+$script:RestoreUserdataStatusLabel    = $null
 # v0.17.0: checkbox controlling whether outlook_pop restore should attempt
 # Strategy B-light (registry auto-rebuild). Default OFF -- operator manual
 # setup via Strategy A is the recommended path. Opt-in for advanced users
@@ -98,6 +116,10 @@ function New-RestoreView {
         $script:RestoreCredentialsIncludeTargets = $null
         $script:RestoreCredentialsLastSource     = $null
         Update-RestoreCredentialsStatusLabel
+        # v0.46.0 (D1): userdata selection is also per-source; reset together.
+        $script:RestoreUserdataIncludeTargets = $null
+        $script:RestoreUserdataLastSource     = $null
+        Update-RestoreUserdataStatusLabel
         Update-RestoreSelection
     })
     $script:RestoreTimestampCombo = $combo
@@ -155,6 +177,25 @@ function New-RestoreView {
     $sectionLbl = New-StyledLabel -Text "セクション" `
         -X 24 -Y 150 -Width 240 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($sectionLbl)
+
+    # v0.47.0 (B): backup-failure warning, on the section header row between
+    # the "セクション" label and the userdata-select button. Red = failed,
+    # amber = partial-only; empty when the backup is clean.
+    $script:RestoreBackupWarningLabel = New-StyledLabel `
+        -Text "" -X 270 -Y 150 -Width 372 -Height 18 -Font $script:fontBold -FgColor $script:bgDelete
+    $panel.Controls.Add($script:RestoreBackupWarningLabel)
+
+    # v0.46.0 (D1): user-data entry selection (mirrors the credentials trio).
+    # Right-aligned on the section header row. Default (null) = all entries;
+    # opening the dialog lets the operator restore a subset.
+    $script:RestoreUserdataButton = New-StyledButton `
+        -Text "ユーザデータ選択..." -X 648 -Y 146 -Width 160 -Height 24
+    $script:RestoreUserdataButton.Add_Click({ Invoke-RestoreUserdataSelect })
+    $panel.Controls.Add($script:RestoreUserdataButton)
+
+    $script:RestoreUserdataStatusLabel = New-StyledLabel `
+        -Text "(未選択 = 全件)" -X 812 -Y 150 -Width 92 -Height 18 -FgColor $script:fgDim
+    $panel.Controls.Add($script:RestoreUserdataStatusLabel)
     $script:RestoreSectionContainer = New-Object System.Windows.Forms.Panel
     $script:RestoreSectionContainer.Location = New-Object System.Drawing.Point(24, 172)
     # v0.26.0: Height raised 26 -> 56 for two-row section grid (3 sections per
@@ -272,6 +313,24 @@ function New-RestoreView {
     $panel.Controls.Add($grid)
     $script:RestorePrinterGrid = $grid
 
+    # ---- Free-space margin field (v0.48.0 C), left of the start button ----
+    $marginLbl = New-StyledLabel -Text "空き容量しきい値(MB):" `
+        -X 24 -Y 694 -Width 170 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+    $panel.Controls.Add($marginLbl)
+    $marginBox = New-Object System.Windows.Forms.TextBox
+    $marginBox.Location = New-Object System.Drawing.Point(198, 690)
+    $marginBox.Size = New-Object System.Drawing.Size(90, 24)
+    Set-TextBoxStyle -TextBox $marginBox
+    # Seed from the migration profile (bytes -> MB), else 1024 MB (1 GB).
+    $seedMb = 1024
+    if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.restore `
+        -and $script:MigrationProfile.restore.freeSpaceMarginBytes) {
+        try { $seedMb = [int]([long]$script:MigrationProfile.restore.freeSpaceMarginBytes / 1MB) } catch {}
+    }
+    $marginBox.Text = "$seedMb"
+    $panel.Controls.Add($marginBox)
+    $script:RestoreFreeSpaceMarginBox = $marginBox
+
     # ---- Start button (Y shifted +30 by v0.25.0 + further +30 by v0.26.0) ----
     $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 684 -Width 204 -Height 44 -BgColor $script:bgAdd
     $btnStart.ForeColor = $script:fgWhite
@@ -355,8 +414,16 @@ function Show-RestoreView {
         }
         $cont.Controls.Add($cb)
         $script:RestoreSectionChecks[$s.SectionName] = $cb
+        # v0.47.0 (B): re-render the backup-failure warning when the operator
+        # toggles a section, so the checked-section-scoped warning tracks the
+        # live selection that Invoke-RestoreStart actually uses.
+        $cb.Add_CheckedChanged({ Show-RestoreBackupWarnings })
         $i++
     }
+    # v0.47.0 (B): re-render the warning now that the section checkboxes exist
+    # (the earlier combo-driven render used the default-checked fallback, so
+    # default-unchecked sections would otherwise be mis-counted until a toggle).
+    Show-RestoreBackupWarnings
 
     # Target user combo (default = logged-on interactive user)
     Update-RestoreUserComboItems
@@ -638,12 +705,19 @@ function Invoke-RestoreBrowse {
     $script:RestoreCredentialsIncludeTargets = $null
     $script:RestoreCredentialsLastSource     = $null
     Update-RestoreCredentialsStatusLabel
+    # v0.46.0 (D1): reset userdata selection on Browse source change too.
+    $script:RestoreUserdataIncludeTargets = $null
+    $script:RestoreUserdataLastSource     = $null
+    Update-RestoreUserdataStatusLabel
 
     $sz = if ($agg.summary.totalBytes) { [math]::Round([long]$agg.summary.totalBytes / 1MB, 1) } else { 0 }
     $secCount = if ($agg.summary.sectionCount) { [int]$agg.summary.sectionCount } else { 0 }
     $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  oldPcName=$($agg.oldPcName)  |  sections=$secCount  |  totalBytes=$sz MB"
+    $script:RestoreCurrentManifest = $agg   # v0.47.0 (B): cache for warnings
+    $script:RestoreUserdataProblemCount = Get-RestoreUserdataProblemCount -AggregateDir $chosen
 
     Show-RestorePrinterListFromAggregate -AggregateDir $chosen
+    Show-RestoreBackupWarnings   # v0.47.0 (B): render backup-failure warning
 }
 
 function Show-RestorePrinterListFromAggregate {
@@ -712,6 +786,12 @@ function Show-RestorePrinterListFromAggregate {
 
 function Update-RestoreSelection {
     if ($script:RestorePrinterGrid) { $script:RestorePrinterGrid.Rows.Clear() }
+    # v0.47.0 (B): reset the cached manifest + warning each refresh. The
+    # success path re-caches and the end-of-function call renders; early
+    # returns leave the warning cleared.
+    $script:RestoreCurrentManifest = $null
+    $script:RestoreUserdataProblemCount = 0
+    if ($null -ne $script:RestoreBackupWarningLabel) { $script:RestoreBackupWarningLabel.Text = "" }
 
     if ($null -eq $script:RestoreTimestampCombo -or $script:RestoreTimestampCombo.SelectedIndex -lt 0) {
         if ([string]::IsNullOrWhiteSpace($script:RestoreExplicitDir)) {
@@ -740,12 +820,160 @@ function Update-RestoreSelection {
         $sz = if ($agg.summary.totalBytes) { [math]::Round([long]$agg.summary.totalBytes / 1MB, 1) } else { 0 }
         $secCount = if ($agg.summary.sectionCount) { [int]$agg.summary.sectionCount } else { 0 }
         $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  sections=$secCount  |  totalBytes=$sz MB  |  source=$($entry.Source)"
+        $script:RestoreCurrentManifest = $agg   # v0.47.0 (B): cache for warnings
+        $script:RestoreUserdataProblemCount = Get-RestoreUserdataProblemCount -AggregateDir $aggregateDir
     }
     catch {
         $script:RestoreManifestLabel.Text = "aggregate manifest parse failed: $($_.Exception.Message)"
     }
 
     Show-RestorePrinterListFromAggregate -AggregateDir $aggregateDir
+    Show-RestoreBackupWarnings   # v0.47.0 (B): render backup-failure warning
+}
+
+# v0.47.0 (B): backup-failure warning ----------------------------
+function Get-RestoreUserdataProblemCount {
+    # Counts userdata entries that could NOT be backed up (status
+    # Failed/Partial/Skipped = missing source). Returns 0 on any error/absence.
+    param([string]$AggregateDir)
+    if ([string]::IsNullOrWhiteSpace($AggregateDir)) { return 0 }
+    $mf = Join-Path $AggregateDir 'sections\userdata\manifest.json'
+    if (-not (Test-Path $mf)) { return 0 }
+    try {
+        $udm = Get-Content -Path $mf -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $udm.items -or $null -eq $udm.items.entries) { return 0 }
+        $n = 0
+        foreach ($en in @($udm.items.entries)) {
+            $st = "$($en.status)"
+            if ($st -eq 'Failed' -or $st -eq 'Partial' -or $st -eq 'Skipped') { $n++ }
+        }
+        return $n
+    } catch { return 0 }
+}
+
+function Show-RestoreBackupWarnings {
+    # Reads the cached aggregate manifest + cached userdata problem count and
+    # shows a colored warning if the selected backup could not capture some
+    # data the operator intends to restore. Read-only; never blocks restore.
+    # Empty when clean / no manifest. Headline counts AND the (...) detail are
+    # both scoped to CHECKED sections, so the two halves always agree.
+    if ($null -eq $script:RestoreBackupWarningLabel) { return }
+    $m = $script:RestoreCurrentManifest
+    if ($null -eq $m) { $script:RestoreBackupWarningLabel.Text = ""; return }
+
+    # Is a section checked to restore? Default = checked when the checkbox map
+    # isn't built yet (first auto-fire before the section grid is rebuilt).
+    $isChecked = {
+        param([string]$Name)
+        if ($null -ne $script:RestoreSectionChecks -and $script:RestoreSectionChecks.ContainsKey($Name)) {
+            $cb = $script:RestoreSectionChecks[$Name]
+            if ($null -ne $cb) { return [bool]$cb.Checked }
+        }
+        return $true
+    }
+
+    # Section-level Failed/Partial among CHECKED sections (Skipped excluded: a
+    # whole-section skip is normally expected). Headline + detail share this set.
+    $secFailed = 0; $secPartial = 0; $problems = @()
+    if ($null -ne $m.sections) {
+        foreach ($prop in $m.sections.PSObject.Properties) {
+            $name = $prop.Name
+            $st   = "$($prop.Value.status)"
+            if ($st -ne 'Failed' -and $st -ne 'Partial') { continue }
+            if (-not (& $isChecked $name)) { continue }
+            if ($st -eq 'Failed') { $secFailed++ } else { $secPartial++ }
+            $problems += ("{0}={1}" -f $name, $st)
+        }
+    }
+
+    # Userdata entry-level missing/failed entries (only when userdata is a
+    # checked section). Catches per-file 取得不可 that a Success-status
+    # userdata section would otherwise hide from the always-visible banner.
+    $udProblem = 0
+    if (& $isChecked 'userdata') { $udProblem = [int]$script:RestoreUserdataProblemCount }
+
+    if ($secFailed -eq 0 -and $secPartial -eq 0 -and $udProblem -eq 0) {
+        $script:RestoreBackupWarningLabel.Text = ""
+        return
+    }
+
+    $parts = @()
+    if ($secFailed  -gt 0) { $parts += "失敗 $secFailed" }
+    if ($secPartial -gt 0) { $parts += "部分 $secPartial" }
+    if ($udProblem  -gt 0) { $parts += "ユーザデータ取得不可 $udProblem" }
+    $txt = "⚠ バックアップに問題: " + ($parts -join ' / ') + " 件"
+    if ($problems.Count -gt 0) { $txt += "  (" + ($problems -join ', ') + ")" }
+
+    $script:RestoreBackupWarningLabel.Text = $txt
+    # Red when data was lost / not captured (failed sections or missing userdata
+    # entries); amber when only partial sections.
+    if ($secFailed -gt 0 -or $udProblem -gt 0) {
+        $script:RestoreBackupWarningLabel.ForeColor = $script:bgDelete
+    } else {
+        $script:RestoreBackupWarningLabel.ForeColor = [System.Drawing.Color]::FromArgb(180, 95, 0)
+    }
+}
+
+# v0.48.0 (C): pre-restore free-space sizing ----------------------
+function Get-RestoreFreeSpaceMarginBytes {
+    # UI MB field wins; else migration_profile restore.freeSpaceMarginBytes;
+    # else 1 GB. Always returns a [long] byte count.
+    $defaultBytes = [long](1GB)
+    if ($null -ne $script:RestoreFreeSpaceMarginBox) {
+        $txt = "$($script:RestoreFreeSpaceMarginBox.Text)".Trim()
+        $mb = 0
+        if ([int]::TryParse($txt, [ref]$mb) -and $mb -ge 0) { return ([long]$mb * 1MB) }
+    }
+    if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.restore `
+        -and $script:MigrationProfile.restore.freeSpaceMarginBytes) {
+        try { return [long]$script:MigrationProfile.restore.freeSpaceMarginBytes } catch {}
+    }
+    return $defaultBytes
+}
+
+function Get-RestoreUserdataSelectionSizeBytes {
+    # Sum byteCount of the userdata entries that will actually be restored
+    # (respecting the D1 IncludeTargets subset; Skipped entries excluded).
+    param([string]$AggregateDir)
+    if ([string]::IsNullOrWhiteSpace($AggregateDir)) { return 0 }
+    $mf = Join-Path $AggregateDir 'sections\userdata\manifest.json'
+    if (-not (Test-Path $mf)) { return 0 }
+    try {
+        $udm = Get-Content -Path $mf -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $udm.items -or $null -eq $udm.items.entries) { return 0 }
+        $sel = $script:RestoreUserdataIncludeTargets   # null = all entries
+        $sum = [long]0
+        foreach ($en in @($udm.items.entries)) {
+            if ("$($en.status)" -eq 'Skipped') { continue }
+            if ($null -ne $sel -and ("$($en.sourcePath)" -notin $sel)) { continue }
+            if ($en.byteCount) { try { $sum += [long]$en.byteCount } catch {} }
+        }
+        return $sum
+    } catch { return 0 }
+}
+
+function Get-RestoreSelectionSizeBytes {
+    # Estimate the restore data size (bytes) for the CHECKED sections, from the
+    # cached aggregate manifest (no UNC re-scan). userdata is sized per selected
+    # entry; other sections use their manifest summary.totalBytes.
+    param([array]$Picked, [string]$AggregateDir)
+    $m = $script:RestoreCurrentManifest
+    if ($null -eq $m -or $null -eq $Picked) { return 0 }
+    $total = [long]0
+    foreach ($p in $Picked) {
+        $name = "$($p.SectionName)"
+        if ($name -eq 'userdata') {
+            $total += Get-RestoreUserdataSelectionSizeBytes -AggregateDir $AggregateDir
+            continue
+        }
+        if ($null -ne $m.sections -and ($m.sections.PSObject.Properties.Name -contains $name)) {
+            $sec = $m.sections.$name
+            if ($null -ne $sec.summary -and $sec.summary.totalBytes) {
+                try { $total += [long]$sec.summary.totalBytes } catch {}
+            }
+        }
+    }
+    return $total
 }
 
 # v0.20.0: helpers for the credentials selection dialog ----------
@@ -846,6 +1074,278 @@ function Invoke-RestoreCredentialsSelect {
     Update-RestoreCredentialsStatusLabel
 }
 
+# v0.46.0 (D1): userdata entry selection -------------------------
+function Update-RestoreUserdataStatusLabel {
+    if ($null -eq $script:RestoreUserdataStatusLabel) { return }
+    if ($null -eq $script:RestoreUserdataIncludeTargets) {
+        $script:RestoreUserdataStatusLabel.Text = '(未選択 = 全件)'
+    } else {
+        $script:RestoreUserdataStatusLabel.Text = `
+            ('{0} 件選択中' -f $script:RestoreUserdataIncludeTargets.Count)
+    }
+}
+
+function Invoke-RestoreUserdataSelect {
+    # Read the selected backup's userdata manifest, show a modal grid, and
+    # store the chosen sourcePaths. Mirrors Invoke-RestoreCredentialsSelect.
+    $aggregateDir = Get-RestoreCurrentAggregateDir
+    if ([string]::IsNullOrWhiteSpace($aggregateDir) -or -not (Test-Path $aggregateDir)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "先にバックアップ (日時 または [バックアップを参照]) を選択してください。",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    $udManifest = Join-Path $aggregateDir 'sections\userdata\manifest.json'
+    if (-not (Test-Path $udManifest)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "選択中のバックアップに userdata セクションの manifest がありません。`n($udManifest)",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    $entries = @()
+    try {
+        $manifestObj = Get-Content -Path $udManifest -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $manifestObj.items -and $null -ne $manifestObj.items.entries) {
+            $entries = @($manifestObj.items.entries)
+        }
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "userdata manifest の読み取りに失敗しました: $($_.Exception.Message)",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+    if ($entries.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "選択中のバックアップに userdata エントリがありません。",
+            "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+
+    # Reset preselect if the source changed (avoid carrying stale sourcePaths).
+    $preselect = $script:RestoreUserdataIncludeTargets
+    if ($script:RestoreUserdataLastSource -ne $aggregateDir) { $preselect = $null }
+
+    $selected = Show-UserdataSelectDialog -Entries $entries -PreselectedSourcePaths $preselect -AggregateDir $aggregateDir
+    if ($null -eq $selected) { return }  # cancelled
+
+    $script:RestoreUserdataIncludeTargets = @($selected)
+    $script:RestoreUserdataLastSource     = $aggregateDir
+    Update-RestoreUserdataStatusLabel
+}
+
+function Show-UserdataSelectDialog {
+    # Modal selection grid for userdata entries (mirrors
+    # Show-CredentialsSelectDialog). Returns an array of selected sourcePath
+    # strings (possibly empty), or $null if cancelled. Entries that were
+    # 'Skipped' at backup (no backupSubpath) are shown disabled (info only).
+    param(
+        [Parameter(Mandatory = $true)][array]$Entries,
+        [array]$PreselectedSourcePaths = $null,
+        [string]$AggregateDir = $null
+    )
+    $usePreselect = $false
+    $preselectSet = $null
+    if ($null -ne $PreselectedSourcePaths) {
+        $usePreselect = $true
+        $preselectSet = New-Object System.Collections.Generic.HashSet[string]
+        foreach ($t in $PreselectedSourcePaths) { [void]$preselectSet.Add([string]$t) }
+    }
+    # v0.49.0 (D3/D4): per-entry dir root for reading _restored.json + deleting.
+    $udEntriesRoot = $null
+    if (-not [string]::IsNullOrWhiteSpace($AggregateDir)) {
+        $udEntriesRoot = Join-Path $AggregateDir 'sections\userdata\entries'
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    Set-FormStyle -Form $dialog -Title 'ユーザデータの選択 (リストア対象)' -Width 920 -Height 480
+    $dialog.MaximizeBox   = $false
+    $dialog.MinimizeBox   = $false
+    $dialog.StartPosition = 'CenterParent'
+    if ($null -ne $script:MainForm) { $dialog.Owner = $script:MainForm }
+
+    $hintLbl = New-StyledLabel `
+        -Text 'チェックを入れたエントリのみリストア。復元済みは既定で未チェック (やりなおし支援)。「取得不可」行は選択不可。' `
+        -X 18 -Y 14 -Width 870 -Height 18 -FgColor $script:fgDim
+    $dialog.Controls.Add($hintLbl)
+
+    $btnAll = New-StyledButton -Text '全選択' -X 18 -Y 40 -Width 100 -Height 26
+    $dialog.Controls.Add($btnAll)
+    $btnNone = New-StyledButton -Text '全クリア' -X 124 -Y 40 -Width 100 -Height 26
+    $dialog.Controls.Add($btnNone)
+    # v0.49.0 (D4): delete the selected restored entry's backup data.
+    $btnDelete = New-StyledButton -Text '選択のバックアップ削除' -X 360 -Y 40 -Width 180 -Height 26
+    $dialog.Controls.Add($btnDelete)
+    $countLbl = New-StyledLabel -Text '' -X 600 -Y 44 -Width 290 -Height 20 `
+        -Font $script:fontBold -FgColor $script:fgHeader
+    $dialog.Controls.Add($countLbl)
+
+    $grid = New-Object System.Windows.Forms.DataGridView
+    $grid.Location = New-Object System.Drawing.Point(18, 76)
+    $grid.Size = New-Object System.Drawing.Size(870, 322)
+    Set-GridStyle -Grid $grid
+    $grid.ReadOnly           = $false
+    $grid.AllowUserToAddRows = $false
+    $grid.RowHeadersVisible  = $false
+    $grid.SelectionMode      = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
+
+    $colCk = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colCk.HeaderText = ''; $colCk.Width = 32; $colCk.Name = 'Check'
+    [void]$grid.Columns.Add($colCk)
+    $colSrc = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colSrc.HeaderText = '元パス (SourcePath)'; $colSrc.Name = 'Src'; $colSrc.ReadOnly = $true
+    $colSrc.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
+    [void]$grid.Columns.Add($colSrc)
+    $colSize = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colSize.HeaderText = 'サイズ'; $colSize.Width = 110; $colSize.Name = 'Size'; $colSize.ReadOnly = $true
+    [void]$grid.Columns.Add($colSize)
+    $colStatus = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colStatus.HeaderText = '状態'; $colStatus.Width = 90; $colStatus.Name = 'Status'; $colStatus.ReadOnly = $true
+    [void]$grid.Columns.Add($colStatus)
+    $colRestored = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colRestored.HeaderText = '復元'; $colRestored.Width = 130; $colRestored.Name = 'Restored'; $colRestored.ReadOnly = $true
+    [void]$grid.Columns.Add($colRestored)
+
+    foreach ($ent in $Entries) {
+        $isSkipped = ("$($ent.status)" -eq 'Skipped') -or [string]::IsNullOrWhiteSpace("$($ent.backupSubpath)")
+        $sizeStr = if ($ent.byteCount) { ('{0:N1} MB' -f ([long]$ent.byteCount / 1MB)) } else { '0 MB' }
+        $statusStr = if ($isSkipped) { '取得不可' } else { "$($ent.status)" }
+
+        # v0.49.0 (D3): restored status from the per-entry _restored.json marker.
+        # Defense-in-depth for the D4 delete: only build entryDir for a CLEAN
+        # leaf id (machine ids are digits). Reject any separator / drive / '..'
+        # so a tampered-manifest id can never make the delete target escape the
+        # entries root toward the aggregate / Backup root.
+        $entryDir = $null; $restoredStr = ''; $isRestored = $false; $dataDeleted = $false
+        $entryIdStr = "$($ent.id)"
+        $idIsSafeLeaf = (-not [string]::IsNullOrWhiteSpace($entryIdStr)) -and `
+                        ($entryIdStr -notmatch '[\\/:]') -and ($entryIdStr -notmatch '\.\.')
+        if ($null -ne $udEntriesRoot -and $idIsSafeLeaf) {
+            $entryDir = Join-Path $udEntriesRoot $entryIdStr
+            if (Test-Path -LiteralPath (Join-Path $entryDir '_restored.json')) {
+                $isRestored = $true
+                $restoredStr = '復元済'
+                try {
+                    $mk = Get-Content -LiteralPath (Join-Path $entryDir '_restored.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if ($mk.restoredAt) { $restoredStr = '復元済 ' + ([datetime]$mk.restoredAt).ToString('MM/dd HH:mm') }
+                } catch { }
+                if (-not (Test-Path -LiteralPath (Join-Path $entryDir 'data'))) { $dataDeleted = $true; $restoredStr = 'データ削除済' }
+            }
+        }
+
+        # Default check: not skipped, not already-restored (resume support),
+        # unless an explicit preselect is in effect.
+        $checked = $false
+        if (-not $isSkipped -and -not $dataDeleted) {
+            if ($usePreselect) { $checked = $preselectSet.Contains([string]$ent.sourcePath) }
+            else { $checked = (-not $isRestored) }
+        }
+        $rowIdx = $grid.Rows.Add($checked, $ent.sourcePath, $sizeStr, $statusStr, $restoredStr)
+        $grid.Rows[$rowIdx].Tag = [pscustomobject]@{
+            SourcePath = [string]$ent.sourcePath; EntryDir = $entryDir
+            Restored = $isRestored; DataDeleted = $dataDeleted
+        }
+        if ($isSkipped -or $dataDeleted) {
+            $grid.Rows[$rowIdx].ReadOnly = $true
+            $grid.Rows[$rowIdx].DefaultCellStyle.ForeColor = $script:fgDim
+        } elseif ($isRestored) {
+            $grid.Rows[$rowIdx].Cells['Restored'].Style.ForeColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+        }
+    }
+
+    $script:_udSelectDialog_UpdateCount = {
+        $sel = 0; $total = $grid.Rows.Count
+        foreach ($r in $grid.Rows) { if ([bool]$r.Cells['Check'].Value) { $sel++ } }
+        $countLbl.Text = ('選択中: {0} / {1}' -f $sel, $total)
+    }
+    & $script:_udSelectDialog_UpdateCount
+
+    $grid.Add_CurrentCellDirtyStateChanged({
+        if ($grid.IsCurrentCellDirty -and $grid.CurrentCell -is [System.Windows.Forms.DataGridViewCheckBoxCell]) {
+            $grid.CommitEdit([System.Windows.Forms.DataGridViewDataErrorContexts]::Commit) | Out-Null
+        }
+    })
+    $grid.Add_CellValueChanged({
+        param($s, $e)
+        if ($e.ColumnIndex -eq 0) { & $script:_udSelectDialog_UpdateCount }
+    })
+
+    $btnAll.Add_Click({
+        foreach ($r in $grid.Rows) { if (-not $r.ReadOnly) { $r.Cells['Check'].Value = $true } }
+        & $script:_udSelectDialog_UpdateCount
+    })
+    $btnNone.Add_Click({
+        foreach ($r in $grid.Rows) { if (-not $r.ReadOnly) { $r.Cells['Check'].Value = $false } }
+        & $script:_udSelectDialog_UpdateCount
+    })
+
+    # v0.49.0 (D4): delete the selected restored entry's backup data, reusing
+    # the cleanup engine (Test-CleanupPathSafe + Remove-CleanupArtifactTree).
+    $btnDelete.Add_Click({
+        if ($grid.SelectedRows.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("削除するエントリの行を選択してください。", "Fabriq BackUper",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return
+        }
+        $row = $grid.SelectedRows[0]
+        $tag = $row.Tag
+        if ($null -eq $tag -or -not $tag.Restored -or $tag.DataDeleted) {
+            [System.Windows.Forms.MessageBox]::Show("復元済み (かつ未削除) のエントリのみ削除できます。", "Fabriq BackUper",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($tag.EntryDir) -or -not (Test-Path -LiteralPath $tag.EntryDir)) {
+            [System.Windows.Forms.MessageBox]::Show("対象フォルダが見つかりません。", "Fabriq BackUper",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            return
+        }
+        $confirm = [System.Windows.Forms.MessageBox]::Show(
+            "このエントリのバックアップデータを削除します (復元済み):`n  $($tag.SourcePath)`n`n  $($tag.EntryDir)`n`nよろしいですか?",
+            "Fabriq BackUper - 削除確認",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        $roots = Get-CleanupProtectedRoots
+        $res = Remove-CleanupArtifact -Path $tag.EntryDir -SubtreeDenyRoots $roots.Subtree -ProtectedRoots $roots.Protected
+        if ($res.Status -eq 'Deleted') {
+            $tag.DataDeleted = $true
+            $row.Cells['Restored'].Value = 'データ削除済'
+            $row.Cells['Check'].Value = $false
+            $row.ReadOnly = $true
+            $row.DefaultCellStyle.ForeColor = $script:fgDim
+            & $script:_udSelectDialog_UpdateCount
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("削除できませんでした: $($res.Error)", "Fabriq BackUper",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        }
+    })
+
+    $dialog.Controls.Add($grid)
+
+    $btnOk = New-StyledButton -Text 'OK' -X 692 -Y 410 -Width 96 -Height 30 -BgColor $script:bgAccent
+    $btnOk.ForeColor = $script:fgWhite; $btnOk.Font = $script:fontBold
+    $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dialog.Controls.Add($btnOk); $dialog.AcceptButton = $btnOk
+    $btnCancel = New-StyledButton -Text 'キャンセル' -X 792 -Y 410 -Width 96 -Height 30
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($btnCancel); $dialog.CancelButton = $btnCancel
+
+    $result = $dialog.ShowDialog()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+
+    $selected = New-Object System.Collections.Generic.List[string]
+    foreach ($r in $grid.Rows) {
+        if ([bool]$r.Cells['Check'].Value) { $selected.Add([string]$r.Tag.SourcePath) | Out-Null }
+    }
+    return ,@($selected.ToArray())
+}
+
 function Invoke-RestoreStart {
     # v0.27.0: RestoreExplicitDir is the single source of truth for the
     # target aggregate dir (the combo handler resolves to FullPath in
@@ -903,7 +1403,11 @@ function Invoke-RestoreStart {
     # logged-on user. Forwarding fixes that subtle path-resolution mismatch.
     $sectionParams = @{
         printer  = @{ IncludePrinters = $selectedPrinters }
-        userdata = @{ TargetUserProfilePath = $targetUserProfilePath }
+        userdata = @{
+            TargetUserProfilePath = $targetUserProfilePath
+            # v0.46.0 (D1): null = all entries; array = selected sourcePaths.
+            IncludeEntries        = $script:RestoreUserdataIncludeTargets
+        }
         outlook_pop = @{
             TargetUserProfilePath   = $targetUserProfilePath
             CreateRuleClearShortcut = $createShortcut
@@ -1004,8 +1508,34 @@ function Invoke-RestoreStart {
     } else {
         "対象ユーザ: $targetUserProfilePath"
     }
+
+    # v0.48.0 (C): pre-restore free-space check (warn-only; folded into the
+    # confirm dialog). Fail-open on any error / UNC source / unknown drive --
+    # never blocks restore.
+    $freeWarn = ""
+    try {
+        $aggDirC   = Get-RestoreCurrentAggregateDir
+        $needBytes = Get-RestoreSelectionSizeBytes -Picked $picked -AggregateDir $aggDirC
+        if ($needBytes -gt 0) {
+            $probe = if (-not [string]::IsNullOrWhiteSpace($targetUserProfilePath)) { $targetUserProfilePath } else { $env:USERPROFILE }
+            $qual = $null
+            if (-not [string]::IsNullOrWhiteSpace($probe)) { $qual = Split-Path -Qualifier $probe -ErrorAction SilentlyContinue }
+            if (-not [string]::IsNullOrWhiteSpace($qual)) {
+                $free   = ([System.IO.DriveInfo]::new($qual + '\')).AvailableFreeSpace
+                $margin = Get-RestoreFreeSpaceMarginBytes
+                if (($free - $needBytes) -lt $margin) {
+                    $needMb   = [math]::Round($needBytes / 1MB, 1)
+                    $freeMb   = [math]::Round($free / 1MB, 1)
+                    $slackMb  = [math]::Round(($free - $needBytes) / 1MB, 1)
+                    $marginMb = [math]::Round($margin / 1MB, 1)
+                    $freeWarn = "`n`n⚠ 空き容量不足の恐れ ($qual): 必要 $needMb MB / 空き $freeMb MB / 余裕 $slackMb MB (しきい値 $marginMb MB)"
+                }
+            }
+        }
+    } catch { }
+
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary",
+        "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary$freeWarn",
         "Fabriq BackUper - 確認",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question

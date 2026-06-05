@@ -22,6 +22,35 @@ param(
     [hashtable]$SectionParams = @{}
 )
 
+# v0.49.0 (D2): write a per-entry "restored" marker so the restore view can
+# show restored status (D3) and allow deleting completed backup data (D4).
+# Distinct from New-CleanupMarker's _fabriq_artifact.json (avoids the cleanup
+# recognizer); best-effort, never fails the restore.
+function Write-UserdataRestoredMarker {
+    param(
+        [string]$EntryDir, [string]$Status, [string]$SourcePath,
+        [string]$Id, [string]$TargetPath
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($EntryDir) -or -not (Test-Path -LiteralPath $EntryDir)) { return }
+        $marker = [ordered]@{
+            schemaVersion  = 1
+            manifestType   = 'fabriq-userdata-restored'
+            id             = "$Id"
+            sourcePath     = "$SourcePath"
+            targetPath     = "$TargetPath"
+            status         = "$Status"
+            restoredAt     = (Get-Date).ToString('o')
+            restoredByHost = "$env:COMPUTERNAME"
+            restoredByUser = "$env:USERDOMAIN\$env:USERNAME"
+        }
+        $path = Join-Path $EntryDir '_restored.json'
+        $json = $marker | ConvertTo-Json -Depth 5
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+    } catch { }
+}
+
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $warnings = @()
 
@@ -202,6 +231,12 @@ foreach ($pe in $plannedEntries) {
 
     if (-not $proceed) {
         try { Set-EntryStatus -Id "$($pe.id)" -Status $proceedReason } catch { }
+        # v0.49.0 (D2): OnConflict=skip means the target already has this data,
+        # so mark it restored-equivalent (deletable from the restore view).
+        if ($proceedReason -eq 'Skipped') {
+            Write-UserdataRestoredMarker -EntryDir (Split-Path -Parent $srcDataDir) `
+                -Status 'AlreadyPresent' -SourcePath "$($pe.sourcePath)" -Id "$($pe.id)" -TargetPath "$targetPath"
+        }
         continue
     }
 
@@ -271,6 +306,12 @@ foreach ($pe in $plannedEntries) {
         $successCount++
     }
     try { Set-EntryStatus -Id "$($pe.id)" -Status $entryUiStatus } catch { }
+    # v0.49.0 (D2): mark restored on Done/Partial (not Failed) so the restore
+    # view can show status (D3) and offer to delete the backup data (D4).
+    if ($entryUiStatus -eq 'Done' -or $entryUiStatus -eq 'Partial') {
+        Write-UserdataRestoredMarker -EntryDir (Split-Path -Parent $srcDataDir) `
+            -Status "$entryUiStatus" -SourcePath "$($pe.sourcePath)" -Id "$($pe.id)" -TargetPath "$targetPath"
+    }
 }
 
 $sw.Stop()

@@ -16,6 +16,57 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.49.0: **ユーザデータの復元済みマーカー → 状態表示 → 削除 (要件 D2-D4)** —
+  リストアしたエントリにマーカーを残し、リストア画面で復元済/未を表示、復元済みのバックアップ
+  データを削除できるようにした。「未済/失敗だけ再リストア (やりなおし)」と「済データの後片付け」が回る。
+  - **D2 (マーカー書込)**: `userdata/restore.ps1` が各エントリの per-entry dir に **`_restored.json`**
+    を配置 (`Write-UserdataRestoredMarker`、best-effort・UTF-8 no-BOM、`New-CleanupMarker` とは別名で
+    クリーンアップ認識器と非衝突)。**Done/Partial と skip-exists (対象に既存=AlreadyPresent) で書込、
+    Failed は書かない**。リストア挙動は不変 (追記のみ)。
+  - **D3 (状態表示)**: `Show-UserdataSelectDialog` に `-AggregateDir` と **「復元」列**を追加。
+    `_restored.json` ＋ `entries\<id>\data` の有無から `復元済(日時)` / 未 / `データ削除済` を表示。
+    **復元済みエントリは既定で未チェック** (resume 支援、明示プリセット時はそれを優先)。
+  - **D4 (削除)**: ダイアログに「選択のバックアップ削除」ボタン。復元済み行の per-entry dir を
+    `Get-CleanupProtectedRoots` → `Remove-CleanupArtifact` で削除 (cleanup エンジンの
+    `Test-CleanupPathSafe` 安全弁を再利用、Yes/No 確認、per-entry 限定)。削除後は行を「データ削除済」
+    に更新・選択不可化。
+  - D5 (manifest prune) は保留 — restore.ps1 のデータフォルダ欠落 graceful 処理に委譲。
+  - [userdata/restore.ps1](backuper/lib/sections/userdata/restore.ps1) ＋ [restore_view.ps1](backuper/lib/ui/restore_view.ps1) のみ (engine / プロファイル変更なし)。
+- backuper v0.48.0: **リストア前の空き容量チェック (要件 C)** —
+  リストア実行の確認直前に、**リストア先ドライブの空き容量 vs リストア実データ量**を比較し、
+  (空き − サイズ) がしきい値 (余裕) 未満なら**確認ダイアログに警告行を畳み込む** (警告のみ・続行可)。
+  - **サイズは manifest のバイト数から算出** (UNC 再スキャンなし)。チェック済みセクションの
+    `sections.<k>.summary.totalBytes` ＋ userdata は**選択エントリ (D1) の `byteCount` 合計**。
+  - **空きは対象ユーザの profile ドライブ**を `[System.IO.DriveInfo]` で取得。UNC ソース / 修飾子
+    取得不可 / 各種エラーは **fail-open (チェック省略、リストアは止めない)**。`RestoreExplicitDir`
+    (UNC 可) には DriveInfo しない。
+  - **しきい値は UI＋プロファイルで設定可**: リストア画面に「空き容量しきい値(MB)」フィールド
+    (プロファイル値で seed)、既定 1GB。プロファイルに `restore.freeSpaceMarginBytes` を追加
+    (additive・schemaVersion は 2 のまま、未設定は null-guard で既定 1GB)。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1) ＋ [migration_profile.sample.json](backuper/data/migration_profile.sample.json)
+    のみ (engine / section / main.ps1 変更なし)。
+- backuper v0.47.0: **リストアのバックアップ失敗警告 (要件 B)** —
+  リストア画面で、選択中のバックアップ自体に取得失敗があった場合に色付き警告を表示。read-only で
+  リストアは止めない (警告のみ)。
+  - **チェック済みセクション**の Failed/Partial を集計 (見出し件数と括弧内のセクション名を同一集合
+    から算出するので不整合なし)、さらに **userdata の entry 単位「取得不可」(Failed/Partial/Skipped=
+    missing-source) 件数**も加算。**失敗 or userdata取得不可>0=赤 / 部分のみ=アンバー / クリーン=非表示**。
+  - 死蔵だった `$script:RestoreCurrentManifest` ＋ userdata 問題件数を取得元選択時 (timestamp / Browse
+    両経路) にキャッシュし `Show-RestoreBackupWarnings` が描画。**取得元変更・セクションのチェック切替で
+    即再評価**。
+  - per-entry の詳細は D1「ユーザデータ選択」ダイアログの状態列でも確認可。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1) のみの変更 (engine / section / プロファイル変更なし)。
+- backuper v0.46.0: **リストアのユーザデータ選択 (D1): エントリ単位の選択リストア** —
+  ローカル運用とは独立した汎用リストア UX 改善の第一歩 (要件 D)。リストア画面にセクション
+  ヘッダ行へ「ユーザデータ選択...」ボタン＋モーダルグリッドを追加し、userdata セクションを
+  **エントリ単位で選択リストア**できるようにした (credentials 選択 UI と同方式)。
+  - 選択は `IncludeEntries` (sourcePath 配列) で [userdata/restore.ps1](backuper/lib/sections/userdata/restore.ps1)
+    へ渡す。**フィルタ自体は既存実装** (:28-33, :94-96) で、UI が値を渡していなかったギャップを埋めるもの
+    (セクション側の変更なし)。
+  - グリッド列: チェック / 元パス / サイズ / 状態。backup 時 Skipped (取得不可) のエントリは
+    選択不可・グレー表示 (要件 B の素地)。取得元 (日時 / Browse) 変更で選択をリセット。
+  - **既存動作不変**: 未選択 (既定) = 全件リストアで従来どおり。[restore_view.ps1](backuper/lib/ui/restore_view.ps1)
+    のみの変更 (engine / プロファイル / 他セクション変更なし)。
 - backuper v0.45.0: **新「ローカル」運用モード (P5): LAN-Prep が役割を env 設定し Backuper を自動起動** —
   ローカル運用自動化の大詰め (エンドツーエンド)。[Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1)
   の成功パスで `FABRIQ_BACKUPER_ROLE` (= -Role) と (menu が host を解決していれば) `FABRIQ_BACKUPER_AUTO_HOST`
