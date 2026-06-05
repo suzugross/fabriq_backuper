@@ -253,6 +253,22 @@ function global:Show-BackuperSessionForm {
     $defaultActionButton = $btnBackup
     if ($PreselectMode -eq 'Restore') { $defaultActionButton = $btnRestore }
 
+    # v0.55.0 (t-0005): when LAN-Prep handed off a role (PreselectMode set), lock
+    # the session to that role's action by disabling the OTHER button, so the
+    # operator cannot mis-click into the wrong mode. source->Backup locks リストア;
+    # target->Restore locks バックアップ. Manual launch (PreselectMode = '') leaves
+    # both enabled. Enter still triggers $defaultActionButton (the enabled role
+    # button); the role banner below explains the lock. FlatStyle keeps a custom
+    # BackColor even when disabled, so we also recolor the locked button to a
+    # neutral gray + dim text so it reads as clearly inactive (not just accent+grey).
+    if ($PreselectMode -eq 'Backup' -or $PreselectMode -eq 'Restore') {
+        $lockedBtn = if ($PreselectMode -eq 'Restore') { $btnBackup } else { $btnRestore }
+        $lockedBtn.Enabled   = $false
+        $lockedBtn.BackColor = $script:bgButton
+        $lockedBtn.ForeColor = $script:fgDim
+        $lockedBtn.Cursor    = [System.Windows.Forms.Cursors]::Default
+    }
+
     # ========================================
     # Common submit scriptblock (parametrised by Mode)
     # ========================================

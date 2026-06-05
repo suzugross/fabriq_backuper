@@ -16,6 +16,14 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.55.0: **LAN-Prep 役割起動時に session 画面のボタンを役割ロック (TM t-0005)** —
+  LAN-Prep の移行元/先選択で Backuper を起動した時 (`PreselectMode`=Backup/Restore)、
+  session_form の**非該当ボタンを無効化 (グレーアウト)** し、オペレータの誤クリックを防止。
+  - source→Backup は「リストア」を、target→Restore は「バックアップ」を無効化
+    (neutral gray + dim text + `Enabled=$false`)。Enter は従来どおり役割側ボタンを実行し、
+    既存の役割バナーが理由を表示。
+  - 手動起動 (`PreselectMode=''`) は両ボタン有効のまま (現状維持)。engine / 選択契約は不変。
+  - 対象: [session_form.ps1](backuper/lib/ui/session_form.ps1)。
 - backuper v0.54.0: **クリーンアップ機能を独立 EXE に分離 (TM t-0001)** —
   バックアップデータのクリーンアップ (移行後に残った backup tree / 集約フォルダ / LAN-Prep フォルダの
   ホスト単位一括削除) を、BackUper 本体から **LAN-Prep と同レイヤーの独立ツール `Fabriq_Cleanup.exe`** に

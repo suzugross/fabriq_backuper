@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-05T23:14:05.1884903+09:00",
+  "updatedAt": "2026-06-05T23:20:18+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -43,10 +43,10 @@
       "id": "t-0005",
       "title": "LANPREP後の自動Backuper起動について",
       "content": "可能であれば、LANPREPにおける移行元・先の選択によって、backupe画面でも押せるボタンを動的に変更してほしい。いまだとバックアップとかリストアがどちらも表示されていると思います。\r\nもちろん今でもEnterを押下したら自動で選択した役割が選択されますが、オペレータが間違えて、ボタンで選んでしまうとも限らないので。",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "実装完了(v0.55.0, 未コミット)。session_form.ps1 で PreselectMode(役割)に応じ非該当ボタンを無効化+グレーアウト(neutral gray/fgDim/Enabled=false/Cursor=Default)。source→Backup はリストア無効, target→Restore はバックアップ無効。手動起動(PreselectMode='')は両方有効, Enter は役割側, 既存役割バナーで理由表示。静的検証OK(括弧55/55,144/144,BOM)。残: 実機で役割別ボタン無効化の確認。",
+      "status": "レビュー待ち",
       "createdAt": "2026-06-05T20:43:49.3791347+09:00",
-      "updatedAt": "2026-06-05T20:46:34.8760663+09:00"
+      "updatedAt": "2026-06-05T23:20:18+09:00"
     }
   ]
 }
