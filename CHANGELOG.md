@@ -28,8 +28,21 @@
     `PickedSections` を harvest し、従来と同一の SectionParams を生成 (manifest / section interface 不変)。
   - 対象ユーザ / handoff / Outlook オプション / 空き容量しきい値(C) / 戻りループ(D6) は温存。
   - 旧モーダル関数 (`Show-UserdataSelectDialog` / `Invoke-Restore{Userdata,Credentials}Select` /
-    `Update-Restore*StatusLabel`) は呼び出し元を全撤去し dead code 化 (別途クリーンアップ予定)。
+    `Update-Restore*StatusLabel`) は呼び出し元を全撤去し dead code 化 → v0.51.1 で撤去。
   - [restore_view.ps1](backuper/lib/ui/restore_view.ps1) のみ (engine / プロファイル変更なし)。
+
+### Removed
+- backuper v0.51.1: **集約UI後の dead code 掃除** — v0.51.0 でモーダル / 別グリッドを単一リストに
+  統合した際に呼び出し元を失った関数・変数・ファイルを撤去 (挙動変化なし)。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1): 旧モーダル 5 関数 (`Show-UserdataSelectDialog` /
+    `Invoke-RestoreUserdataSelect` / `Invoke-RestoreCredentialsSelect` / `Update-RestoreUserdataStatusLabel` /
+    `Update-RestoreCredentialsStatusLabel`、計 356 行) と dead script-vars (`RestoreUserdataButton` /
+    `RestoreCredentialsButton` / `RestoreUserdataStatusLabel` / `RestoreCredentialsStatusLabel` /
+    `RestoreUserdataLastSource` / `RestoreCredentialsLastSource`) を撤去。
+    `RestoreUserdataIncludeTargets` / `RestoreCredentialsIncludeTargets` は引き続き使用のため温存。
+  - `backuper/lib/ui/credentials_select_dialog.ps1` (`Show-CredentialsSelectDialog`) を削除し、
+    main.ps1 のロードリストから除外。
+  - 括弧 366/366 balanced、BOM 維持。静的検証のみ (PowerShell 実行不可環境)。
 
 ### Added
 - backuper v0.50.0: **部分リストア後のやりなおしループ (要件 D6)** —
