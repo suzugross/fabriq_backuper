@@ -1894,3 +1894,25 @@ function global:Write-CleanupHistory {
     return $null
 }
 
+# v0.54.0 (t-0001): moved here from cleanup_view.ps1 so BOTH the restore-side D4
+# (Invoke-RestoreEntryDelete) and the standalone cleanup tool resolve it from the
+# engine. Returns @{ Subtree=[]; Protected=[] } that Remove-CleanupArtifact must
+# never delete: fabriq main subtree (deny everything under it) + repo / backuper
+# root / the Backup root itself (exact + ancestor deny; deep children like
+# Backup\<OldPC>\<ts> stay deletable). Uses $script:BackuperRoot / $script:FabriqRoot.
+function global:Get-CleanupProtectedRoots {
+    $repoRoot = $null
+    if (-not [string]::IsNullOrWhiteSpace($script:BackuperRoot)) {
+        $repoRoot = Split-Path -Parent $script:BackuperRoot
+    }
+    $protected = @()
+    if (-not [string]::IsNullOrWhiteSpace($script:BackuperRoot)) {
+        $protected += $script:BackuperRoot
+        $protected += (Join-Path $script:BackuperRoot 'Backup')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($repoRoot)) { $protected += $repoRoot }
+    $subtree = @()
+    if (-not [string]::IsNullOrWhiteSpace($script:FabriqRoot)) { $subtree += $script:FabriqRoot }
+    return @{ Subtree = $subtree; Protected = $protected }
+}
+

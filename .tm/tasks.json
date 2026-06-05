@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-05T20:47:23.5267344+09:00",
+  "updatedAt": "2026-06-05T22:58:55+09:00",
   "tasks": [
     {
       "id": "t-0001",
       "title": "バックアップデータのクリーンアップについて",
       "content": "これをbackuper本体に統合すると、機能が混雑してオペレータが混乱しそうなので\r\nLANPREPと同じく、別exeとして分離させたい。\r\n機能自体は全く同一で、HOSTLISTに該当する端末のバックアップデータを削除する専用GUI。",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "C1-C3 完了+実機スモーク修正をコミット(v0.54.0)。C1=Get-CleanupProtectedRoots を common.ps1 へ移設。C2=独立ツール(fabriq_cleanup.ps1 + tools/cleanup + dev/launcher launcher一式, Fabriq_Cleanup.exe ビルド済)。C3=本体から cleanup view/モード撤去。実機(SZK-TEST01)スモークで2点修正: (a)1行 hostlist が @() 未配列化で空扱い→@(Get-FabriqHostlist)で解消, (b)現PC名突合で対象ホスト自動選択(NewPCName優先)を追加。D4/backup マーカー不変。残: 実機で自動選択の最終確認後に完了へ。",
+      "status": "レビュー待ち",
       "createdAt": "2026-06-05T20:33:57.2437923+09:00",
-      "updatedAt": "2026-06-05T20:34:38.9546126+09:00"
+      "updatedAt": "2026-06-05T22:58:55+09:00"
     },
     {
       "id": "t-0002",

@@ -1,43 +1,30 @@
 ﻿# ============================================================
-# FabriqBackUper - Cleanup View (v0.34.0)
+# Fabriq Cleanup - Cleanup View (standalone, v0.54.0)
 # Post-migration bulk deletion of leftover artifacts for the
 # selected host: backup trees, Desktop operator-handoff folders,
-# and the LAN-Prep folder (C:\FabriqMigration).
+# and the LAN-Prep folder.
 #
-# Discovery / recognition / path-safety / revert-gating all live
-# in backuper/common.ps1 (Get-CleanupCandidate, Remove-CleanupArtifact,
-# Test-CleanupPathSafe, Test-LanPrepReverted, Write-CleanupHistory).
-# This file owns only the WinForms surface (Japanese UI is allowed
-# per CLAUDE.md rule 6; this file is UTF-8 with BOM per rule 5).
+# Relocated from backuper/lib/ui/cleanup_view.ps1 (v0.34.0) into the
+# standalone Fabriq Cleanup tool (t-0001). Adaptations vs the original
+# in-app view:
+#   - a 対象ホスト combo is added to the header (the standalone tool has
+#     no session form to pre-select $script:CurrentHost); choosing a host
+#     sets $script:CurrentHost from $script:HostRows and re-scans.
+#   - the "< 戻る" button closes the tool's own form (no Switch-View).
+#
+# Discovery / recognition / path-safety / revert-gating + the safety
+# guard Get-CleanupProtectedRoots all live in backuper/common.ps1, which
+# fabriq_cleanup.ps1 dot-sources (single source of truth, also used by the
+# Backuper's restore-side delete). This file owns only the WinForms surface.
+# Japanese UI is allowed (CLAUDE.md rule 6); this file is UTF-8 with BOM (rule 5).
 # ============================================================
 
 $script:CleanupGrid        = $null
+$script:CleanupHostCombo   = $null
 $script:CleanupAckCheck    = $null
 $script:CleanupStatusLabel = $null
 $script:CleanupDeleteButton = $null
 $script:CleanupCandidates  = @()
-
-function global:Get-CleanupProtectedRoots {
-    # Returns @{ Subtree = [string[]]; Protected = [string[]] } describing
-    # paths that Remove-CleanupArtifact must never delete.
-    #   Subtree  : fabriq main (never touch anything beneath it)
-    #   Protected: repo / backuper root / the Backup root itself (exact +
-    #              ancestor deny; deep children like Backup\<OldPC>\<ts>
-    #              remain deletable)
-    $repoRoot = $null
-    if (-not [string]::IsNullOrWhiteSpace($script:BackuperRoot)) {
-        $repoRoot = Split-Path -Parent $script:BackuperRoot
-    }
-    $protected = @()
-    if (-not [string]::IsNullOrWhiteSpace($script:BackuperRoot)) {
-        $protected += $script:BackuperRoot
-        $protected += (Join-Path $script:BackuperRoot 'Backup')
-    }
-    if (-not [string]::IsNullOrWhiteSpace($repoRoot)) { $protected += $repoRoot }
-    $subtree = @()
-    if (-not [string]::IsNullOrWhiteSpace($script:FabriqRoot)) { $subtree += $script:FabriqRoot }
-    return @{ Subtree = $subtree; Protected = $protected }
-}
 
 function global:New-CleanupView {
     $panel = New-Object System.Windows.Forms.Panel
@@ -48,8 +35,32 @@ function global:New-CleanupView {
     $btnBack.Add_Click({ $script:MainForm.Close() })
     $panel.Controls.Add($btnBack)
 
-    $title = New-StyledLabel -Text "クリーンアップ" -X 110 -Y 12 -Width 300 -Height 24 -Font $script:fontLarge
+    $title = New-StyledLabel -Text "クリーンアップ" -X 110 -Y 12 -Width 160 -Height 24 -Font $script:fontLarge
     $panel.Controls.Add($title)
+
+    # ---- host selection (standalone: no session form pre-selects the host) ----
+    $hostLbl = New-StyledLabel -Text "対象ホスト:" -X 286 -Y 16 -Width 84 -Height 20 -Font $script:fontBold -FgColor $script:fgHeader
+    $panel.Controls.Add($hostLbl)
+
+    $hostCombo = New-StyledComboBox -X 372 -Y 12 -Width 424 -Height 24
+    foreach ($h in @($script:HostRows)) {
+        if ($null -eq $h) { continue }
+        $old = "$($h.OldPCname)"
+        $new = "$($h.NewPCname)"
+        $disp = if (-not [string]::IsNullOrWhiteSpace($new)) { "$old  ->  $new" } else { $old }
+        [void]$hostCombo.Items.Add($disp)
+    }
+    $hostCombo.Add_SelectedIndexChanged({
+        $idx = $script:CleanupHostCombo.SelectedIndex
+        if ($idx -ge 0 -and $idx -lt @($script:HostRows).Count) {
+            $script:CurrentHost = @($script:HostRows)[$idx]
+        } else {
+            $script:CurrentHost = $null
+        }
+        Update-CleanupGrid
+    })
+    $script:CleanupHostCombo = $hostCombo
+    $panel.Controls.Add($hostCombo)
 
     $desc = New-StyledLabel `
         -Text "移行後に残ったバックアップ / 集約フォルダ / LAN-Prep フォルダを一括削除します。これらには平文の個人データが含まれます。" `
@@ -135,7 +146,27 @@ function global:New-CleanupView {
 }
 
 function global:Show-CleanupView {
-    # on-show hook invoked by Switch-View
+    # on-show hook (called once after the form is built).
+    # Auto-select this PC's host row: post-migration cleanup normally runs on the
+    # NEW/target PC, so match NewPCName first, then OldPCname (Resolve-HostByComputerName
+    # with PreferMode '' / 'Restore' tries NewPCName -> OldPCname). The operator can
+    # still change the combo. Setting SelectedIndex fires SelectedIndexChanged, which
+    # sets $script:CurrentHost and runs Update-CleanupGrid.
+    if ($null -ne $script:CleanupHostCombo -and $script:CleanupHostCombo.Items.Count -gt 0 -and
+        $script:CleanupHostCombo.SelectedIndex -lt 0 -and
+        (Get-Command Resolve-HostByComputerName -ErrorAction SilentlyContinue)) {
+        $rows = @($script:HostRows)
+        $match = Resolve-HostByComputerName -HostList $rows -ComputerName $env:COMPUTERNAME -PreferMode 'Restore'
+        if ($null -ne $match) {
+            $idx = [array]::IndexOf($rows, $match)
+            if ($idx -ge 0 -and $idx -lt $script:CleanupHostCombo.Items.Count) {
+                Show-Info "Auto-selected host for this PC ('$env:COMPUTERNAME'): $($match.OldPCname) -> $($match.NewPCname)"
+                $script:CleanupHostCombo.SelectedIndex = $idx   # fires SelectedIndexChanged -> Update-CleanupGrid
+                return
+            }
+        }
+        Show-Info "No hostlist row matches this PC ('$env:COMPUTERNAME'); select a host manually."
+    }
     Update-CleanupGrid
 }
 
@@ -145,7 +176,7 @@ function global:Update-CleanupGrid {
 
     $script:CleanupGrid.Rows.Clear()
     if ([string]::IsNullOrWhiteSpace($oldPc)) {
-        $script:CleanupStatusLabel.Text = "対象ホストが未選択です。"
+        $script:CleanupStatusLabel.Text = "上の『対象ホスト』を選択してください。"
         if ($null -ne $script:CleanupDeleteButton) { $script:CleanupDeleteButton.Enabled = $false }
         return
     }
@@ -241,7 +272,7 @@ function global:Invoke-CleanupDelete {
         if ($row.Cells['sel'].Value -eq $true) { $selected.Add($c) }
     }
     if ($selected.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("削除対象が選択されていません。", "Fabriq BackUper",
+        [System.Windows.Forms.MessageBox]::Show("削除対象が選択されていません。", "Fabriq Cleanup",
             [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
     }
@@ -275,7 +306,7 @@ function global:Invoke-CleanupDelete {
         return
     }
 
-    # protected roots for the safety guard
+    # protected roots for the safety guard (from common.ps1)
     $roots = Get-CleanupProtectedRoots
 
     $deleted = 0; $failed = 0; $skipped = 0
@@ -306,7 +337,7 @@ function global:Invoke-CleanupDelete {
         if ($logPath) { $msg += "`n`n全ログ: $logPath" }
     }
     $icon = if ($failed -gt 0) { [System.Windows.Forms.MessageBoxIcon]::Warning } else { [System.Windows.Forms.MessageBoxIcon]::Information }
-    [System.Windows.Forms.MessageBox]::Show($msg, "Fabriq BackUper - クリーンアップ",
+    [System.Windows.Forms.MessageBox]::Show($msg, "Fabriq Cleanup - クリーンアップ",
         [System.Windows.Forms.MessageBoxButtons]::OK, $icon) | Out-Null
 
     Update-CleanupGrid
@@ -320,7 +351,7 @@ function global:Show-CleanupConfirmDialog {
         [Parameter(Mandatory = $true)][string]$Expected
     )
     $dlg = New-Object System.Windows.Forms.Form
-    Set-FormStyle -Form $dlg -Title 'Fabriq BackUper - 削除の確認' -Width 520 -Height 280
+    Set-FormStyle -Form $dlg -Title 'Fabriq Cleanup - 削除の確認' -Width 520 -Height 280
     $dlg.KeyPreview = $true
 
     $lbl = New-StyledLabel -Text $Summary -X 20 -Y 16 -Width 470 -Height 150 -FgColor $script:bgDelete
@@ -345,7 +376,7 @@ function global:Show-CleanupConfirmDialog {
             $result.Ok = $true; $dlg.Close()
         }
         else {
-            [System.Windows.Forms.MessageBox]::Show("ホスト名が一致しません。", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBox]::Show("ホスト名が一致しません。", "Fabriq Cleanup",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         }
     })

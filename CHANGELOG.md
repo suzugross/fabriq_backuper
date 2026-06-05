@@ -16,6 +16,32 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.54.0: **クリーンアップ機能を独立 EXE に分離 (TM t-0001)** —
+  バックアップデータのクリーンアップ (移行後に残った backup tree / 集約フォルダ / LAN-Prep フォルダの
+  ホスト単位一括削除) を、BackUper 本体から **LAN-Prep と同レイヤーの独立ツール `Fabriq_Cleanup.exe`** に
+  分離。本体 UI から「クリーンアップ」モードを外し、操作画面を簡素化。
+  - **新ツール (LAN-Prep 構成を踏襲・common.ps1 を vendoring せず dot-source)**:
+    [fabriq_cleanup.ps1](fabriq_cleanup.ps1) (repo 直下エントリ) ＋
+    [tools/cleanup/lib/cleanup_view.ps1](tools/cleanup/lib/cleanup_view.ps1) (本体から移設＋**対象ホスト
+    コンボ併設**で standalone 化) ＋ [Launcher_Cleanup.cs](dev/launcher/Launcher_Cleanup.cs) /
+    [app_cleanup.manifest](dev/launcher/app_cleanup.manifest) (**asInvoker**＝admin 強制なし) /
+    [build_cleanup.ps1](dev/launcher/build_cleanup.ps1) (csc ビルド)。
+  - **クリーンアップ・エンジンは common.ps1 に残置** (Get-CleanupCandidate / Remove-CleanupArtifact /
+    Test-CleanupPathSafe / New-CleanupMarker / Write-CleanupHistory 等)。BackUper の backup マーカー記録と
+    リストア側 D4 (ユーザデータ削除) が引き続き使用するため。新ツールは同じ common.ps1 を dot-source。
+  - **C1 (D4 保護)**: `Get-CleanupProtectedRoots` を cleanup_view.ps1 から **common.ps1 へ移設** (D4 と
+    新ツールの双方がエンジンから解決)。
+  - **C3 (本体撤去)**: `backuper/lib/ui/cleanup_view.ps1` 削除、main.ps1 のロード、main_form.ps1 の
+    `Cleanup` ValidateSet ＋ `Views['Cleanup']`、session_form.ps1 の「クリーンアップ」ボタン＋ハンドラを撤去。
+    エンジン・backup マーカー・D4 は不変。
+  - **対象ホスト自動選択**: 起動時に `$env:COMPUTERNAME` を hostlist と突合し、NewPCName 優先
+    (無ければ OldPCName) で一致行を自動選択＋候補スキャン (`Resolve-HostByComputerName` 再利用)。
+    cleanup は移行後の新 PC で動かす前提のため NewPCName を優先。operator はコンボで変更可。
+  - **1行 hostlist の取りこぼし対策**: `@(Get-FabriqHostlist …)` で配列化し `.Count` を安定化
+    (PS5.1 で単一要素戻り値が scalar に unwrap され「1件あるのに 0件扱い」になる罠の回避)。
+    hostlist パスと cold-load 行数の診断ログも追加。
+  - 配備: `Fabriq_Cleanup.exe` を `dev/launcher/build_cleanup.ps1` でビルド (csc 必要)。`.ps1` は
+    powershell から直接実行可。
 - backuper v0.52.0: **リストア前の空き容量チェックを「実データ比較＋ブロック」に作り直し (要件 必須1)** —
   v0.48.0 の「しきい値超で警告のみ (続行可)」を廃止し、**容量不足なら リストアを中止 (ブロック)** に変更。
   - 判定式: **`空き容量 − 選択リストアデータ ≥ 10GB` で許可、未満はブロック**。ローカル運用ではバックアップ

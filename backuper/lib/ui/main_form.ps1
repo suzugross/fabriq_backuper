@@ -55,7 +55,7 @@ function Start-FabriqBackuperGui {
         # Phase 3C: caller (main.ps1) pre-selects mode + host index via
         # Show-BackuperSessionForm. The unified session form replaces the
         # legacy ModeSelectView so these parameters are now required.
-        [Parameter(Mandatory = $true)][ValidateSet('Backup','Restore','Cleanup')][string]$InitialMode,
+        [Parameter(Mandatory = $true)][ValidateSet('Backup','Restore')][string]$InitialMode,
         [Parameter(Mandatory = $true)][int]$InitialHostIndex
     )
 
@@ -131,7 +131,6 @@ function Start-FabriqBackuperGui {
     $script:Views['Backup']   = New-BackupView
     $script:Views['Restore']  = New-RestoreView
     $script:Views['Progress'] = New-ProgressView
-    $script:Views['Cleanup']  = New-CleanupView
 
     foreach ($k in $script:Views.Keys) {
         $script:Views[$k].Dock = "Fill"
