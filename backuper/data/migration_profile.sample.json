@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "profileName": "OLD-PC-01 -> NEW-PC-01",
+  "schemaVersion": 2,
+  "profileName": "OLD-PC-01 -> NEW-PC-01 (local mode)",
   "network": {
     "source": {
       "interfaceAlias": "イーサネット",
@@ -20,9 +20,10 @@
     "enableFileAndPrinterSharing": true
   },
   "share": {
+    "_comment": "localPath '<AUTO>' = この PC の <BackuperRoot>\\Backup に自動派生 (移行先が共有するフォルダ)。絶対パスを書くと上書き優先。",
     "hostRole": "target",
-    "shareName": "FabriqMigration",
-    "localPath": "C:\\FabriqMigration",
+    "shareName": "FabriqBackup",
+    "localPath": "<AUTO>",
     "smbPermissions": [
       { "principal": "Everyone", "access": "Full" }
     ],
@@ -31,12 +32,14 @@
     ]
   },
   "backuper": {
-    "backupRootUnc": "\\\\192.168.250.20\\FabriqMigration",
+    "_comment": "backupRootUnc '<AUTO>' = \\\\<network.target.ipAddress>\\<share.shareName> に自動派生 (移行元の保存先)。リテラル UNC を書くと上書き優先。",
+    "backupRootUnc": "<AUTO>",
     "uncUsername": "",
     "autoConnectOnLaunch": true
   },
   "rollback": {
-    "snapshotPath": "C:\\FabriqMigration\\_rollback_snapshot.json",
+    "_comment": "snapshotPath '<AUTO>' = <BackuperRoot>\\_lanprep\\_rollback_snapshot.json に自動派生 (ローカル・共有外)。",
+    "snapshotPath": "<AUTO>",
     "revertNetwork": true,
     "removeShare": true
   }

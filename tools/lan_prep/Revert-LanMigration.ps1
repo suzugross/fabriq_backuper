@@ -28,6 +28,9 @@ if (-not $ProfilePath) {
 . (Join-Path $script:LanPrepRoot 'lib\network_config.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\share_setup.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\rollback_snapshot.ps1')
+# v0.40.0: shared migration-path resolver (so the informational note below
+# shows the derived local path instead of the '<AUTO>' placeholder).
+. (Join-Path $script:RepoRoot 'backuper\lib\migration_paths.ps1')
 
 function Test-LanPrepIsAdmin {
     $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -59,6 +62,18 @@ if (Test-Path -LiteralPath $ProfilePath) {
         $migProfile = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
         Write-Host "[warn] Failed to parse profile (continuing with snapshot-only revert): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# v0.40.0: resolve local-mode paths so $migProfile.share.localPath shows the
+# derived <backuper>\Backup in the note below. Revert's ACTIONS use the
+# snapshot file (-SnapshotPath) + share.shareName, so this only affects the
+# displayed note, but keeps all four profile-reading entry points consistent.
+if ($null -ne $migProfile) {
+    try {
+        $null = Resolve-MigrationPaths -MigProfile $migProfile -BackuperRoot (Join-Path $script:RepoRoot 'backuper')
+    } catch {
+        Write-Host "[warn] Migration path resolution failed (note may show raw value): $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 

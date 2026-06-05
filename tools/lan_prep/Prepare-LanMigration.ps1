@@ -46,6 +46,10 @@ if (-not $ProfilePath) {
 . (Join-Path $script:LanPrepRoot 'lib\share_setup.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\firewall.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\rollback_snapshot.ps1')
+# v0.40.0: shared migration-path resolver (same function the Backuper
+# process uses). It lives under backuper\lib so both processes share one
+# source of truth; it has no common.ps1 dependency, so LAN-Prep stays lean.
+. (Join-Path $script:RepoRoot 'backuper\lib\migration_paths.ps1')
 
 function Test-LanPrepIsAdmin {
     $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -66,8 +70,9 @@ if (-not (Test-Path -LiteralPath $ProfilePath)) {
 
 $migProfile = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
 
-if ($migProfile.schemaVersion -ne 1) {
-    Write-Host "[FATAL] Unsupported schemaVersion: $($migProfile.schemaVersion). Expected 1." -ForegroundColor Red
+if ($migProfile.schemaVersion -ne 2) {
+    Write-Host "[FATAL] Unsupported schemaVersion: $($migProfile.schemaVersion). Expected 2." -ForegroundColor Red
+    Write-Host "        (v0.40.0 hard-cut to the local operation model; re-create from migration_profile.sample.json)" -ForegroundColor DarkGray
     exit 1
 }
 
@@ -77,6 +82,13 @@ if ($jsonText -match '"\s*password\s*"') {
     Write-Host "[FATAL] Profile contains a 'password' key. Passwords must not be stored in JSON." -ForegroundColor Red
     exit 1
 }
+
+# v0.40.0: derive local-mode paths (share.localPath -> this PC's
+# <backuper>\Backup ; backuper.backupRootUnc -> \\<target-ip>\<share> ;
+# rollback.snapshotPath -> <backuper>\_lanprep\...). The share is then
+# created at, and the next-step hints point at, the derived locations.
+$script:LocalBackuperRoot = Join-Path $script:RepoRoot 'backuper'
+$null = Resolve-MigrationPaths -MigProfile $migProfile -BackuperRoot $script:LocalBackuperRoot
 
 $netConfig = if ($Role -eq 'source') { $migProfile.network.source } else { $migProfile.network.target }
 

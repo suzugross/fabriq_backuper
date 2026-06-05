@@ -75,7 +75,7 @@ if (Test-Path $_verFile) {
 #
 # Failure policy:
 #   - Profile file absent           -> silent, $script:MigrationProfile stays $null
-#   - schemaVersion != 1            -> warning, ignore (treat as absent)
+#   - schemaVersion != 2            -> warning, ignore (treat as absent)
 #   - JSON parse failure            -> warning, ignore
 #   - File contains a 'password' key -> FATAL (security: passwords belong in
 #                                       the interactive UNC dialog only,
@@ -93,12 +93,12 @@ if (Test-Path -LiteralPath $_profilePath) {
             return
         }
         $_profileObj = $_jsonText | ConvertFrom-Json
-        if ($_profileObj.schemaVersion -eq 1) {
+        if ($_profileObj.schemaVersion -eq 2) {
             $script:MigrationProfile = $_profileObj
             Show-Info "Migration profile loaded: $($_profileObj.profileName)"
         }
         else {
-            Show-Warning "Migration profile schemaVersion=$($_profileObj.schemaVersion) (expected 1). Profile ignored."
+            Show-Warning "Migration profile schemaVersion=$($_profileObj.schemaVersion) (expected 2). Profile ignored."
         }
     }
     catch {
@@ -114,6 +114,7 @@ $global:AutoPilotWaitSec = 0
 
 # Load FabriqBackUper libraries.
 $libsToLoad = @(
+    'lib\migration_paths.ps1',         # v0.40.0: shared migration-path resolver (local mode)
     'lib\hostlist_reader.ps1',
     'lib\manifest_aggregator.ps1',
     'lib\ui\console_menu.ps1',         # legacy console UI, kept as fallback
@@ -144,6 +145,22 @@ foreach ($rel in $libsToLoad) {
         Write-Host "        $($_.ScriptStackTrace)" -ForegroundColor DarkGray
         Read-Host "Press Enter to exit"
         return
+    }
+}
+
+# v0.40.0: resolve the new "local" operation-model paths from the migration
+# profile (share.localPath -> <BackuperRoot>\Backup ; backuper.backupRootUnc
+# -> \\<target-ip>\<shareName> ; rollback.snapshotPath -> <BackuperRoot>\_lanprep\...).
+# Done here, after lib\migration_paths.ps1 is dot-sourced. The backup/restore
+# views read the (now-derived) profile fields unchanged. Portable mode (no
+# profile) is unaffected. Literal profile values still win (escape hatch).
+if ($null -ne $script:MigrationProfile) {
+    try {
+        $null = Resolve-MigrationPaths -MigProfile $script:MigrationProfile -BackuperRoot $script:FabriqBackuperRoot
+        Show-Info "Migration dest resolved: $($script:MigrationProfile.backuper.backupRootUnc)"
+    }
+    catch {
+        Show-Warning "Migration path resolution failed (using profile values as-is): $($_.Exception.Message)"
     }
 }
 
@@ -242,11 +259,29 @@ if ($null -eq $coldHostlist -or $coldHostlist.Count -eq 0) {
     return
 }
 
+# v0.43.0 (P3): automation handoff. LAN-Prep (P5) sets these env vars before
+# launching Backuper; they cross the self-spawn boundary intact. ROLE maps to
+# the session mode (source->Backup, target->Restore) and AUTO_HOST pre-selects
+# the migration pair by OldPCname. The passphrase is NEVER passed via env --
+# the operator still types it into the (pre-filled) session form.
+$autoRole = "$env:FABRIQ_BACKUPER_ROLE".Trim().ToLower()
+$autoHost = "$env:FABRIQ_BACKUPER_AUTO_HOST".Trim()
+$preselectMode = switch ($autoRole) {
+    'source' { 'Backup' }
+    'target' { 'Restore' }
+    default  { '' }
+}
+if ($preselectMode -ne '') {
+    Show-Info "Automation handoff: role=$autoRole -> mode=$preselectMode ; host=$autoHost"
+}
+
 $sess = Show-BackuperSessionForm `
-    -HostList         $coldHostlist `
-    -VerifyTokenPath  $verifyPath `
-    -CurrentPCName    $env:COMPUTERNAME `
-    -MigrationProfile $script:MigrationProfile
+    -HostList            $coldHostlist `
+    -VerifyTokenPath     $verifyPath `
+    -CurrentPCName       $env:COMPUTERNAME `
+    -MigrationProfile    $script:MigrationProfile `
+    -PreselectMode       $preselectMode `
+    -PreselectOldPcName  $autoHost
 
 if ($sess.Cancelled) {
     Show-Info "Session cancelled. Exiting."

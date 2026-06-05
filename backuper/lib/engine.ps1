@@ -288,6 +288,21 @@ function Invoke-BackuperBackupCore {
         if ($r.Status -eq 'Partial') { $overall = 'Partial' }
     }
 
+    # v0.41.0 (P1): drop a passive backup-completion flag at the destination
+    # ROOT (in the local operation model this is the target's shared
+    # <BackuperRoot>\Backup) so the restore side (P2) can poll for it and
+    # auto-select this backup. Best-effort; only on a non-Failed backup. No
+    # consumer yet -- this is the producing half of the local-mode handshake.
+    if ($overall -ne 'Failed') {
+        $null = New-BackupCompleteFlag `
+            -RootDir $rootDir `
+            -OldPcName $SelectedHost.OldPCname `
+            -NewPcName $(if ($SelectedHost.PSObject.Properties.Name -contains 'NewPCname') { "$($SelectedHost.NewPCname)" } else { '' }) `
+            -Timestamp $timestamp `
+            -Status $overall `
+            -BackuperVersion $BackuperVersion
+    }
+
     return [PSCustomObject]@{
         Status         = $overall
         Message        = "Backup written to $aggregateDir"

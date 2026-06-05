@@ -53,6 +53,13 @@ $script:RestoreOutlookAttemptStrategyBCheck = $null
 # across Documents and PST folders. Default ON. When OFF, all sections
 # behave exactly as in v0.24.5 (legacy emit locations).
 $script:RestoreOperatorHandoffCheck = $null
+# v0.42.0 (P2): backup-arrival poll. The restore view polls the local Backup
+# root for the _backup_complete.json flag that the source writes over the
+# share (local operation model) and auto-selects the named backup.
+$script:RestorePollTimer    = $null
+$script:RestoreWaitActive   = $false
+$script:RestoreWaitBaseline = $null   # placedAt of any flag present at wait-start (stale guard)
+$script:RestoreWaitButton   = $null
 
 function New-RestoreView {
     $panel = New-Object System.Windows.Forms.Panel
@@ -125,6 +132,18 @@ function New-RestoreView {
         }
     })
     $panel.Controls.Add($btnUncConnect)
+
+    # v0.42.0 (P2): backup-arrival wait toggle + poll timer. The manual toggle
+    # is always available; Show-RestoreView also auto-starts the wait when the
+    # host has 0 backups yet. The poll fires on a NEWER flag for this host and
+    # auto-selects the named timestamp (operator still clicks リストア開始).
+    $script:RestoreWaitButton = New-StyledButton -Text "到着を待つ" -X 806 -Y 64 -Width 98 -Height 28
+    $script:RestoreWaitButton.Add_Click({ Invoke-RestoreWaitToggle })
+    $panel.Controls.Add($script:RestoreWaitButton)
+
+    $script:RestorePollTimer = New-Object System.Windows.Forms.Timer
+    $script:RestorePollTimer.Interval = 2000
+    $script:RestorePollTimer.Add_Tick({ Invoke-RestoreWaitTick })
 
     $script:RestoreBrowseLabel = New-StyledLabel -Text "" -X 24 -Y 96 -Width 880 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreBrowseLabel)
@@ -295,8 +314,8 @@ function Show-RestoreView {
     # -> restore). Reset BrowseMode and the BrowseLabel style here so the
     # form starts in a clean timestamp-mode state regardless of how the
     # previous session ended.
+    Stop-RestoreWait   # v0.42.0: cancel any poll from a prior session / re-entry
     $combo = $script:RestoreTimestampCombo
-    $combo.Items.Clear()
     $combo.Enabled = $true
     $script:RestoreBrowseMode = $false
     if ($null -ne $script:RestoreBrowseLabel) {
@@ -305,30 +324,13 @@ function Show-RestoreView {
         $script:RestoreBrowseLabel.ForeColor = $script:fgDim
     }
 
-    $additionalRoots = @()
-    if ($null -ne $script:MigrationProfile) {
-        if ($null -ne $script:MigrationProfile.share -and `
-            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.share.localPath)) {
-            $additionalRoots += $script:MigrationProfile.share.localPath
-        }
-        if ($null -ne $script:MigrationProfile.backuper -and `
-            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.backupRootUnc)) {
-            $additionalRoots += $script:MigrationProfile.backuper.backupRootUnc
-        }
-    }
-
-    $entries = @(Get-BackupTimestamps `
-        -BackuperRoot $script:BackuperRoot `
-        -OldPcName    $script:CurrentHost.OldPCname `
-        -AdditionalRoots $additionalRoots)
-    $script:RestoreTimestampEntries = $entries
-    foreach ($e in $entries) {
-        [void]$combo.Items.Add("$($e.Name)  [$($e.Source)]")
-    }
-    if ($entries.Count -gt 0) {
+    $count = Update-RestoreTimestampCombo
+    if ($count -gt 0) {
         $combo.SelectedIndex = 0
     } else {
         $script:RestoreManifestLabel.Text = "($($script:CurrentHost.OldPCname) のバックアップが見つかりません (local / share / UNC のいずれにも存在せず)。別の場所にある場合は [バックアップを参照] を使用してください)"
+        # v0.42.0 (P2): nothing to restore yet -> auto-wait for arrival.
+        Start-RestoreWait -Auto
     }
 
     $cont = $script:RestoreSectionContainer
@@ -360,6 +362,109 @@ function Show-RestoreView {
     Update-RestoreUserComboItems
 }
 
+# ============================================================
+# v0.42.0 (P2): backup-arrival poll (consumes the P1 _backup_complete.json)
+# ============================================================
+
+function Update-RestoreTimestampCombo {
+    # (Re)discovers backups for the current host across local + profile roots
+    # and repopulates the timestamp combo. Returns the entry count. Shared by
+    # Show-RestoreView (initial) and the wait-poll tick (after a flag lands).
+    if ($null -eq $script:CurrentHost) { return 0 }
+    $combo = $script:RestoreTimestampCombo
+    $combo.Items.Clear()
+    $additionalRoots = @()
+    if ($null -ne $script:MigrationProfile) {
+        if ($null -ne $script:MigrationProfile.share -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.share.localPath)) {
+            $additionalRoots += $script:MigrationProfile.share.localPath
+        }
+        if ($null -ne $script:MigrationProfile.backuper -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.backupRootUnc)) {
+            $additionalRoots += $script:MigrationProfile.backuper.backupRootUnc
+        }
+    }
+    $entries = @(Get-BackupTimestamps `
+        -BackuperRoot $script:BackuperRoot `
+        -OldPcName    $script:CurrentHost.OldPCname `
+        -AdditionalRoots $additionalRoots)
+    $script:RestoreTimestampEntries = $entries
+    foreach ($e in $entries) {
+        [void]$combo.Items.Add("$($e.Name)  [$($e.Source)]")
+    }
+    return $entries.Count
+}
+
+function Start-RestoreWait {
+    param([switch]$Auto)
+    if ($null -eq $script:CurrentHost -or $null -eq $script:RestorePollTimer) { return }
+    if ($script:RestoreBrowseMode) { return }
+    # Baseline = placedAt of any flag already present, so we fire only on a
+    # NEWER flag (ignores a stale flag left by a previous migration).
+    $script:RestoreWaitBaseline = $null
+    $existing = Read-BackupCompleteFlag -RootDir (Join-Path $script:BackuperRoot 'Backup')
+    if ($null -ne $existing -and -not [string]::IsNullOrWhiteSpace("$($existing.placedAt)")) {
+        $script:RestoreWaitBaseline = "$($existing.placedAt)"
+    }
+    $script:RestoreWaitActive = $true
+    $script:RestorePollTimer.Start()
+    if ($null -ne $script:RestoreWaitButton) { $script:RestoreWaitButton.Text = "待機停止" }
+    $autoNote = if ($Auto) { " (自動)" } else { "" }
+    $script:RestoreManifestLabel.Text = "バックアップ到着を待機中$autoNote … 移行元のバックアップ完了で自動選択します。"
+}
+
+function Stop-RestoreWait {
+    if ($null -ne $script:RestorePollTimer) { try { $script:RestorePollTimer.Stop() } catch {} }
+    $script:RestoreWaitActive   = $false
+    $script:RestoreWaitBaseline = $null
+    if ($null -ne $script:RestoreWaitButton) { $script:RestoreWaitButton.Text = "到着を待つ" }
+}
+
+function Invoke-RestoreWaitToggle {
+    if ($script:RestoreWaitActive) {
+        Stop-RestoreWait
+        $script:RestoreManifestLabel.Text = "待機を停止しました。"
+    } else {
+        Start-RestoreWait
+    }
+}
+
+function Invoke-RestoreWaitTick {
+    if (-not $script:RestoreWaitActive -or $script:RestoreBrowseMode -or $null -eq $script:CurrentHost) { return }
+    $flag = Read-BackupCompleteFlag -RootDir (Join-Path $script:BackuperRoot 'Backup')
+    if ($null -eq $flag) { return }
+    # Must be for the host we are restoring.
+    if ("$($flag.oldPcName)" -ne "$($script:CurrentHost.OldPCname)") { return }
+    # Must be newer than the baseline captured at wait-start (stale guard).
+    if (-not [string]::IsNullOrWhiteSpace($script:RestoreWaitBaseline)) {
+        try {
+            $rk  = [System.Globalization.DateTimeStyles]::RoundtripKind
+            $inv = [System.Globalization.CultureInfo]::InvariantCulture
+            $b = [datetime]::Parse($script:RestoreWaitBaseline, $inv, $rk)
+            $p = [datetime]::Parse("$($flag.placedAt)", $inv, $rk)
+            if ($p -le $b) { return }
+        } catch { return }   # fail-closed: can't prove the flag is newer -> don't fire
+    }
+    # Re-discover; the new folder should now be visible. If not yet, keep polling.
+    $count = Update-RestoreTimestampCombo
+    if ($count -le 0) { return }
+    $targetIdx = -1
+    for ($i = 0; $i -lt $script:RestoreTimestampEntries.Count; $i++) {
+        if ("$($script:RestoreTimestampEntries[$i].Name)" -eq "$($flag.timestamp)") { $targetIdx = $i; break }
+    }
+    if ($targetIdx -lt 0) { return }   # named timestamp not discoverable yet -> keep polling
+    Stop-RestoreWait
+    $script:RestoreTimestampCombo.SelectedIndex = $targetIdx   # fires handler -> sets RestoreExplicitDir
+    $script:RestoreManifestLabel.Text = "バックアップ到着: $($flag.timestamp) を自動選択しました。内容を確認し [リストア開始] を押してください。"
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            "移行元のバックアップが到着しました。`n`nホスト: $($flag.oldPcName)`n日時: $($flag.timestamp)`n状態: $($flag.status)`n`n自動選択しました。内容を確認のうえ [リストア開始] を押してください。",
+            "バックアップ到着",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    } catch {}
+}
+
 function Update-RestoreUserComboItems {
     $combo = $script:RestoreUserCombo
     if ($null -eq $combo) { return }
@@ -378,6 +483,13 @@ function Get-SelectedRestoreUserProfilePath {
 }
 
 function Invoke-RestoreBrowse {
+    # v0.42.0 (P2): manual Browse = the operator takes explicit control of the
+    # source, so cancel any active backup-arrival wait FIRST. This also closes
+    # the window where the poll timer could fire DURING the open
+    # FolderBrowserDialog modal (RestoreBrowseMode only flips $true after the
+    # dialog closes), which would otherwise mutate the combo + pop a dialog on
+    # top of the open folder picker.
+    Stop-RestoreWait
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = "バックアップフォルダを選択 (manifest.json を含むこと)。UNC の場合は先に [UNC 接続...] で認証してください。"
 

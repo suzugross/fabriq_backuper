@@ -144,5 +144,11 @@ function Start-FabriqBackuperGui {
     Update-HostHeader
     Switch-View $InitialMode
 
+    # v0.42.0 (P2): stop the restore-view poll timer on close (defensive; the
+    # subprocess exits right after, but don't leave a timer armed).
+    $form.Add_FormClosing({
+        if ($null -ne $script:RestorePollTimer) { try { $script:RestorePollTimer.Stop() } catch {} }
+    })
+
     [System.Windows.Forms.Application]::Run($form)
 }

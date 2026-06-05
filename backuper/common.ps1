@@ -1401,6 +1401,66 @@ Save-Report
 }
 
 # ============================================================
+# v0.41.0: Backup-completion flag (local-mode handoff signal, P1)
+#
+# At the end of a non-Failed backup, Invoke-BackuperBackupCore drops this
+# typed JSON flag at the DESTINATION ROOT (in the local operation model the
+# share root = the target's <BackuperRoot>\Backup). It is a PASSIVE signal:
+# the restore side (P2, not yet implemented) polls for it and auto-selects
+# the named backup. Mirrors the New-CleanupMarker write style (best-effort,
+# UTF-8 no-BOM, never throws).
+# ============================================================
+
+$script:BackupCompleteFlagName = '_backup_complete.json'
+
+function global:New-BackupCompleteFlag {
+    # Best-effort write of the backup-completion flag at the destination
+    # root. Never throws; returns $true on success, $false otherwise.
+    param(
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$OldPcName,
+        [string]$NewPcName = '',
+        [Parameter(Mandatory = $true)][string]$Timestamp,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [string]$BackuperVersion = ''
+    )
+    try {
+        if (-not (Test-Path -LiteralPath $RootDir)) { return $false }
+        $flag = [ordered]@{
+            schemaVersion   = 1
+            manifestType    = 'fabriq-backuper-backup-done'
+            oldPcName       = "$OldPcName"
+            newPcName       = "$NewPcName"
+            timestamp       = "$Timestamp"
+            relativePath    = (Join-Path $OldPcName $Timestamp)
+            status          = "$Status"
+            backuperVersion = "$BackuperVersion"
+            placedAt        = (Get-Date).ToString('o')
+            placedByHost    = "$env:COMPUTERNAME"
+        }
+        $path = Join-Path $RootDir $script:BackupCompleteFlagName
+        $json = $flag | ConvertTo-Json -Depth 5
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+        return $true
+    }
+    catch {
+        try { Show-Warning "Backup-complete flag write failed in ${RootDir}: $($_.Exception.Message)" } catch {}
+        return $false
+    }
+}
+
+function global:Read-BackupCompleteFlag {
+    # Reads the backup-completion flag from a destination root, or $null if
+    # absent / unparseable. Consumed by the restore-side poll (P2).
+    param([Parameter(Mandatory = $true)][string]$RootDir)
+    $path = Join-Path $RootDir $script:BackupCompleteFlagName
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try { return (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json) }
+    catch { return $null }
+}
+
+# ============================================================
 # v0.34.0: Artifact cleanup helpers
 #
 # A "cleanup artifact" is a leftover migration folder that may be

@@ -16,6 +16,45 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.43.0: **新「ローカル」運用モード (P3): 役割/ホストの自動連携 (env→mode+host 前選択)** —
+  LAN-Prep (P5) が env でキャリーする役割とホストを Backuper が消費し、セッション画面で
+  **mode (移行元→バックアップ / 移行先→リストア) と対象ホスト行を自動前選択**する第3歩。
+  - **env (self-spawn 継承)**: `FABRIQ_BACKUPER_ROLE` (source|target) → mode、`FABRIQ_BACKUPER_AUTO_HOST`
+    (OldPCname) → hostlist 行前選択。[main.ps1](backuper/main.ps1) がプロファイル読込後に読取り、
+    [session_form.ps1](backuper/lib/ui/session_form.ps1) へ `-PreselectMode`/`-PreselectOldPcName` で渡す。
+  - **session_form**: AUTO_HOST 指定時は OldPCname 一致で行前選択 (既存の COMPUTERNAME=NewPCname
+    自動判定を上書き、未指定時はフォールバック)。パスフレーズ box の Enter 既定動作を role の mode に
+    切替、連携バナーを表示。移行先は Restore 着地後に P2 の 0件自動待機へ自然に接続。
+  - **セキュリティ**: パスフレーズは env で渡さず**オペレータが手入力** (CLAUDE.md 準拠)。完全
+    ハンズフリー (パスフレーズ受渡し) は別途検討。
+  - **既存動作不変**: env 未設定時は従来の手動セッションと完全同一 (前選択引数は既定 '' で no-op)。
+- backuper v0.42.0: **新「ローカル」運用モード (P2): リストア側のバックアップ到着ポーリング＋自動選択** —
+  P1 (完了フラグ) の消費側。リストア画面が自機ローカル `<BackuperRoot>\Backup\_backup_complete.json`
+  (local モードでは移行元が共有越しに書く先) を WinForms `Timer` (2秒) でポーリングし、**新しい
+  完了フラグを検知したら該当バックアップを自動選択**する (リストア実行はオペレータ＝管理表 step9)。
+  - **待機モード突入は2系統** ([restore_view.ps1](backuper/lib/ui/restore_view.ps1)): ①当該ホストの
+    バックアップが0件で `Show-RestoreView` を開くと**自動待機**、②「到着を待つ／待機停止」**手動トグル
+    ボタン**を常設。両系統とも同一の start/stop・ベースライン記録・Tick 発火を共用。
+  - **stale ガード**: 待機開始時に既存フラグの `placedAt` をベースライン記録し、`oldPcName` 一致かつ
+    `placedAt` がベースラインより新しいフラグのみ発火 (過去フラグ・別ホストでは発火しない)。発火時は
+    一覧を再生成し `timestamp` 一致エントリを自動選択 (既存 `SelectedIndexChanged` が `RestoreExplicitDir`
+    を設定)。タイマは発火／手動停止／`Show-RestoreView` 再入／`バックアップを参照` (手動 Browse)／
+    フォーム終了で停止 (リーク防止＋参照ダイアログ表示中の誤発火防止)。datetime 解析失敗時は
+    fail-closed (発火しない) で stale フラグの誤選択を回避。
+  - **新ヘルパー** [common.ps1](backuper/common.ps1) `Read-BackupCompleteFlag` (`Read-CleanupMarker`
+    踏襲)。populate ロジックを `Update-RestoreTimestampCombo` に切出し初期表示と再生成で共用。
+  - **既存動作不変**: 待機 OFF (バックアップ有・手動未操作) 時は従来の手動選択フローと完全同一。
+- backuper v0.41.0: **新「ローカル」運用モード (P1): バックアップ完了フラグの配置** —
+  P0 (移行パス派生) に続く第2歩。バックアップ成功 (非 Failed) の最後に、保存先ルート
+  (local モードでは移行先が共有する `<BackuperRoot>\Backup`) へパッシブな完了フラグ
+  `_backup_complete.json` を配置 ([engine.ps1](backuper/lib/engine.ps1) の `Invoke-BackuperBackupCore`
+  の return 直前)。移行先がこれをポーリング検知し該当バックアップを自動選択する後段 (P2) の信号。
+  - **新ヘルパー** ([common.ps1](backuper/common.ps1) `New-BackupCompleteFlag`、`New-CleanupMarker`
+    踏襲で best-effort・UTF-8 no-BOM・never throws)。フラグ内容: schemaVersion 1 /
+    manifestType `fabriq-backuper-backup-done` / oldPcName / newPcName / timestamp / relativePath /
+    status / backuperVersion / placedAt / placedByHost。
+  - **パッシブ**: 消費者は P2 (未実装)、Failed 時は書かない。ポータブル運用でも無害 (ルート直下の
+    単一ファイルで、`Get-BackupTimestamps` の host サブディレクトリ走査・Cleanup 候補抽出に非干渉)。
 - backuper v0.36.0: **Outlook アカウント設定ビューア (疑似画面 GUI) を operator handoff に同梱** —
   移行先での再設定を支援する軽量・依存ゼロの WinForms ビューア
   ([Show-OutlookAccounts.ps1](backuper/lib/sections/outlook_pop/assets/Show-OutlookAccounts.ps1))。
@@ -65,6 +104,27 @@
     既存 登録.bat / README.txt 更新。
 
 ### Changed
+- backuper v0.40.0: **新「ローカル」運用モードの基盤 (P0): 移行パスのプロファイル派生** —
+  外付けSSD＋専用共有 (`C:\FabriqMigration`) の「リモート」運用を廃し、新旧PCのローカルにアプリを
+  配置して**移行先のアプリ内 `Backup` フォルダを共有**する「ローカル」運用へ移行する第一歩
+  (大規模改修の P0)。`migration_profile` を **schemaVersion 1→2** に更新 (ハードカット。旧 schema 1
+  プロファイルは Backuper では無視・LAN-Prep では FATAL となるため再作成が必要)。
+  - **共有リゾルバ新設** ([migration_paths.ps1](backuper/lib/migration_paths.ps1) の
+    `Resolve-MigrationPaths`): プロファイルの各パスを実行時に派生する単一の真実源。
+    `share.localPath`=`<AUTO>` → `<BackuperRoot>\Backup` (移行先が共有するフォルダ)、
+    `backuper.backupRootUnc`=`<AUTO>` → `\\<network.target.ipAddress>\<share.shareName>` (移行元の保存先)、
+    `rollback.snapshotPath`=`<AUTO>` → `<BackuperRoot>\_lanprep\_rollback_snapshot.json` (共有外・ローカル)。
+    リテラル値を書けば従来どおり優先 (エスケープハッチ)。common.ps1 ではなく軽量 lib に置き、
+    LAN-Prep の common.ps1 非依存を維持。
+  - **Backuper / LAN-Prep の4経路すべてが同一リゾルバを使用**して手書きパスのドリフトを排除:
+    [main.ps1](backuper/main.ps1) (保存先既定)、
+    [Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1) (共有作成先＋次手順 hint)、
+    [fabriq_lanprep.ps1](fabriq_lanprep.ps1) (メニュー Revert の snapshot 解決)、
+    [Revert-LanMigration.ps1](tools/lan_prep/Revert-LanMigration.ps1) (note 表示の派生 localPath)。
+    **共有フォルダ＝移行先のリストア元フォルダ**となり、後段の自動化 (完了フラグ／ポーリング自動選択)
+    の土台になる。backup_view/restore_view の消費側は無改修。
+  - **ポータブル運用は不変** (プロファイル不読込時は `<BackuperRoot>\Backup` 既定のまま)。
+  - sample profile を schema 2 ＋ `<AUTO>` 規約へ更新、`share.shareName` を `FabriqBackup` に改称。
 - backuper v0.39.0: **バックアップ画面のプリンタ初期チェックを「自動復元できるポート」に限定** —
   従来は仮想プリンタ (PDF/XPS/Fax/OneNote/RDP) だけを初期チェックから外し、それ以外は全て
   チェック済みだった。restore が programmatic に再現できるのは TCP/IP 標準ポート・LPR・IP 解決

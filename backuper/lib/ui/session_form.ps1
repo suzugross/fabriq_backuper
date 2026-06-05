@@ -30,7 +30,14 @@ function global:Show-BackuperSessionForm {
         [string]$CurrentPCName = $env:COMPUTERNAME,
         # v0.23.0: optional LAN migration profile. When provided, a banner is
         # shown under the title; otherwise layout is identical to v0.22.x.
-        $MigrationProfile = $null
+        $MigrationProfile = $null,
+        # v0.43.0 (P3): optional automation pre-selection passed from main.ps1
+        # (derived from FABRIQ_BACKUPER_ROLE / FABRIQ_BACKUPER_AUTO_HOST env,
+        # which LAN-Prep sets in P5). PreselectMode = '' / 'Backup' / 'Restore';
+        # PreselectOldPcName = the host row's OldPCname to pre-select. The
+        # passphrase is STILL typed by the operator (never passed via env).
+        [string]$PreselectMode      = '',
+        [string]$PreselectOldPcName = ''
     )
 
     $result = @{
@@ -127,6 +134,18 @@ function global:Show-BackuperSessionForm {
         foreach ($h in $HostList) {
             $newName = if ($h.PSObject.Properties.Name -contains 'NewPCname') { "$($h.NewPCname)" } else { '' }
             if ($newName -eq $CurrentPCName) {
+                $autoSelectedHost = $h
+                break
+            }
+        }
+    }
+    # v0.43.0 (P3): an explicit automation pre-selection wins over the
+    # COMPUTERNAME auto-detect. PreselectOldPcName identifies the migration
+    # pair by its OldPCname (on the target this is the source whose backup we
+    # restore). Empty -> keep the COMPUTERNAME fallback above.
+    if (-not [string]::IsNullOrWhiteSpace($PreselectOldPcName)) {
+        foreach ($h in $HostList) {
+            if ("$($h.OldPCname)" -eq $PreselectOldPcName) {
                 $autoSelectedHost = $h
                 break
             }
@@ -239,11 +258,22 @@ function global:Show-BackuperSessionForm {
         -X 460 -Y $yPos -Width 120 -Height 34
     $form.Controls.Add($btnCleanup)
 
+    # v0.43.0 (P3): which button the passphrase-box Enter triggers. Default is
+    # Backup (unchanged); an automation pre-selection (role->mode) redirects it
+    # to Restore so the operator just types the passphrase and presses Enter to
+    # land on the right screen. Clicking any button still works as before.
+    $defaultActionButton = $btnBackup
+    if ($PreselectMode -eq 'Restore') { $defaultActionButton = $btnRestore }
+
     # ========================================
     # Common submit scriptblock (parametrised by Mode)
     # ========================================
     $doSubmit = {
         param([string]$mode)
+
+        # v0.43.0: validation messages are errors -> ensure the label is red
+        # even if the initial P3 automation hint set it to info-green.
+        $msgLabel.ForeColor = $script:bgDelete
 
         # Host resolution via Row.Tag (stable across sort/filter)
         if ($hostGrid.SelectedRows.Count -eq 0) {
@@ -320,10 +350,11 @@ function global:Show-BackuperSessionForm {
         }
     })
 
-    # Passphrase Enter = Backup (primary action)
+    # Passphrase Enter = the default action (Backup, or Restore under a v0.43.0
+    # P3 automation pre-selection).
     $ppBox.Add_KeyDown({
         if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Return) {
-            $btnBackup.PerformClick()
+            $defaultActionButton.PerformClick()
             $_.Handled = $true
             $_.SuppressKeyPress = $true
         }
@@ -335,6 +366,24 @@ function global:Show-BackuperSessionForm {
             $btnQuit.PerformClick()
         }
     })
+
+    # v0.43.0 (P3): automation pre-selection hint in the message area (replaced
+    # by a validation message if entry fails). Only nudge a blind Enter when the
+    # target host was reliably pre-selected ($autoSelectedHost set via explicit
+    # AUTO_HOST match or COMPUTERNAME auto-detect); otherwise WARN so the
+    # operator picks the host manually instead of submitting the first row.
+    if ($PreselectMode -eq 'Backup' -or $PreselectMode -eq 'Restore') {
+        $roleJp = if ($PreselectMode -eq 'Restore') { '移行先 → リストア' } else { '移行元 → バックアップ' }
+        if ($null -ne $autoSelectedHost) {
+            # Info-green (same as the COMPUTERNAME auto-detect hint), not error-red.
+            $msgLabel.ForeColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+            $msgLabel.Text = "自動連携: $roleJp。対象ホストを選択済み。パスフレーズを入力して Enter。"
+        } else {
+            # Mode known but host NOT confidently identified -> keep the red
+            # error color and tell the operator to select the host manually.
+            $msgLabel.Text = "自動連携: $roleJp。ただし対象ホストを自動特定できません。ホストを手動で選択してください。"
+        }
+    }
 
     $form.Add_Shown({
         $form.Activate()

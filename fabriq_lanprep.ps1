@@ -128,6 +128,7 @@ catch {
 # everything above).
 try {
     . (Join-Path $script:BackuperLib 'common.ps1')
+    . (Join-Path $script:BackuperLib 'lib\migration_paths.ps1')
     . (Join-Path $script:BackuperLib 'lib\ui\theme.ps1')
     . (Join-Path $script:BackuperLib 'lib\ui\fabriq_select_form.ps1')
     . (Join-Path $script:BackuperLib 'lib\hostlist_reader.ps1')
@@ -170,16 +171,29 @@ if (Test-Path -LiteralPath $_profilePath) {
             return
         }
         $_profileObj = $_jsonText | ConvertFrom-Json
-        if ($_profileObj.schemaVersion -eq 1) {
+        if ($_profileObj.schemaVersion -eq 2) {
             $script:MigrationProfile = $_profileObj
             Show-Info "Migration profile loaded: $($_profileObj.profileName)"
         }
         else {
-            Show-Warning "Migration profile schemaVersion=$($_profileObj.schemaVersion) (expected 1). Profile ignored."
+            Show-Warning "Migration profile schemaVersion=$($_profileObj.schemaVersion) (expected 2). Profile ignored."
         }
     }
     catch {
         Show-Warning "Failed to parse migration profile (ignored): $($_.Exception.Message)"
+    }
+}
+
+# v0.40.0: resolve local-mode paths so the menu's Revert can find the
+# (derived) rollback snapshot and any banner shows the derived dest. Same
+# resolver the Backuper process and Prepare-LanMigration.ps1 use, keyed off
+# this PC's local backuper root.
+if ($null -ne $script:MigrationProfile) {
+    try {
+        $null = Resolve-MigrationPaths -MigProfile $script:MigrationProfile -BackuperRoot $script:BackuperLib
+    }
+    catch {
+        Show-Warning "Migration path resolution failed (using profile values as-is): $($_.Exception.Message)"
     }
 }
 
