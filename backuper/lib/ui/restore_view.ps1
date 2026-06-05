@@ -374,6 +374,13 @@ function Show-RestoreView {
     # form starts in a clean timestamp-mode state regardless of how the
     # previous session ended.
     Stop-RestoreWait   # v0.42.0: cancel any poll from a prior session / re-entry
+    # v0.50.0 (D6): reset the userdata entry selection on every (re-)entry so a
+    # return after a partial restore starts from the restored-aware defaults
+    # (restored entries unchecked, Partial re-checked) rather than the stale
+    # prior selection. The combo re-fire below also resets it (D1); this is the
+    # robust guard for the no-change / no-backup edges.
+    $script:RestoreUserdataIncludeTargets = $null
+    Update-RestoreUserdataStatusLabel
     $combo = $script:RestoreTimestampCombo
     $combo.Enabled = $true
     $script:RestoreBrowseMode = $false
@@ -1223,7 +1230,7 @@ function Show-UserdataSelectDialog {
         # leaf id (machine ids are digits). Reject any separator / drive / '..'
         # so a tampered-manifest id can never make the delete target escape the
         # entries root toward the aggregate / Backup root.
-        $entryDir = $null; $restoredStr = ''; $isRestored = $false; $dataDeleted = $false
+        $entryDir = $null; $restoredStr = ''; $isRestored = $false; $dataDeleted = $false; $isComplete = $false
         $entryIdStr = "$($ent.id)"
         $idIsSafeLeaf = (-not [string]::IsNullOrWhiteSpace($entryIdStr)) -and `
                         ($entryIdStr -notmatch '[\\/:]') -and ($entryIdStr -notmatch '\.\.')
@@ -1232,10 +1239,17 @@ function Show-UserdataSelectDialog {
             if (Test-Path -LiteralPath (Join-Path $entryDir '_restored.json')) {
                 $isRestored = $true
                 $restoredStr = '復元済'
+                $markerStatus = ''
                 try {
                     $mk = Get-Content -LiteralPath (Join-Path $entryDir '_restored.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-                    if ($mk.restoredAt) { $restoredStr = '復元済 ' + ([datetime]$mk.restoredAt).ToString('MM/dd HH:mm') }
+                    $markerStatus = "$($mk.status)"
+                    $whenStr = if ($mk.restoredAt) { ' ' + ([datetime]$mk.restoredAt).ToString('MM/dd HH:mm') } else { '' }
+                    if ($markerStatus -eq 'Partial') { $restoredStr = '復元済(部分)' + $whenStr } else { $restoredStr = '復元済' + $whenStr }
                 } catch { }
+                # v0.50.0 (D6): only a fully-complete restore (Done / already
+                # present) counts as done for the resume default; Partial is
+                # incomplete and defaults to CHECKED (re-restore to finish).
+                $isComplete = ($markerStatus -eq 'Done' -or $markerStatus -eq 'AlreadyPresent')
                 if (-not (Test-Path -LiteralPath (Join-Path $entryDir 'data'))) { $dataDeleted = $true; $restoredStr = 'データ削除済' }
             }
         }
@@ -1245,7 +1259,7 @@ function Show-UserdataSelectDialog {
         $checked = $false
         if (-not $isSkipped -and -not $dataDeleted) {
             if ($usePreselect) { $checked = $preselectSet.Contains([string]$ent.sourcePath) }
-            else { $checked = (-not $isRestored) }
+            else { $checked = (-not $isComplete) }   # v0.50.0 (D6): Partial stays checked
         }
         $rowIdx = $grid.Rows.Add($checked, $ent.sourcePath, $sizeStr, $statusStr, $restoredStr)
         $grid.Rows[$rowIdx].Tag = [pscustomobject]@{
@@ -1638,7 +1652,7 @@ operator-facing な設定情報が番号順に集約されています。
     }
 
     Switch-View 'Progress'
-    Initialize-ProgressView -Title "リストア実行中..."
+    Initialize-ProgressView -Title "リストア実行中..." -ReturnView 'Restore'
     Add-ProgressLog "リストア元: $sourceLabel"
     Add-ProgressLog $userSummary
     if ($selectedPrinters.Count -gt 0) {

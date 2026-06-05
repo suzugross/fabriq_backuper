@@ -16,6 +16,21 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.50.0: **部分リストア後のやりなおしループ (要件 D6)** —
+  リストア完了後にリストア画面へ戻り、未済/Partial だけ再リストアしたり、不要データを削除してから
+  再実行できるようにした。従来は完了画面の「完了」=アプリ終了のみで反復不能だった。
+  - **G1 (戻る導線)**: Progress ビューに「リストア画面へ戻る」ボタンを併設 (`Initialize-ProgressView`
+    の新 `-ReturnView` が設定された実行＝リストアのみ表示、`Set-ProgressFinished` で出現)。
+    `Invoke-RestoreStart` は `-ReturnView 'Restore'` を渡す。**バックアップは ReturnView 未設定で
+    従来どおり「完了」=終了のまま不変**。
+  - **G2 (戻り時の状態更新)**: 戻るボタンは `Switch-View 'Restore'` → on-show フック `Show-RestoreView`
+    が走り、combo 再発火で manifest 再キャッシュ・失敗警告 (B) 再評価・ユーザデータ選択リセットが
+    自動。`Show-RestoreView` 冒頭でも選択を明示リセット (堅牢化)。同バックアップが選択済みのまま、
+    ダイアログ再オープンで「復元済」最新表示。リストア後はバックアップが存在するため auto-wait の
+    再アーム・到着ポップアップは発生しない。
+  - **G3 (resume 既定の精緻化)**: 選択ダイアログで marker の `status` を読み、**Done/AlreadyPresent
+    のみ既定で未チェック、Partial は既定チェック** (不完全＝続きを促す)。復元列に「復元済(部分)」表示。
+  - [progress_view.ps1](backuper/lib/ui/progress_view.ps1) ＋ [restore_view.ps1](backuper/lib/ui/restore_view.ps1) のみ (engine / プロファイル変更なし)。要件 A はこの完了分岐点の Success ブランチに後で載せる。
 - backuper v0.49.0: **ユーザデータの復元済みマーカー → 状態表示 → 削除 (要件 D2-D4)** —
   リストアしたエントリにマーカーを残し、リストア画面で復元済/未を表示、復元済みのバックアップ
   データを削除できるようにした。「未済/失敗だけ再リストア (やりなおし)」と「済データの後片付け」が回る。

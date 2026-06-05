@@ -86,14 +86,39 @@ function New-ProgressView {
     $panel.Controls.Add($btnDone)
     $script:ProgressDoneBtn = $btnDone
 
+    # v0.50.0 (D6): optional "return to previous view" button, shown only when
+    # the run was launched with a ReturnView (currently restore). Lets the
+    # operator iterate (re-restore not-yet-done items / delete data) instead of
+    # ending the session. Hidden by default; Set-ProgressFinished reveals it.
+    $btnReturn = New-StyledButton -Text "リストア画面へ戻る" `
+        -X 472 -Y 624 -Width 212 -Height 44
+    $btnReturn.Font = $script:fontLarge
+    $btnReturn.Visible = $false
+    $btnReturn.Enabled = $false
+    $btnReturn.Add_Click({
+        if (-not [string]::IsNullOrWhiteSpace($script:ProgressReturnView)) {
+            Switch-View $script:ProgressReturnView
+        }
+    })
+    $panel.Controls.Add($btnReturn)
+    $script:ProgressReturnBtn = $btnReturn
+
     return $panel
 }
 
 function Initialize-ProgressView {
-    param([string]$Title = "実行中...")
+    param(
+        [string]$Title = "実行中...",
+        # v0.50.0 (D6): when set (e.g. 'Restore'), Set-ProgressFinished reveals
+        # a "return to <view>" button so the operator can iterate instead of
+        # ending the session. Null (default, e.g. backup) = only the 完了 button.
+        [string]$ReturnView = $null
+    )
+    $script:ProgressReturnView = $ReturnView
     if ($null -ne $script:ProgressTitle)        { $script:ProgressTitle.Text = $Title }
     if ($null -ne $global:Fbp_ProgressLogBox)   { $global:Fbp_ProgressLogBox.Text = "" }
     if ($null -ne $script:ProgressDoneBtn)      { $script:ProgressDoneBtn.Enabled = $false }
+    if ($null -ne $script:ProgressReturnBtn)    { $script:ProgressReturnBtn.Visible = $false; $script:ProgressReturnBtn.Enabled = $false }
     if ($null -ne $global:Fbp_ProgressEntriesGrid) { $global:Fbp_ProgressEntriesGrid.Rows.Clear() }
 }
 
@@ -173,6 +198,14 @@ function Add-ProgressLog {
 function Set-ProgressFinished {
     if ($null -ne $script:ProgressTitle)   { $script:ProgressTitle.Text = "完了しました" }
     if ($null -ne $script:ProgressDoneBtn) { $script:ProgressDoneBtn.Enabled = $true }
+    # v0.50.0 (D6): reveal the "return to previous view" button when this run
+    # was launched with a ReturnView (restore -> iterate loop).
+    if ($null -ne $script:ProgressReturnBtn -and -not [string]::IsNullOrWhiteSpace($script:ProgressReturnView)) {
+        $label = if ($script:ProgressReturnView -eq 'Restore') { "リストア画面へ戻る" } else { "前の画面へ戻る" }
+        $script:ProgressReturnBtn.Text    = $label
+        $script:ProgressReturnBtn.Visible = $true
+        $script:ProgressReturnBtn.Enabled = $true
+    }
 }
 
 # ============================================================
