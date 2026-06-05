@@ -16,6 +16,29 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.45.0: **新「ローカル」運用モード (P5): LAN-Prep が役割を env 設定し Backuper を自動起動** —
+  ローカル運用自動化の大詰め (エンドツーエンド)。[Prepare-LanMigration.ps1](tools/lan_prep/Prepare-LanMigration.ps1)
+  の成功パスで `FABRIQ_BACKUPER_ROLE` (= -Role) と (menu が host を解決していれば) `FABRIQ_BACKUPER_AUTO_HOST`
+  (= -OldPCName) を環境変数に設定し、`Fabriq_BackUper.exe` を Start-Process で起動。env は
+  EXE→ps1→self-spawn 境界を継承するため、Backuper が P3 (ROLE→mode) ＋ P4 (COMPUTERNAME→host) で
+  正しい画面・ホストに着地し、移行先は P2 の 0件自動待機へ自然に接続する。
+  - **常に自動起動**。`-NoLaunchBackuper` で抑止 (ネットワーク設定のみ / テスト)。EXE 不在時は
+    fabriq_backuper.ps1 へフォールバック。起動後に親プロセスの env をクリア (子は生成時にスナップショット
+    継承済みで影響なし、menu ループに stale role を残さない)。
+  - **パスフレーズは渡さない** (P3 方針)。オペレータが Backuper で入力。
+  - menu (fabriq_lanprep.ps1) は変更不要 (-OldPCName は hostlist-driven 時に既に Prepare へ流れる)。
+  - **制約**: host 自動選択は hostlist の PCname が平文なら自動、ENC: 暗号化ならパスフレーズ入力後に
+    手動選択 (mode 前選択は常に有効)。
+- backuper v0.44.0: **新「ローカル」運用モード (P4): COMPUTERNAME による自機の役割対応 自動選択** —
+  P3 の残課題 (AUTO_HOST 未指定の移行元が先頭行になる) を解消。共有ヘルパー
+  `Resolve-HostByComputerName` ([hostlist_reader.ps1](backuper/lib/hostlist_reader.ps1)) を新設し、
+  セッション画面の COMPUTERNAME 自動判定を役割対応へ置換 ([session_form.ps1](backuper/lib/ui/session_form.ps1)):
+  - **PreferMode='Backup' (移行元)** → `OldPCname == COMPUTERNAME` 優先 (→ NewPCname フォールバック)
+  - **PreferMode='Restore'/'' (移行先/手動)** → `NewPCname == COMPUTERNAME` 優先 (→ OldPCname フォールバック)
+  - P3 の AUTO_HOST 明示前選択は引き続き最優先。該当なしは未選択 (P3 警告バナーへ)。
+  - ヘルパーは Backuper / LAN-Prep 双方が dot-source する hostlist_reader に配置し P5 で再利用予定。
+  - **既存動作**: 移行先 (NewPCname) と AUTO_HOST 明示は不変。手動起動に OldPCname フォールバックが
+    追加 (行の前選択=強調のみ、自動実行なし)。
 - backuper v0.43.0: **新「ローカル」運用モード (P3): 役割/ホストの自動連携 (env→mode+host 前選択)** —
   LAN-Prep (P5) が env でキャリーする役割とホストを Backuper が消費し、セッション画面で
   **mode (移行元→バックアップ / 移行先→リストア) と対象ホスト行を自動前選択**する第3歩。

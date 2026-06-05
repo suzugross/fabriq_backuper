@@ -129,16 +129,11 @@ function global:Show-BackuperSessionForm {
 
     # Track auto-detect by object reference so it survives filter redraws
     # (DataGridView indices shift when Rows.Clear()+rebuild).
-    $autoSelectedHost = $null
-    if ($HostList.Count -gt 0) {
-        foreach ($h in $HostList) {
-            $newName = if ($h.PSObject.Properties.Name -contains 'NewPCname') { "$($h.NewPCname)" } else { '' }
-            if ($newName -eq $CurrentPCName) {
-                $autoSelectedHost = $h
-                break
-            }
-        }
-    }
+    # v0.44.0 (P4): role-aware COMPUTERNAME auto-detect (Backup/source ->
+    # OldPCname first; Restore/target/manual -> NewPCname first then OldPCname
+    # fallback). Shared with LAN-Prep via hostlist_reader.ps1.
+    $autoSelectedHost = Resolve-HostByComputerName `
+        -HostList $HostList -ComputerName $CurrentPCName -PreferMode $PreselectMode
     # v0.43.0 (P3): an explicit automation pre-selection wins over the
     # COMPUTERNAME auto-detect. PreselectOldPcName identifies the migration
     # pair by its OldPCname (on the target this is the source whose backup we

@@ -33,6 +33,41 @@ function Get-FabriqHostlist {
     return @($rows)
 }
 
+# v0.44.0 (P4): role-aware auto-detect of THIS PC's migration-pair row by
+# computer name. Shared by the session form and (in P5) by LAN-Prep so a PC
+# auto-selects its own row without an explicit AUTO_HOST.
+#   PreferMode 'Backup'  (source)          -> match OldPCname == ComputerName first.
+#   PreferMode 'Restore' / '' (target/manual) -> match NewPCname == ComputerName
+#       first, then fall back to OldPCname == ComputerName.
+# Returns the matching host object, or $null if none. NewPCname-less rows are
+# handled (treated as no NewPCname match).
+function Resolve-HostByComputerName {
+    param(
+        [array]$HostList,
+        [string]$ComputerName,
+        [string]$PreferMode = ''
+    )
+    if ($null -eq $HostList -or @($HostList).Count -eq 0 -or [string]::IsNullOrWhiteSpace($ComputerName)) {
+        return $null
+    }
+    $byOld = {
+        param($h)
+        "$($h.OldPCname)" -eq $ComputerName
+    }
+    $byNew = {
+        param($h)
+        $nn = if ($h.PSObject.Properties.Name -contains 'NewPCname') { "$($h.NewPCname)" } else { '' }
+        $nn -eq $ComputerName
+    }
+    $order = if ($PreferMode -eq 'Backup') { @($byOld, $byNew) } else { @($byNew, $byOld) }
+    foreach ($matcher in $order) {
+        foreach ($h in $HostList) {
+            if (& $matcher $h) { return $h }
+        }
+    }
+    return $null
+}
+
 # Picks one host from the list. If $env:SELECTED_OLD_PCNAME is
 # already set, returns the matching row without prompting.
 function Select-HostFromList {

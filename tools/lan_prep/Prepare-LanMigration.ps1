@@ -28,7 +28,11 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$NewPCName,
 
-    [switch]$Force
+    [switch]$Force,
+
+    # v0.45.0 (P5): suppress the post-setup Backuper auto-launch
+    # (network-only use / testing).
+    [switch]$NoLaunchBackuper
 )
 
 $ErrorActionPreference = 'Stop'
@@ -272,6 +276,55 @@ else {
     Write-Host "[next] later on this (target) PC, launch Fabriq_BackUper.exe and choose Restore."
 }
 Write-Host ""
+
+# v0.45.0 (P5): hand off to Backuper. Set the role (and host, if the menu
+# resolved one) in the environment -- these cross the EXE -> ps1 -> self-spawn
+# boundary (same mechanism as FABRIQ_BACKUPER_SUBPROCESS), so Backuper opens
+# the right screen (source->Backup, target->Restore) and pre-selects the host
+# (P3 ROLE->mode, P4 COMPUTERNAME->host). The passphrase is NOT passed; the
+# operator types it into Backuper's session form.
+if (-not $NoLaunchBackuper) {
+    $env:FABRIQ_BACKUPER_ROLE = $Role
+    if (-not [string]::IsNullOrWhiteSpace($OldPCName)) {
+        $env:FABRIQ_BACKUPER_AUTO_HOST = $OldPCName
+    } else {
+        $env:FABRIQ_BACKUPER_AUTO_HOST = $null
+    }
+
+    $backuperExe = Join-Path $script:RepoRoot 'Fabriq_BackUper.exe'
+    $backuperPs1 = Join-Path $script:RepoRoot 'fabriq_backuper.ps1'
+    Write-Host "[launch] starting Fabriq BackUper (role=$Role)..." -ForegroundColor Cyan
+    try {
+        if (Test-Path -LiteralPath $backuperExe) {
+            Start-Process -FilePath $backuperExe -WorkingDirectory $script:RepoRoot
+            Write-Host "[launch] Backuper launched. Enter the master passphrase in its window." -ForegroundColor Green
+        }
+        elseif (Test-Path -LiteralPath $backuperPs1) {
+            Start-Process -FilePath 'powershell.exe' `
+                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$backuperPs1`"") `
+                -WorkingDirectory $script:RepoRoot
+            Write-Host "[launch] Backuper launched (ps1 fallback). Enter the master passphrase in its window." -ForegroundColor Green
+        }
+        else {
+            $modeWord = if ($Role -eq 'source') { 'Backup' } else { 'Restore' }
+            Write-Host "[warn] Fabriq_BackUper.exe / fabriq_backuper.ps1 not found under $script:RepoRoot." -ForegroundColor Yellow
+            Write-Host "       Launch Backuper manually and choose $modeWord." -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "[warn] Backuper auto-launch failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "       Launch Fabriq_BackUper.exe manually." -ForegroundColor Yellow
+    }
+    finally {
+        # Clear from THIS process so a subsequent menu action does not carry a
+        # stale role. The launched child already inherited an env snapshot at
+        # Start-Process time, so clearing here does not affect it.
+        $env:FABRIQ_BACKUPER_ROLE = $null
+        $env:FABRIQ_BACKUPER_AUTO_HOST = $null
+    }
+    Write-Host ""
+}
+
 Write-Host "[revert] when finished:"
 Write-Host "         Revert-LanMigration.ps1 -SnapshotPath `"$($migProfile.rollback.snapshotPath)`""
 Write-Host ""
