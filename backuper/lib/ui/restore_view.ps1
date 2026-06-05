@@ -16,7 +16,10 @@ $script:RestoreTimestampEntries = @()
 $script:RestoreSectionChecks   = @{}
 $script:RestoreManifestLabel   = $null
 $script:RestoreSectionContainer = $null
-$script:RestorePrinterGrid     = $null
+# v0.51.0: consolidated restore-entry grid (replaces the section-checkbox grid,
+# the printer grid, and the userdata/credentials selection modals).
+$script:RestoreEntryGrid       = $null
+$script:RestoreEntryDeleteBtn  = $null
 $script:RestoreCurrentManifest = $null
 # v0.47.0 (B): colored label that warns when the selected backup itself had
 # failures/partials (read from the aggregate manifest). Read-only, never blocks.
@@ -112,14 +115,12 @@ function New-RestoreView {
         } else {
             $script:RestoreExplicitDir = $null
         }
-        # v0.20.0: credentials selection is per-source; reset on source change
+        # v0.51.0: entry selection is per-source; reset so the rebuilt grid
+        # re-defaults (selection now lives in the consolidated grid rows).
         $script:RestoreCredentialsIncludeTargets = $null
         $script:RestoreCredentialsLastSource     = $null
-        Update-RestoreCredentialsStatusLabel
-        # v0.46.0 (D1): userdata selection is also per-source; reset together.
-        $script:RestoreUserdataIncludeTargets = $null
-        $script:RestoreUserdataLastSource     = $null
-        Update-RestoreUserdataStatusLabel
+        $script:RestoreUserdataIncludeTargets    = $null
+        $script:RestoreUserdataLastSource        = $null
         Update-RestoreSelection
     })
     $script:RestoreTimestampCombo = $combo
@@ -173,145 +174,121 @@ function New-RestoreView {
     $script:RestoreManifestLabel = New-StyledLabel -Text "" -X 24 -Y 114 -Width 880 -Height 28 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreManifestLabel)
 
-    # ---- Sections row -------------------------------------
-    $sectionLbl = New-StyledLabel -Text "セクション" `
-        -X 24 -Y 150 -Width 240 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
-    $panel.Controls.Add($sectionLbl)
-
-    # v0.47.0 (B): backup-failure warning, on the section header row between
-    # the "セクション" label and the userdata-select button. Red = failed,
-    # amber = partial-only; empty when the backup is clean.
-    $script:RestoreBackupWarningLabel = New-StyledLabel `
-        -Text "" -X 270 -Y 150 -Width 372 -Height 18 -Font $script:fontBold -FgColor $script:bgDelete
-    $panel.Controls.Add($script:RestoreBackupWarningLabel)
-
-    # v0.46.0 (D1): user-data entry selection (mirrors the credentials trio).
-    # Right-aligned on the section header row. Default (null) = all entries;
-    # opening the dialog lets the operator restore a subset.
-    $script:RestoreUserdataButton = New-StyledButton `
-        -Text "ユーザデータ選択..." -X 648 -Y 146 -Width 160 -Height 24
-    $script:RestoreUserdataButton.Add_Click({ Invoke-RestoreUserdataSelect })
-    $panel.Controls.Add($script:RestoreUserdataButton)
-
-    $script:RestoreUserdataStatusLabel = New-StyledLabel `
-        -Text "(未選択 = 全件)" -X 812 -Y 150 -Width 92 -Height 18 -FgColor $script:fgDim
-    $panel.Controls.Add($script:RestoreUserdataStatusLabel)
-    $script:RestoreSectionContainer = New-Object System.Windows.Forms.Panel
-    $script:RestoreSectionContainer.Location = New-Object System.Drawing.Point(24, 172)
-    # v0.26.0: Height raised 26 -> 56 for two-row section grid (3 sections per
-    # row x 2 rows = 6 slots). Widgets below this container were shifted Y +30.
-    $script:RestoreSectionContainer.Size = New-Object System.Drawing.Size(880, 56)
-    $script:RestoreSectionContainer.BackColor = [System.Drawing.Color]::Transparent
-    $panel.Controls.Add($script:RestoreSectionContainer)
-
-    # ---- Target user row (Y +30 by v0.26.0) ----------------
+    # ---- Target user row (v0.51.0: moved up; the section-checkbox grid and the
+    # per-section selection modals are replaced by the consolidated entry list
+    # below) ----
     $userLbl = New-StyledLabel -Text "対象ユーザ (リストア時の %USERPROFILE% 等を解決):" `
-        -X 24 -Y 236 -Width 360 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+        -X 24 -Y 146 -Width 360 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($userLbl)
-    $userCombo = New-StyledComboBox -X 386 -Y 232 -Width 260 -Height 24
+    $userCombo = New-StyledComboBox -X 386 -Y 142 -Width 260 -Height 24
     $script:RestoreUserCombo = $userCombo
     $panel.Controls.Add($userCombo)
 
-    # ---- Credentials selection button (v0.20.0, Y +30 by v0.26.0) ----
-    # Lives on the same Y as the target-user combo; lets operator open a
-    # modal grid to (de)select which credentials to actually re-register
-    # at restore time. Default ($script:RestoreCredentialsIncludeTargets
-    # = $null) means "include all", same as v0.19.x behavior.
-    $script:RestoreCredentialsButton = New-StyledButton `
-        -Text "資格情報の選択..." -X 660 -Y 232 -Width 150 -Height 26
-    $script:RestoreCredentialsButton.Add_Click({ Invoke-RestoreCredentialsSelect })
-    $panel.Controls.Add($script:RestoreCredentialsButton)
-
-    $script:RestoreCredentialsStatusLabel = New-StyledLabel `
-        -Text "(未選択 = 全件)" -X 816 -Y 236 -Width 90 -Height 18 -FgColor $script:fgDim
-    $panel.Controls.Add($script:RestoreCredentialsStatusLabel)
-
-    # ---- Operator handoff row (v0.25.0, Y +30 by v0.26.0) ----
-    # Checkbox controlling whether credentials + outlook_pop emit their
-    # operator-facing artifacts (登録.bat / register_credentials.ps1 /
-    # RESTORE_INSTRUCTIONS.txt / _account_settings.txt) into a single
-    # consolidated Desktop\<date>_<host>_BK\ folder instead of scattering
-    # across Documents and PST folders. Default ON. OFF = full v0.24.5
-    # legacy behaviour (no handoff folder ever created).
+    # ---- Operator handoff (v0.51.0: moved up) ----
     $handoffCheck = New-StyledCheckBox `
         -Text "operator 用ファイル (資格情報 / Outlook 設定 / 移行元PC情報 / プリンタ) をデスクトップに統合 (推奨)" `
-        -X 24 -Y 262 -Width 760 -Height 22 -Checked $true
+        -X 24 -Y 172 -Width 820 -Height 22 -Checked $true
     $script:RestoreOperatorHandoffCheck = $handoffCheck
     $panel.Controls.Add($handoffCheck)
 
-    # ---- Outlook extras row (Phase 0.15.0 + v0.17.0 + Y shift v0.25.0 + v0.26.0) ----
-    # 2 つのチェックボックスを縦並びで配置:
-    #   1. 初回起動用ショートカット (rule-clear) - default OFF (v0.17 変更)
-    #   2. レジストリ自動再構築 (Strategy B-light) - default OFF (v0.17 新規)
-    # どちらも opt-in 形式。デフォルトは "operator 手動セットアップが主軸" の運用。
-    # v0.25.0: Y を +30 シフトして、上の operator handoff checkbox を新行で挿入。
-    # v0.26.0: 更に Y を +30 シフトして、section 領域を 2 行 (system_evidence 追加分) に拡張。
-    $outlookExtrasLbl = New-StyledLabel -Text "Outlook 追加オプション (どちらも opt-in、通常は OFF のまま)" `
-        -X 24 -Y 294 -Width 600 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+    # ---- Outlook extras (v0.51.0: moved up; both opt-in, usually OFF) ----
+    $outlookExtrasLbl = New-StyledLabel -Text "Outlook 追加オプション (どちらも opt-in、通常は OFF)" `
+        -X 24 -Y 198 -Width 600 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
     $panel.Controls.Add($outlookExtrasLbl)
 
-    # v0.17.0: rule-clear shortcut, default OFF
     $shortcutCheck = New-StyledCheckBox `
         -Text "初回起動用ショートカットを生成 (壊れた仕分けルールをクリア)" `
-        -X 24 -Y 314 -Width 500 -Height 22 -Checked $false
+        -X 24 -Y 218 -Width 520 -Height 20 -Checked $false
     $script:RestoreOutlookShortcutCheck = $shortcutCheck
     $panel.Controls.Add($shortcutCheck)
-
     $shortcutHint = New-StyledLabel `
-        -Text "ルールが壊れている場合の対処用。通常は不要 (ルール 1 回手動実行で復活するため)" `
-        -X 44 -Y 336 -Width 860 -Height 16 -FgColor $script:fgDim
+        -Text "ルールが壊れている場合の対処用。通常は不要 (ルール 1 回手動実行で復活)" `
+        -X 44 -Y 238 -Width 860 -Height 14 -FgColor $script:fgDim
     $panel.Controls.Add($shortcutHint)
 
-    # v0.32.0: "auto-restore batch" generation, default ON. The reg.exe
-    # import no longer runs during restore; instead a Restore-Outlook.bat
-    # is placed in 02_outlook_アカウント情報\ for the operator to run AS
-    # THE TARGET USER. OFF = Strategy A files only (no batch).
     $strategyBCheck = New-StyledCheckBox `
         -Text "Outlook 自動復元バッチを生成 (推奨)" `
-        -X 24 -Y 356 -Width 500 -Height 22 -Checked $true
+        -X 24 -Y 258 -Width 520 -Height 20 -Checked $true
     $script:RestoreOutlookAttemptStrategyBCheck = $strategyBCheck
     $panel.Controls.Add($strategyBCheck)
-
     $strategyBHint = New-StyledLabel `
-        -Text "POP プロファイルを再構築する Restore-Outlook.bat を集約フォルダに配置。移行先ユーザで実行 (IMAP は手動)" `
-        -X 44 -Y 378 -Width 860 -Height 16 -FgColor $script:fgDim
+        -Text "POP プロファイル再構築 batch を集約フォルダに配置。移行先ユーザで実行 (IMAP は手動)" `
+        -X 44 -Y 278 -Width 860 -Height 14 -FgColor $script:fgDim
     $panel.Controls.Add($strategyBHint)
 
-    # ---- Printer list row (Y +30 by v0.26.0 again, total +60 from v0.24.5) ----
-    $pLbl = New-StyledLabel -Text "このバックアップ内のプリンタ (除外するチェックを外す)" `
-        -X 24 -Y 404 -Width 540 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
-    $panel.Controls.Add($pLbl)
+    # ---- Consolidated restore-entry list (v0.51.0) ------------------
+    # One grouped list replacing the section-checkbox grid, the printer grid,
+    # and the userdata/credentials selection modals. Section header rows toggle
+    # the (hidden) RestoreSectionChecks; entry rows are the per-entry selection
+    # (userdata/credentials/printer) or info rows (outlook/msime/system_evidence).
+    $listLbl = New-StyledLabel -Text "リストア項目 (セクション見出し + エントリ)" `
+        -X 24 -Y 304 -Width 420 -Height 18 -Font $script:fontBold -FgColor $script:fgHeader
+    $panel.Controls.Add($listLbl)
 
-    $btnSelAll = New-StyledButton -Text "全選択" -X 620 -Y 400 -Width 96 -Height 24
-    $btnSelAll.Add_Click({ Set-AllRestorePrinterChecks $true })
+    $btnSelAll = New-StyledButton -Text "全選択" -X 470 -Y 300 -Width 80 -Height 24
+    $btnSelAll.Add_Click({ Set-AllRestoreEntryChecks $true })
     $panel.Controls.Add($btnSelAll)
-    $btnNone = New-StyledButton -Text "クリア" -X 722 -Y 400 -Width 80 -Height 24
-    $btnNone.Add_Click({ Set-AllRestorePrinterChecks $false })
-    $panel.Controls.Add($btnNone)
+    $btnSelNone = New-StyledButton -Text "クリア" -X 556 -Y 300 -Width 80 -Height 24
+    $btnSelNone.Add_Click({ Set-AllRestoreEntryChecks $false })
+    $panel.Controls.Add($btnSelNone)
+    # D4 (re-homed inline): delete the selected restored userdata entry's data.
+    $script:RestoreEntryDeleteBtn = New-StyledButton -Text "選択のバックアップ削除" -X 642 -Y 300 -Width 170 -Height 24
+    $script:RestoreEntryDeleteBtn.Add_Click({ Invoke-RestoreEntryDelete })
+    $panel.Controls.Add($script:RestoreEntryDeleteBtn)
 
-    # Grid: Y shifted further +30 to Y=430 by v0.26.0 (2-row sections).
-    # Height kept at 244, so Y+H = 674. Still fits the panel.
+    # B warning (v0.47.0): own full-width line just above the list.
+    $script:RestoreBackupWarningLabel = New-StyledLabel `
+        -Text "" -X 24 -Y 326 -Width 880 -Height 18 -Font $script:fontBold -FgColor $script:bgDelete
+    $panel.Controls.Add($script:RestoreBackupWarningLabel)
+
     $grid = New-Object System.Windows.Forms.DataGridView
-    $grid.Location = New-Object System.Drawing.Point(24, 430)
-    $grid.Size = New-Object System.Drawing.Size(880, 244)
+    $grid.Location = New-Object System.Drawing.Point(24, 348)
+    $grid.Size = New-Object System.Drawing.Size(880, 312)
     Set-GridStyle -Grid $grid
     $grid.ReadOnly = $false
+    $grid.AllowUserToAddRows = $false
+    $grid.RowHeadersVisible = $false
+    $grid.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
 
     $colCk = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
-    $colCk.HeaderText = ""; $colCk.Width = 36; $colCk.Name = "Check"
+    $colCk.HeaderText = ""; $colCk.Width = 40; $colCk.Name = "Check"
     [void]$grid.Columns.Add($colCk)
     $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colName.HeaderText = "プリンタ名"; $colName.Width = 320; $colName.Name = "Name"; $colName.ReadOnly = $true
+    $colName.HeaderText = "対象"; $colName.Name = "Name"; $colName.ReadOnly = $true
+    $colName.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     [void]$grid.Columns.Add($colName)
-    $colDriver = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colDriver.HeaderText = "ドライバ"; $colDriver.Width = 280; $colDriver.Name = "Driver"; $colDriver.ReadOnly = $true
-    [void]$grid.Columns.Add($colDriver)
-    $colPort = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $colPort.HeaderText = "ポート"; $colPort.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
-    $colPort.Name = "Port"; $colPort.ReadOnly = $true
-    [void]$grid.Columns.Add($colPort)
+    $colKind = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colKind.HeaderText = "種別 / 状態"; $colKind.Width = 150; $colKind.Name = "Kind"; $colKind.ReadOnly = $true
+    [void]$grid.Columns.Add($colKind)
+    $colSize = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colSize.HeaderText = "サイズ / 補足"; $colSize.Width = 110; $colSize.Name = "Size"; $colSize.ReadOnly = $true
+    [void]$grid.Columns.Add($colSize)
+    $colRestored = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colRestored.HeaderText = "復元"; $colRestored.Width = 120; $colRestored.Name = "Restored"; $colRestored.ReadOnly = $true
+    [void]$grid.Columns.Add($colRestored)
+
+    $grid.Add_CurrentCellDirtyStateChanged({
+        if ($grid.IsCurrentCellDirty -and $grid.CurrentCell -is [System.Windows.Forms.DataGridViewCheckBoxCell]) {
+            $grid.CommitEdit([System.Windows.Forms.DataGridViewDataErrorContexts]::Commit) | Out-Null
+        }
+    })
+    $grid.Add_CellValueChanged({
+        param($s, $e)
+        if ($e.RowIndex -lt 0 -or $e.ColumnIndex -ne 0) { return }
+        Invoke-RestoreEntryCheckChanged -RowIndex $e.RowIndex
+    })
     $panel.Controls.Add($grid)
-    $script:RestorePrinterGrid = $grid
+    $script:RestoreEntryGrid = $grid
+
+    # Hidden host for the section on/off checkboxes. These remain the section
+    # model that B (Show-RestoreBackupWarnings) and Invoke-RestoreStart read via
+    # $script:RestoreSectionChecks[name].Checked / .Add_CheckedChanged; the grid
+    # header rows mirror/drive them. Kept off-screen so that contract is unchanged.
+    $script:RestoreSectionContainer = New-Object System.Windows.Forms.Panel
+    $script:RestoreSectionContainer.Location = New-Object System.Drawing.Point(0, 0)
+    $script:RestoreSectionContainer.Size = New-Object System.Drawing.Size(10, 10)
+    $script:RestoreSectionContainer.Visible = $false
+    $panel.Controls.Add($script:RestoreSectionContainer)
 
     # ---- Free-space margin field (v0.48.0 C), left of the start button ----
     $marginLbl = New-StyledLabel -Text "空き容量しきい値(MB):" `
@@ -341,10 +318,15 @@ function New-RestoreView {
     return $panel
 }
 
-function Set-AllRestorePrinterChecks {
+function Set-AllRestoreEntryChecks {
+    # v0.51.0: bulk (un)check the SELECTABLE entry rows of the consolidated grid
+    # (skips section header rows, info rows, and greyed/ReadOnly rows).
     param([bool]$Checked)
-    if ($null -eq $script:RestorePrinterGrid) { return }
-    foreach ($row in $script:RestorePrinterGrid.Rows) {
+    if ($null -eq $script:RestoreEntryGrid) { return }
+    foreach ($row in $script:RestoreEntryGrid.Rows) {
+        $tag = $row.Tag
+        if ($null -eq $tag -or "$($tag.Kind)" -ne 'entry') { continue }
+        if ($row.ReadOnly) { continue }
         $row.Cells['Check'].Value = $Checked
     }
 }
@@ -374,13 +356,11 @@ function Show-RestoreView {
     # form starts in a clean timestamp-mode state regardless of how the
     # previous session ended.
     Stop-RestoreWait   # v0.42.0: cancel any poll from a prior session / re-entry
-    # v0.50.0 (D6): reset the userdata entry selection on every (re-)entry so a
+    # v0.50.0 (D6) / v0.51.0: reset the entry selection on every (re-)entry so a
     # return after a partial restore starts from the restored-aware defaults
-    # (restored entries unchecked, Partial re-checked) rather than the stale
-    # prior selection. The combo re-fire below also resets it (D1); this is the
-    # robust guard for the no-change / no-backup edges.
-    $script:RestoreUserdataIncludeTargets = $null
-    Update-RestoreUserdataStatusLabel
+    # (restored entries unchecked, Partial re-checked), not a stale selection.
+    $script:RestoreUserdataIncludeTargets    = $null
+    $script:RestoreCredentialsIncludeTargets = $null
     $combo = $script:RestoreTimestampCombo
     $combo.Enabled = $true
     $script:RestoreBrowseMode = $false
@@ -390,46 +370,41 @@ function Show-RestoreView {
         $script:RestoreBrowseLabel.ForeColor = $script:fgDim
     }
 
-    $count = Update-RestoreTimestampCombo
-    if ($count -gt 0) {
-        $combo.SelectedIndex = 0
-    } else {
-        $script:RestoreManifestLabel.Text = "($($script:CurrentHost.OldPCname) のバックアップが見つかりません (local / share / UNC のいずれにも存在せず)。別の場所にある場合は [バックアップを参照] を使用してください)"
-        # v0.42.0 (P2): nothing to restore yet -> auto-wait for arrival.
-        Start-RestoreWait -Auto
-    }
-
+    # v0.51.0: build the hidden section on/off checkboxes BEFORE selecting a
+    # timestamp, so the consolidated grid (built by Update-RestoreSelection on
+    # SelectedIndex=0) can mirror them into section header rows. These remain the
+    # section model B + Invoke-RestoreStart read via $script:RestoreSectionChecks.
     $cont = $script:RestoreSectionContainer
     $cont.Controls.Clear()
     $script:RestoreSectionChecks = @{}
-    # v0.26.0: Two-row grid (3 sections per row x 2 rows). system_evidence
-    # is forced (grey-out + Checked fixed). See backup_view.ps1 for full
-    # layout history.
     $i = 0
     foreach ($s in $script:SectionList) {
-        $col = $i % 3
-        $row = [Math]::Floor($i / 3)
         $cb = New-StyledCheckBox -Text $s.DisplayName `
-            -X ($col * 300) -Y (4 + $row * 30) -Width 280 -Height 22 `
+            -X 0 -Y ($i * 24) -Width 260 -Height 22 `
             -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
         if ($s.SectionName -eq 'system_evidence') {
             $cb.Checked = $true
             $cb.Enabled = $false
-            $_tt = New-Object System.Windows.Forms.ToolTip
-            $_tt.SetToolTip($cb, "移行証跡として必須。選択不可。")
         }
         $cont.Controls.Add($cb)
         $script:RestoreSectionChecks[$s.SectionName] = $cb
-        # v0.47.0 (B): re-render the backup-failure warning when the operator
-        # toggles a section, so the checked-section-scoped warning tracks the
-        # live selection that Invoke-RestoreStart actually uses.
+        # v0.47.0 (B): re-render the failure warning when a section toggles.
         $cb.Add_CheckedChanged({ Show-RestoreBackupWarnings })
         $i++
     }
-    # v0.47.0 (B): re-render the warning now that the section checkboxes exist
-    # (the earlier combo-driven render used the default-checked fallback, so
-    # default-unchecked sections would otherwise be mis-counted until a toggle).
+
+    $count = Update-RestoreTimestampCombo
+    if ($count -gt 0) {
+        $combo.SelectedIndex = 0   # fires the handler -> Update-RestoreSelection -> builds the grid
+    } else {
+        $script:RestoreManifestLabel.Text = "($($script:CurrentHost.OldPCname) のバックアップが見つかりません (local / share / UNC のいずれにも存在せず)。別の場所にある場合は [バックアップを参照] を使用してください)"
+        if ($null -ne $script:RestoreEntryGrid) { $script:RestoreEntryGrid.Rows.Clear() }
+        # v0.42.0 (P2): nothing to restore yet -> auto-wait for arrival.
+        Start-RestoreWait -Auto
+    }
+
+    # v0.47.0 (B): re-render now that the section checkboxes + grid exist.
     Show-RestoreBackupWarnings
 
     # Target user combo (default = logged-on interactive user)
@@ -708,14 +683,12 @@ function Invoke-RestoreBrowse {
     $script:RestoreBrowseLabel.Font      = $script:fontBold
     $script:RestoreBrowseLabel.ForeColor = $script:bgAccent
 
-    # v0.20.0: source changed via Browse - reset credentials selection
+    # v0.51.0: source changed via Browse - reset entry selection (rebuilt grid
+    # re-defaults).
     $script:RestoreCredentialsIncludeTargets = $null
     $script:RestoreCredentialsLastSource     = $null
-    Update-RestoreCredentialsStatusLabel
-    # v0.46.0 (D1): reset userdata selection on Browse source change too.
-    $script:RestoreUserdataIncludeTargets = $null
-    $script:RestoreUserdataLastSource     = $null
-    Update-RestoreUserdataStatusLabel
+    $script:RestoreUserdataIncludeTargets    = $null
+    $script:RestoreUserdataLastSource        = $null
 
     $sz = if ($agg.summary.totalBytes) { [math]::Round([long]$agg.summary.totalBytes / 1MB, 1) } else { 0 }
     $secCount = if ($agg.summary.sectionCount) { [int]$agg.summary.sectionCount } else { 0 }
@@ -723,76 +696,238 @@ function Invoke-RestoreBrowse {
     $script:RestoreCurrentManifest = $agg   # v0.47.0 (B): cache for warnings
     $script:RestoreUserdataProblemCount = Get-RestoreUserdataProblemCount -AggregateDir $chosen
 
-    Show-RestorePrinterListFromAggregate -AggregateDir $chosen
+    Update-RestoreEntryGrid -AggregateDir $chosen
     Show-RestoreBackupWarnings   # v0.47.0 (B): render backup-failure warning
 }
 
-function Show-RestorePrinterListFromAggregate {
+# v0.51.0: consolidated restore-entry grid -----------------------
+function Set-RestoreSectionRowsEnabled {
+    # Grey/un-grey the entry rows of one section (called when its header toggles).
+    # Intrinsically-disabled rows (Selectable=$false: userdata Skipped/deleted,
+    # info rows) stay disabled even when the section is enabled.
+    param([string]$Section, [bool]$Enabled)
+    if ($null -eq $script:RestoreEntryGrid) { return }
+    foreach ($row in $script:RestoreEntryGrid.Rows) {
+        $t = $row.Tag
+        if ($null -eq $t -or "$($t.Kind)" -ne 'entry' -or "$($t.Section)" -ne $Section) { continue }
+        $selectable = [bool]$t.Selectable
+        if ($Enabled -and $selectable) {
+            $row.ReadOnly = $false
+            $row.DefaultCellStyle.ForeColor = [System.Drawing.Color]::Empty
+        } else {
+            $row.ReadOnly = $true
+            $row.DefaultCellStyle.ForeColor = $script:fgDim
+        }
+    }
+}
+
+function Invoke-RestoreEntryCheckChanged {
+    # Grid Check toggled. Section header row -> mirror to the hidden section
+    # checkbox (fires its CheckedChanged -> Show-RestoreBackupWarnings) and
+    # grey/un-grey the section's entry rows. Entry rows: harvested at start.
+    param([int]$RowIndex)
+    $grid = $script:RestoreEntryGrid
+    if ($null -eq $grid -or $RowIndex -lt 0 -or $RowIndex -ge $grid.Rows.Count) { return }
+    $row = $grid.Rows[$RowIndex]
+    $t = $row.Tag
+    if ($null -eq $t -or "$($t.Kind)" -ne 'section') { return }
+    $checked = [bool]$row.Cells['Check'].Value
+    $cb = $script:RestoreSectionChecks["$($t.Section)"]
+    if ($null -ne $cb) { $cb.Checked = $checked }   # mirror -> CheckedChanged -> B
+    Set-RestoreSectionRowsEnabled -Section "$($t.Section)" -Enabled $checked
+}
+
+function Invoke-RestoreEntryDelete {
+    # D4 (re-homed inline): delete the selected restored userdata entry's backup
+    # data, reusing the cleanup engine (Test-CleanupPathSafe + protected roots).
+    $grid = $script:RestoreEntryGrid
+    if ($null -eq $grid -or $grid.SelectedRows.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("削除する行 (復元済みのユーザデータ) を選択してください。", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    $row = $grid.SelectedRows[0]
+    $t = $row.Tag
+    if ($null -eq $t -or "$($t.Kind)" -ne 'entry' -or "$($t.Section)" -ne 'userdata' -or -not $t.Restored -or $t.DataDeleted) {
+        [System.Windows.Forms.MessageBox]::Show("復元済み (かつ未削除) のユーザデータ行のみ削除できます。", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($t.EntryDir) -or -not (Test-Path -LiteralPath $t.EntryDir)) {
+        [System.Windows.Forms.MessageBox]::Show("対象フォルダが見つかりません。", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "このエントリのバックアップデータを削除します (復元済み):`n  $($t.Key)`n`n  $($t.EntryDir)`n`nよろしいですか?",
+        "Fabriq BackUper - 削除確認",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    $roots = Get-CleanupProtectedRoots
+    $res = Remove-CleanupArtifact -Path $t.EntryDir -SubtreeDenyRoots $roots.Subtree -ProtectedRoots $roots.Protected
+    if ($res.Status -eq 'Deleted') {
+        $t.DataDeleted = $true
+        $row.Cells['Restored'].Value = 'データ削除済'
+        $row.Cells['Check'].Value    = $false
+        $row.ReadOnly = $true
+        $row.DefaultCellStyle.ForeColor = $script:fgDim
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("削除できませんでした: $($res.Error)", "Fabriq BackUper",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+    }
+}
+
+function Update-RestoreEntryGrid {
+    # Rebuild the consolidated grid from the selected backup's manifests: one
+    # section-header row per registered section (mirrors the hidden
+    # RestoreSectionChecks), then per-entry rows. userdata/credentials/printer
+    # entries are selectable; outlook_pop/msime_dict/system_evidence are info
+    # rows. userdata rows carry D3 restored status + D4 delete target.
     param([Parameter(Mandatory = $true)][string]$AggregateDir)
+    $grid = $script:RestoreEntryGrid
+    if ($null -eq $grid) { return }
+    $grid.Rows.Clear()
+    $agg = $script:RestoreCurrentManifest
+    $udEntriesRoot = Join-Path $AggregateDir 'sections\userdata\entries'
 
-    # Phase 2.7.2: replaced the previous silent try/catch — failures were
-    # invisible and made "grid empty" indistinguishable from "manifest missing
-    # / malformed / property access failed". Now every branch reports state to
-    # RestoreManifestLabel so the operator can diagnose without the console.
-    if ($null -eq $script:RestorePrinterGrid) { return }
-    $script:RestorePrinterGrid.Rows.Clear()
+    foreach ($s in $script:SectionList) {
+        $sectionName = "$($s.SectionName)"
+        $display     = "$($s.DisplayName)"
+        $cb = $script:RestoreSectionChecks[$sectionName]
+        $sectionChecked = $true
+        if ($null -ne $cb) { $sectionChecked = [bool]$cb.Checked }
 
-    $printerManifestPath = Join-Path $AggregateDir 'sections\printer\manifest.json'
-    if (-not (Test-Path $printerManifestPath)) {
-        $null = $script:RestorePrinterGrid.Rows.Add($false, "(no printer section manifest found)", "", "")
-        if ($null -ne $script:RestoreManifestLabel) {
-            $script:RestoreManifestLabel.Text += "  |  printer manifest: NOT FOUND ($printerManifestPath)"
+        $secStatus = ''
+        if ($null -ne $agg -and $null -ne $agg.sections -and `
+            ($agg.sections.PSObject.Properties.Name -contains $sectionName)) {
+            $secStatus = "$($agg.sections.$sectionName.status)"
         }
-        return
-    }
 
-    $pm = $null
-    try {
-        $pm = Get-Content -Path $printerManifestPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-    } catch {
-        $null = $script:RestorePrinterGrid.Rows.Add($false, "(printer manifest read failed)", $_.Exception.Message, "")
-        if ($null -ne $script:RestoreManifestLabel) {
-            $script:RestoreManifestLabel.Text += "  |  printer manifest READ FAILED: $($_.Exception.Message)"
+        $hdrIdx = $grid.Rows.Add($sectionChecked, ("── {0} ──" -f $display), $secStatus, "", "")
+        $hrow = $grid.Rows[$hdrIdx]
+        $hrow.Tag = [pscustomobject]@{ Kind = 'section'; Section = $sectionName }
+        $hrow.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(226, 226, 232)
+        $hrow.DefaultCellStyle.Font = $script:fontBold
+        if ($sectionName -eq 'system_evidence') { $hrow.ReadOnly = $true }   # forced section
+
+        $hadEntries = $false
+        switch ($sectionName) {
+            'userdata' {
+                $udm = $null
+                $mf = Join-Path $AggregateDir 'sections\userdata\manifest.json'
+                if (Test-Path -LiteralPath $mf) { try { $udm = Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+                if ($null -ne $udm -and $null -ne $udm.items -and $null -ne $udm.items.entries) {
+                    foreach ($en in @($udm.items.entries)) {
+                        if ($null -eq $en) { continue }
+                        $hadEntries = $true
+                        $isSkipped = ("$($en.status)" -eq 'Skipped') -or [string]::IsNullOrWhiteSpace("$($en.backupSubpath)")
+                        $sizeStr = if ($en.byteCount) { ('{0:N1} MB' -f ([long]$en.byteCount / 1MB)) } else { '0 MB' }
+                        $entryDir = $null; $restoredStr = ''; $isRestored = $false; $dataDeleted = $false; $isComplete = $false
+                        $idStr = "$($en.id)"
+                        $safeLeaf = (-not [string]::IsNullOrWhiteSpace($idStr)) -and ($idStr -notmatch '[\\/:]') -and ($idStr -notmatch '\.\.')
+                        if ($safeLeaf) {
+                            $entryDir = Join-Path $udEntriesRoot $idStr
+                            if (Test-Path -LiteralPath (Join-Path $entryDir '_restored.json')) {
+                                $isRestored = $true; $restoredStr = '復元済'; $mkStatus = ''
+                                try {
+                                    $mk = Get-Content -LiteralPath (Join-Path $entryDir '_restored.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+                                    $mkStatus = "$($mk.status)"
+                                    $whenStr = if ($mk.restoredAt) { ' ' + ([datetime]$mk.restoredAt).ToString('MM/dd HH:mm') } else { '' }
+                                    if ($mkStatus -eq 'Partial') { $restoredStr = '復元済(部分)' + $whenStr } else { $restoredStr = '復元済' + $whenStr }
+                                } catch {}
+                                $isComplete = ($mkStatus -eq 'Done' -or $mkStatus -eq 'AlreadyPresent')
+                                if (-not (Test-Path -LiteralPath (Join-Path $entryDir 'data'))) { $dataDeleted = $true; $restoredStr = 'データ削除済' }
+                            }
+                        }
+                        $chk = (-not $isSkipped) -and (-not $dataDeleted) -and (-not $isComplete)
+                        $st  = if ($isSkipped) { '取得不可' } else { "$($en.status)" }
+                        $ri = $grid.Rows.Add($chk, "    $($en.sourcePath)", $st, $sizeStr, $restoredStr)
+                        $erow = $grid.Rows[$ri]
+                        $selectable = (-not $isSkipped) -and (-not $dataDeleted)
+                        $erow.Tag = [pscustomobject]@{ Kind='entry'; Section='userdata'; Key=[string]$en.sourcePath; EntryDir=$entryDir; Restored=$isRestored; DataDeleted=$dataDeleted; Selectable=$selectable }
+                        if (-not $selectable) { $erow.ReadOnly = $true; $erow.DefaultCellStyle.ForeColor = $script:fgDim }
+                        elseif ($isRestored) { $erow.Cells['Restored'].Style.ForeColor = [System.Drawing.Color]::FromArgb(46,125,50) }
+                    }
+                }
+            }
+            'credentials' {
+                $cm = $null
+                $mf = Join-Path $AggregateDir 'sections\credentials\manifest.json'
+                if (Test-Path -LiteralPath $mf) { try { $cm = Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+                if ($null -ne $cm -and $null -ne $cm.credentials) {
+                    foreach ($c in @($cm.credentials)) {
+                        if ($null -eq $c) { continue }
+                        $hadEntries = $true
+                        $ri = $grid.Rows.Add($true, "    $($c.target)", "$($c.type)", "$($c.userName)", "")
+                        $grid.Rows[$ri].Tag = [pscustomobject]@{ Kind='entry'; Section='credentials'; Key=[string]$c.target; Selectable=$true }
+                    }
+                }
+            }
+            'printer' {
+                $pm = $null
+                $mf = Join-Path $AggregateDir 'sections\printer\manifest.json'
+                if (Test-Path -LiteralPath $mf) { try { $pm = Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+                $printersArr = @()
+                if ($null -ne $pm -and $null -ne $pm.items) { $printersArr = @($pm.items.printers) }
+                foreach ($p in $printersArr) {
+                    if ($null -eq $p) { continue }
+                    if ($p.driverName -eq 'Remote Desktop Easy Print') { continue }
+                    if ($p.portName -match '^TS\d+$') { continue }
+                    $isVirtual = $false
+                    foreach ($vp in @('Microsoft Print To PDF','Microsoft XPS Document Writer','OneNote','Microsoft Shared Fax','Microsoft OpenXPS')) { if ($p.driverName -like "*$vp*") { $isVirtual = $true; break } }
+                    foreach ($vp in @('PORTPROMPT:','XPSPort:','FAX:','nul:','SHRFAX:')) { if ($p.portName -like "*$vp*") { $isVirtual = $true; break } }
+                    if ($p.portName -like 'OneNote*') { $isVirtual = $true }
+                    $hadEntries = $true
+                    $ri = $grid.Rows.Add((-not $isVirtual), "    $($p.name)", "$($p.driverName)", "$($p.portName)", "")
+                    $grid.Rows[$ri].Tag = [pscustomobject]@{ Kind='entry'; Section='printer'; Key=[string]$p.name; Selectable=$true }
+                }
+            }
+            'outlook_pop' {
+                $om = $null
+                $mf = Join-Path $AggregateDir 'sections\outlook_pop\manifest.json'
+                if (Test-Path -LiteralPath $mf) { try { $om = Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+                $profs = @()
+                if ($null -ne $om -and $null -ne $om.items) { $profs = @($om.items.profiles) }
+                foreach ($pf in $profs) {
+                    if ($null -eq $pf) { continue }
+                    $hadEntries = $true
+                    $acc = 0; if ($null -ne $pf.accounts) { $acc = @($pf.accounts).Count }
+                    $ri = $grid.Rows.Add($false, "    $($pf.name)", 'profile', ("{0} アカウント" -f $acc), "")
+                    $rr = $grid.Rows[$ri]
+                    $rr.Tag = [pscustomobject]@{ Kind='info'; Section='outlook_pop' }
+                    $rr.ReadOnly = $true; $rr.DefaultCellStyle.ForeColor = $script:fgDim
+                }
+            }
+            'msime_dict' {
+                $mm = $null
+                $mf = Join-Path $AggregateDir 'sections\msime_dict\manifest.json'
+                if (Test-Path -LiteralPath $mf) { try { $mm = Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+                $files = @(); if ($null -ne $mm -and $null -ne $mm.files) { $files = @($mm.files) }
+                foreach ($f in $files) {
+                    if ($null -eq $f) { continue }
+                    $hadEntries = $true
+                    $ri = $grid.Rows.Add($false, "    $($f.fileName)", 'IME辞書', "", "")
+                    $rr = $grid.Rows[$ri]
+                    $rr.Tag = [pscustomobject]@{ Kind='info'; Section='msime_dict' }
+                    $rr.ReadOnly = $true; $rr.DefaultCellStyle.ForeColor = $script:fgDim
+                }
+            }
+            default { }   # system_evidence + others: header only (info row added below)
         }
-        return
-    }
 
-    $printersNode = $null
-    if ($null -ne $pm -and $null -ne $pm.items) { $printersNode = $pm.items.printers }
-    $printersArr = @($printersNode)
-    if ($printersArr.Count -eq 0 -or ($printersArr.Count -eq 1 -and $null -eq $printersArr[0])) {
-        $null = $script:RestorePrinterGrid.Rows.Add($false, "(printer manifest has no printers)", "", "")
-        if ($null -ne $script:RestoreManifestLabel) {
-            $script:RestoreManifestLabel.Text += "  |  printers in manifest: 0"
+        if (-not $hadEntries) {
+            $ri = $grid.Rows.Add($false, "    (項目選択なし)", '', "", "")
+            $rr = $grid.Rows[$ri]
+            $rr.Tag = [pscustomobject]@{ Kind='info'; Section=$sectionName }
+            $rr.ReadOnly = $true; $rr.DefaultCellStyle.ForeColor = $script:fgDim
         }
-        return
-    }
 
-    $total = 0
-    $hidden = 0
-    foreach ($p in $printersArr) {
-        if ($null -eq $p) { continue }
-        $total++
-        if ($p.driverName -eq 'Remote Desktop Easy Print') { $hidden++; continue }
-        if ($p.portName -match '^TS\d+$') { $hidden++; continue }
-        $isVirtual = $false
-        $virtPats = @('Microsoft Print To PDF','Microsoft XPS Document Writer','OneNote','Microsoft Shared Fax','Microsoft OpenXPS')
-        foreach ($vp in $virtPats) { if ($p.driverName -like "*$vp*") { $isVirtual = $true; break } }
-        $virtPortPats = @('PORTPROMPT:','XPSPort:','FAX:','nul:','SHRFAX:')
-        foreach ($vp in $virtPortPats) { if ($p.portName -like "*$vp*") { $isVirtual = $true; break } }
-        if ($p.portName -like 'OneNote*') { $isVirtual = $true }
-        $defaultChecked = -not $isVirtual
-        $null = $script:RestorePrinterGrid.Rows.Add($defaultChecked, $p.name, $p.driverName, $p.portName)
-    }
-
-    $shown = $total - $hidden
-    if ($null -ne $script:RestoreManifestLabel) {
-        $script:RestoreManifestLabel.Text += "  |  printers: $shown shown, $hidden virtual/RDP hidden (of $total)"
+        if (-not $sectionChecked) { Set-RestoreSectionRowsEnabled -Section $sectionName -Enabled $false }
     }
 }
 
 function Update-RestoreSelection {
-    if ($script:RestorePrinterGrid) { $script:RestorePrinterGrid.Rows.Clear() }
+    if ($null -ne $script:RestoreEntryGrid) { $script:RestoreEntryGrid.Rows.Clear() }
     # v0.47.0 (B): reset the cached manifest + warning each refresh. The
     # success path re-caches and the end-of-function call renders; early
     # returns leave the warning cleared.
@@ -834,7 +969,7 @@ function Update-RestoreSelection {
         $script:RestoreManifestLabel.Text = "aggregate manifest parse failed: $($_.Exception.Message)"
     }
 
-    Show-RestorePrinterListFromAggregate -AggregateDir $aggregateDir
+    Update-RestoreEntryGrid -AggregateDir $aggregateDir
     Show-RestoreBackupWarnings   # v0.47.0 (B): render backup-failure warning
 }
 
@@ -1386,17 +1521,30 @@ function Invoke-RestoreStart {
         return
     }
 
+    # v0.51.0: harvest the per-entry selection from the consolidated grid.
+    # printer -> array of checked names (existing contract). userdata/credentials
+    # -> $null when ALL selectable entries are checked (= "all", the default
+    # invariant B/C rely on), else the checked subset array. This reproduces the
+    # exact SectionParams the removed modals + printer grid produced.
     $selectedPrinters = @()
-    if ($null -ne $script:RestorePrinterGrid) {
-        foreach ($row in $script:RestorePrinterGrid.Rows) {
-            if ($row.Cells['Check'].Value -eq $true) {
-                $name = [string]$row.Cells['Name'].Value
-                if (-not [string]::IsNullOrWhiteSpace($name) -and $name -notlike '(no *') {
-                    $selectedPrinters += $name
-                }
+    $udChecked = New-Object System.Collections.Generic.List[string]
+    $udTotal = 0
+    $credChecked = New-Object System.Collections.Generic.List[string]
+    $credTotal = 0
+    if ($null -ne $script:RestoreEntryGrid) {
+        foreach ($row in $script:RestoreEntryGrid.Rows) {
+            $t = $row.Tag
+            if ($null -eq $t -or "$($t.Kind)" -ne 'entry') { continue }
+            $isChk = [bool]$row.Cells['Check'].Value
+            switch ("$($t.Section)") {
+                'printer'     { if ($isChk) { $selectedPrinters += [string]$t.Key } }
+                'userdata'    { if ([bool]$t.Selectable) { $udTotal++;   if ($isChk) { $udChecked.Add([string]$t.Key)   | Out-Null } } }
+                'credentials' { if ([bool]$t.Selectable) { $credTotal++; if ($isChk) { $credChecked.Add([string]$t.Key) | Out-Null } } }
             }
         }
     }
+    $script:RestoreUserdataIncludeTargets    = if ($udTotal   -gt 0 -and $udChecked.Count   -eq $udTotal)   { $null } else { @($udChecked.ToArray()) }
+    $script:RestoreCredentialsIncludeTargets = if ($credTotal -gt 0 -and $credChecked.Count -eq $credTotal) { $null } else { @($credChecked.ToArray()) }
 
     $targetUserProfilePath = Get-SelectedRestoreUserProfilePath
     $createShortcut = $false

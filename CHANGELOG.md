@@ -15,6 +15,22 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.51.0: **リストア画面のエントリ表示を単一リストに集約** —
+  従来バラバラだった「セクションチェックグリッド / ユーザデータ選択モーダル / 資格情報選択モーダル /
+  プリンタ別グリッド」を、**1つの DataGridView (セクション見出し行 + エントリ行)** に統合。見づらさを解消。
+  - セクション見出し行のチェック = section on/off (内部の隠し `RestoreSectionChecks` をミラー駆動。
+    B 失敗警告 / Invoke-RestoreStart の `$picked` 契約は不変)。OFF で配下エントリをグレーアウト。
+  - エントリ行: **userdata / credentials / printer は per-entry チェック** (現状の選択粒度を維持)、
+    outlook_pop / msime_dict / system_evidence は情報行。userdata 行に D3「復元」状態列、リスト下に
+    D4「選択のバックアップ削除」ボタンをインライン移設。
+  - **エンジン契約は完全に不変**: グリッドから `IncludeEntries / IncludeTargets / IncludePrinters` +
+    `PickedSections` を harvest し、従来と同一の SectionParams を生成 (manifest / section interface 不変)。
+  - 対象ユーザ / handoff / Outlook オプション / 空き容量しきい値(C) / 戻りループ(D6) は温存。
+  - 旧モーダル関数 (`Show-UserdataSelectDialog` / `Invoke-Restore{Userdata,Credentials}Select` /
+    `Update-Restore*StatusLabel`) は呼び出し元を全撤去し dead code 化 (別途クリーンアップ予定)。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1) のみ (engine / プロファイル変更なし)。
+
 ### Added
 - backuper v0.50.0: **部分リストア後のやりなおしループ (要件 D6)** —
   リストア完了後にリストア画面へ戻り、未済/Partial だけ再リストアしたり、不要データを削除してから
