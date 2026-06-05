@@ -15,6 +15,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- backuper v0.55.1: **リストアの「項目別の状態」グリッドに userdata 項目が出ない不具合を修正 (TM t-0002)** —
+  `Initialize-ProgressEntries` が呼ばれる度に `Rows.Clear()` でグリッドを全消去していたため、リストアで
+  userdata と outlook_pop の両 section が呼ぶと**後に走った section が前の項目を消し**、Outlook profile だけが
+  残っていた (バックアップは userdata のみが呼ぶため正常だった)。Clear を外し **section 横断で項目を累積表示**
+  するよう変更 (run 開始時の Clear は `Initialize-ProgressView` が担当、entry id は section 単位で一意なので
+  `Set-EntryStatus` は正しい行を更新)。
+  - 対象: [progress_view.ps1](backuper/lib/ui/progress_view.ps1)。engine / Summary 集計・完了ポップアップは不変。
+
 ### Changed
 - backuper v0.55.0: **LAN-Prep 役割起動時に session 画面のボタンを役割ロック (TM t-0005)** —
   LAN-Prep の移行元/先選択で Backuper を起動した時 (`PreselectMode`=Backup/Restore)、

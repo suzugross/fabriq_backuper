@@ -145,7 +145,13 @@ function Initialize-ProgressEntries {
     param([array]$Entries)
     # $Entries: array of @{ Id = 'XX'; Label = '...' } hashtables
     if ($null -eq $global:Fbp_ProgressEntriesGrid) { return }
-    $global:Fbp_ProgressEntriesGrid.Rows.Clear()
+    # v0.55.1 (t-0002): do NOT clear the grid here. Multiple restore sections
+    # (userdata + outlook_pop) each call this once; clearing made the section that
+    # ran last clobber the earlier one's rows, so only Outlook profiles survived in
+    # the per-entry list. Accumulate instead so every section's entries are listed.
+    # The per-run reset is done once at run start by Initialize-ProgressView
+    # (Rows.Clear). Entry ids are section-unique (userdata '01' vs outlook
+    # '<profile>/<subKey>'), so Set-EntryStatus still targets the correct row.
     if ($null -eq $Entries -or $Entries.Count -eq 0) { return }
     foreach ($e in $Entries) {
         if ($null -eq $e) { continue }
