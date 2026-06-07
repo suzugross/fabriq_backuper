@@ -1129,6 +1129,118 @@ function global:New-OutlookHandoffReadme {
 # operator's desktop in BOM-tagged UTF-8.
 # ============================================================
 
+# ============================================================
+# v0.59.1 (t-0009 P0): in-app (GUI) shared app-migration helpers.
+#
+# Pure functions that mirror the matching + source-load logic embedded in
+# the operator .bat body (New-AppMigrationCheckScript) so the Handoff
+# Viewer's in-app 突合 GUI and the legacy .bat produce IDENTICAL verdicts.
+# The .bat heredoc is a standalone copy (operator desktop, no common.ps1)
+# kept until it is retired in a later phase; until then these mirror its
+# exact semantics. No UI; I/O limited to reading the given CSV paths.
+# ============================================================
+
+function global:Import-AppMigrationList {
+    # Load app_migration_list.csv with the same BOM->UTF8 / else Default(CP932)
+    # auto-encoding as the operator .bat (Read-CsvAutoEncoding). Returns @() when
+    # the file is missing or unreadable.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return @() }
+    $hasBom = $false
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        try {
+            $buf = New-Object byte[] 3
+            $read = $fs.Read($buf, 0, 3)
+            if ($read -ge 3 -and $buf[0] -eq 0xEF -and $buf[1] -eq 0xBB -and $buf[2] -eq 0xBF) { $hasBom = $true }
+        } finally { $fs.Dispose() }
+    } catch {}
+    $enc = if ($hasBom) { 'UTF8' } else { 'Default' }
+    try { return @(Import-Csv -LiteralPath $Path -Encoding $enc) } catch { return @() }
+}
+
+function global:Get-AppMigrationSourceApp {
+    # Normalize the source-PC inventory CSVs (11_DesktopApps.csv + 11_StoreApps.csv,
+    # both UTF-8 from the backup) into the {Name, Publisher, Version, Scope, Source}
+    # shape the matcher expects. Store Publisher is blanked (the CSV column is a
+    # PublisherId hash, unsuitable for matching) -- identical to the .bat. Missing
+    # files are skipped. Returns @() when neither file is present.
+    param([string]$DesktopCsvPath, [string]$StoreCsvPath)
+    $apps = New-Object System.Collections.Generic.List[object]
+    if (-not [string]::IsNullOrWhiteSpace($DesktopCsvPath) -and (Test-Path -LiteralPath $DesktopCsvPath)) {
+        $d = @()
+        try { $d = @(Import-Csv -LiteralPath $DesktopCsvPath -Encoding UTF8) } catch {}
+        foreach ($a in $d) {
+            $apps.Add([PSCustomObject]@{
+                Name = "$($a.Name)".Trim(); Publisher = "$($a.Publisher)".Trim()
+                Version = "$($a.Version)".Trim(); Scope = "$($a.Scope)".Trim(); Source = 'Desktop'
+            })
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($StoreCsvPath) -and (Test-Path -LiteralPath $StoreCsvPath)) {
+        $s = @()
+        try { $s = @(Import-Csv -LiteralPath $StoreCsvPath -Encoding UTF8) } catch {}
+        foreach ($a in $s) {
+            $apps.Add([PSCustomObject]@{
+                Name = "$($a.Name)".Trim(); Publisher = ''
+                Version = "$($a.Version)".Trim(); Scope = 'Store'; Source = 'Store'
+            })
+        }
+    }
+    return @($apps.ToArray())
+}
+
+function global:Compare-AppMigrationList {
+    # Match each migration-list entry's MatchPatterns (|-separated, case-insensitive
+    # substring via -like '*p*') against the source apps (Desktop hay = "Name | Publisher",
+    # Store hay = "Name") -- identical to the operator .bat (New-AppMigrationCheckScript).
+    # Returns:
+    #   @{ Entries  = @( [pscustomobject]@{Name; IsRequired; Category; Note; MatchPatterns; Matched; Hits=@(app)} );
+    #      Unmatched = @( source apps matched by no entry ) }
+    param(
+        [Parameter(Mandatory = $true)]$ListRows,
+        [Parameter(Mandatory = $true)]$SourceApps
+    )
+    $src = @($SourceApps)
+    $entriesOut = New-Object System.Collections.Generic.List[object]
+    $skipped    = New-Object System.Collections.Generic.List[string]
+    $matchedIdx = New-Object System.Collections.Generic.HashSet[int]
+    foreach ($entry in @($ListRows)) {
+        $name = "$($entry.Name)".Trim()
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $patternsRaw = "$($entry.MatchPatterns)".Trim()
+        $patterns = @($patternsRaw.Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        # Legacy [SKIP]: a blank-MatchPatterns entry is a config error -- exclude it
+        # entirely (the .bat drops it from both 要移行 and 未検出) and report it as
+        # 設定不備 rather than masquerading as a genuine 未検出.
+        if ($patterns.Count -eq 0) { [void]$skipped.Add($name); continue }
+        $hits = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $src.Count; $i++) {
+            $app = $src[$i]
+            $hay = if ("$($app.Source)" -eq 'Desktop') { "$($app.Name) | $($app.Publisher)" } else { "$($app.Name)" }
+            foreach ($p in $patterns) {
+                if ($hay -like "*$p*") { [void]$hits.Add($app); [void]$matchedIdx.Add($i); break }
+            }
+        }
+        $entriesOut.Add([PSCustomObject]@{
+            Name          = $name
+            IsRequired    = ("$($entry.Required)".Trim() -eq '1')
+            Category      = "$($entry.Category)".Trim()
+            Note          = "$($entry.Note)".Trim()
+            MatchPatterns = $patternsRaw
+            Matched       = ($hits.Count -gt 0)
+            Hits          = @($hits.ToArray())
+        })
+    }
+    $unmatched = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $src.Count; $i++) {
+        if ($matchedIdx.Contains($i)) { continue }
+        if ([string]::IsNullOrWhiteSpace("$($src[$i].Name)")) { continue }  # legacy 補足 skips blank-Name source apps
+        [void]$unmatched.Add($src[$i])
+    }
+    return @{ Entries = @($entriesOut.ToArray()); Unmatched = @($unmatched.ToArray()); Skipped = @($skipped.ToArray()) }
+}
+
 function global:New-AppMigrationCheckBat {
     # Plain ASCII batch wrapper.
     #

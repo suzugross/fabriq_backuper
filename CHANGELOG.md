@@ -16,6 +16,13 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.59.1: **アプリ突合の共通ヘルパーを common.ps1 に追加 (TM t-0009 P0)** —
+  Handoff Viewer の in-app 突合 GUI（P1）と legacy `Check-AppMigration.bat` が同一ロジックで判定できるよう、
+  突合ロジックを純関数として `common.ps1` に切り出し（additive・既存挙動不変）。
+  `Import-AppMigrationList`（突合リスト読込・BOM→UTF8/else CP932 自動判定）／
+  `Get-AppMigrationSourceApp`（`11_DesktopApps.csv`/`11_StoreApps.csv` を正規化・Store の Publisher は照合対象外）／
+  `Compare-AppMigrationList`（MatchPatterns を `|` 分割・case-insensitive substring・Desktop hay=`Name | Publisher` / Store hay=`Name`・
+  要移行/未検出、空 MatchPatterns は設定不備として除外）。legacy `New-AppMigrationCheckScript` と同一セマンティクス。
 - backuper v0.58.2: **移行情報ビューア：参照 .txt をアプリ内ビューアで表示（notepad を使わない）(TM t-0006)** —
   プリンタ設定（`_printer_settings.txt`）などの参照テキストを、既定アプリ（notepad）ではなく**アプリ内の
   読み取り専用テキストビューア** `Show-HvTextViewer`（等幅 Consolas・縦横スクロール・選択コピー可・書込なし・
