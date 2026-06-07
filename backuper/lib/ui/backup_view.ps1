@@ -562,10 +562,12 @@ function Show-BackupView {
     # operator cannot uncheck it - migration evidence is always captured.
     $i = 0
     foreach ($s in $script:SectionList) {
-        $col = $i % 3
-        $row = [Math]::Floor($i / 3)
+        # v0.61.0 (t-0009 P2): 7th section (application) added -> 4 columns x 2 rows
+        # (8 slots) so all 7 fit the existing 2-row container without a Y cascade.
+        $col = $i % 4
+        $row = [Math]::Floor($i / 4)
         $cb = New-StyledCheckBox -Text $s.DisplayName `
-            -X ($col * 300) -Y (4 + $row * 30) -Width 280 -Height 22 `
+            -X ($col * 220) -Y (4 + $row * 30) -Width 210 -Height 22 `
             -Checked ($s.Enabled -eq "1")
         $cb.Tag = $s.SectionName
         if ($s.SectionName -eq 'system_evidence') {

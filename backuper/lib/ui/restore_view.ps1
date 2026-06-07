@@ -1280,6 +1280,7 @@ function Invoke-RestoreStart {
         $outlookSubdir     = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'outlook_pop'
         $sysEvidenceSubdir = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'system_evidence'
         $printerSubdir     = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'printer'
+        $appSubdir         = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'application'
         if (-not $sectionParams['credentials']) { $sectionParams['credentials'] = @{} }
         $sectionParams['credentials']['OperatorHandoffSubdir'] = $credSubdir
         if (-not $sectionParams['outlook_pop']) { $sectionParams['outlook_pop'] = @{} }
@@ -1290,6 +1291,9 @@ function Invoke-RestoreStart {
         # v0.29.0 (Phase 1)
         if (-not $sectionParams['printer']) { $sectionParams['printer'] = @{} }
         $sectionParams['printer']['OperatorHandoffSubdir'] = $printerSubdir
+        # v0.61.0 (t-0009 P2): application section -> 05_アプリケーション情報
+        if (-not $sectionParams['application']) { $sectionParams['application'] = @{} }
+        $sectionParams['application']['OperatorHandoffSubdir'] = $appSubdir
     }
 
     $userSummary = if ([string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
@@ -1378,16 +1382,13 @@ operator-facing な設定情報が番号順に集約されています。
 
 03_移行元PC情報\
   移行元 PC の構成情報スナップショット (ネットワーク / プリンタ / シリアル /
-  インストール済アプリ / Wi-Fi プロファイル / 環境変数 など)。
+  Wi-Fi プロファイル / 環境変数 など)。
   → 移行先 PC で各設定を手動再現する際の参照資料としてご利用ください。
   → 採取時の本来のネットワーク設定は _OriginalNetworkConfig.txt をご覧ください
     (LAN 直結移行で一時 IP に変更している場合、06_NetworkConfig.csv は
      一時 IP を記録しています)。
-  → アプリ移行チェック: Check-AppMigration.bat をダブルクリックすると、
-    案件で移行対象としているアプリ (app_migration_list.csv に定義) と
-    移行元 PC の実インストール状況を突き合わせて表示します。
-    定義 CSV が未配置の場合は同梱の .sample.csv をコピーして編集してから
-    再実行してください。詳細結果は _AppMigrationReport.txt に保存されます。
+  → インストール済アプリの一覧とアプリ移行チェックは「05_アプリケーション情報」
+    に移動しました (古いバックアップではこのフォルダにも 11_*.csv が残る場合があります)。
 
 04_プリンタ\
   移行元 PC のプリンタ環境を移行先 PC に再現するための一式
@@ -1402,6 +1403,16 @@ operator-facing な設定情報が番号順に集約されています。
      自動で参照します)。
   → Install-Printers.bat は必ず復元対象ユーザでログインした状態で
      実行してください (UAC で同ユーザの管理者権限に昇格)。
+
+05_アプリケーション情報\
+  移行元 PC のインストール済みアプリ一覧 (11_DesktopApps.csv / 11_StoreApps.csv) と
+  案件のアプリ移行突合リスト (app_migration_list.csv) 一式。
+  → アプリ移行チェック: Check-AppMigration.bat をダブルクリックすると、案件で移行対象と
+    しているアプリ (app_migration_list.csv に定義) と移行元 PC の実インストール状況を
+    突き合わせて表示します。定義 CSV が未配置の場合は同梱の .sample.csv をコピーして
+    編集してから再実行してください。詳細結果は _AppMigrationReport.txt に保存されます。
+  → 「Fabriq 移行情報ビューア」の「アプリ移行を突合」からも、同じ突合を画面上で
+    確認できます。
 
 このフォルダは作業完了後に削除して構いません。
 
@@ -1432,6 +1443,9 @@ operator-facing な設定情報が番号順に集約されています。
             }
             if ($sectionParams.ContainsKey('printer')) {
                 $sectionParams['printer'].Remove('OperatorHandoffSubdir') | Out-Null
+            }
+            if ($sectionParams.ContainsKey('application')) {
+                $sectionParams['application'].Remove('OperatorHandoffSubdir') | Out-Null
             }
             $script:RestoreHandoffEnabled = $false
         }

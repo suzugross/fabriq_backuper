@@ -750,6 +750,7 @@ $script:OperatorHandoffSubdirs = [ordered]@{
     'outlook_pop'     = '02_outlook_アカウント情報'
     'system_evidence' = '03_移行元PC情報'
     'printer'         = '04_プリンタ'
+    'application'     = '05_アプリケーション情報'
 }
 
 function global:Resolve-OperatorHandoffRoot {
@@ -1239,6 +1240,61 @@ function global:Compare-AppMigrationList {
         [void]$unmatched.Add($src[$i])
     }
     return @{ Entries = @($entriesOut.ToArray()); Unmatched = @($unmatched.ToArray()); Skipped = @($skipped.ToArray()) }
+}
+
+# ============================================================
+# v0.61.0 (t-0009 P2): installed-app inventory readers (single source).
+#
+# Lifted verbatim from system_evidence/backup.ps1 §11 so the new
+# application backup section AND the viewer's live new-PC query (P3) share
+# identical enumeration. Desktop = HKLM (x64 + WOW6432Node) + an optional
+# per-user Uninstall root (HKU:\<sid> for cross-user backup, or HKCU: for a
+# live current-user query). Store = Get-AppxPackage (current context).
+# Output column shape matches 11_DesktopApps.csv / 11_StoreApps.csv exactly.
+# ============================================================
+
+function global:Get-InstalledDesktopApp {
+    # $PerUserUninstallRoot: a registry root whose \SOFTWARE\...\Uninstall is
+    # also scanned (e.g. the HKU:\<SID> PSDrive path from Resolve-HkcuRoot for a
+    # cross-user backup, or 'HKCU:' for a live current-user query). When empty,
+    # only the machine-wide HKLM roots are scanned.
+    param([string]$PerUserUninstallRoot = $null)
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($PerUserUninstallRoot)) {
+        $r = "$PerUserUninstallRoot".TrimEnd('\')
+        $paths += "$r\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+        $paths += "$r\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    }
+    return @(Get-ItemProperty $paths -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName } |
+        Select-Object @{N = 'Name'; E = { $_.DisplayName } },
+                      @{N = 'Version'; E = { $_.DisplayVersion } },
+                      Publisher,
+                      InstallDate,
+                      @{N = 'Scope'; E = {
+                          $p = $_.PSPath
+                          if     ($p -match 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node') { 'Machine (x86)' }
+                          elseif ($p -match 'HKEY_LOCAL_MACHINE')                        { 'Machine (x64)' }
+                          elseif ($p -match 'HKEY_USERS\\.*\\SOFTWARE\\WOW6432Node')     { 'User (x86)' }
+                          elseif ($p -match 'HKEY_USERS')                                { 'User (x64)' }
+                          elseif ($p -match 'HKEY_CURRENT_USER\\SOFTWARE\\WOW6432Node')  { 'User (x86)' }
+                          elseif ($p -match 'HKEY_CURRENT_USER')                         { 'User (x64)' }
+                          else                                                           { 'Unknown' }
+                      } } |
+        Sort-Object Name)
+}
+
+function global:Get-InstalledStoreApp {
+    # Store / UWP apps for the current context (Get-AppxPackage). Publisher is
+    # the PublisherId (hash) -- recorded for reference, not used for matching.
+    return @(Get-AppxPackage |
+        Select-Object @{N = 'Name'; E = { $_.Name } },
+                      @{N = 'Version'; E = { $_.Version } },
+                      @{N = 'Publisher'; E = { $_.PublisherId } } |
+        Sort-Object Name)
 }
 
 function global:New-AppMigrationCheckBat {

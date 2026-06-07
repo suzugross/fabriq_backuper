@@ -16,6 +16,19 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.61.0: **アプリ情報を独立した application セクションへ移設 (TM t-0009 P2)** —
+  インストール済みアプリの採取を system_evidence（PC情報）から新 `application` セクション
+  （handoff `05_アプリケーション情報`）へ移設。後方互換（旧バックアップはアプリが system_evidence 配下のため
+  dual-location フォールバックで復元継続）。
+  - 新 section：[application/backup.ps1](backuper/lib/sections/application/backup.ps1)（共通ヘルパー
+    `Get-InstalledDesktopApp`/`Get-InstalledStoreApp` で `11_DesktopApps.csv`/`11_StoreApps.csv`＋manifest を採取）／
+    [application/restore.ps1](backuper/lib/sections/application/restore.ps1)（`05_アプリケーション情報` へ配備＋
+    Check-AppMigration tooling を移設・`sections/application`→無ければ`sections/system_evidence`の dual-location）。
+  - system_evidence から §11 採取と Check-AppMigration deploy を撤去。`data/sections.csv` に application 登録（UTF-8 BOM 付与）。
+  - backup_view のセクショングリッドを 4列化（7セクションを2行に収容・コンテナ据え置き）。restore_view に
+    application の handoff 配線＋README を `05_アプリケーション情報` 反映に更新。
+  - manifest schema / section interface は不変（section 追加は additive＝MINOR）。Handoff Viewer は P1 の dual-location でそのまま発見。
+  - 多エージェント敵対的レビュー（39報告→実害1件＝README stale を修正、他は非該当）。実機スモーク推奨。
 - backuper v0.60.0: **移行情報ビューアに「アプリ移行を突合」GUI を追加 (TM t-0009 P1)** —
   選択した集約フォルダの旧PCアプリ（`11_DesktopApps.csv`/`11_StoreApps.csv`）と案件の突合リスト
   （`data/app_migration_list.csv`）を突合し、**色分けグリッドで「要移行／未検出」を視覚表示**するモーダルを

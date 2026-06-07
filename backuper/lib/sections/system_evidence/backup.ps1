@@ -13,7 +13,7 @@
 #   - §06: Network Settings (CSV)
 #   - §07: Printers / Ports List (CSV)
 #   - §10: PC Serial Number (multi-source)
-#   - §11: Installed Software (Desktop via HKLM + HKU\<source-sid>, Store via Get-AppxPackage)
+#   - (§11 Installed Software was MOVED to the dedicated 'application' section in t-0009 P2)
 #   - §16: Wi-Fi Profiles (without PSK - key=clear is intentionally NOT used)
 #   - §27: Environment Variables (Machine + User scopes, CSV)
 #
@@ -53,9 +53,9 @@ $warnings = @()
 # ----------------------------------------------------------
 # Resolve SectionParams
 # ----------------------------------------------------------
-# SourceUserProfilePath is used by §11 (per-user HKU\<sid>\Uninstall
-# scan) for source-user-side installed-software enumeration. The
-# resolution to HKU is done by Resolve-HkcuRoot at scan time.
+# SourceUserProfilePath is still accepted for compatibility but is no longer
+# used here: the installed-software (former §11) scan moved to the 'application'
+# section (t-0009 P2). MigrationProfile (below) is still used by Step 0.
 $sourceUserProfilePath = $null
 if ($SectionParams.ContainsKey('SourceUserProfilePath') -and `
     -not [string]::IsNullOrWhiteSpace($SectionParams['SourceUserProfilePath'])) {
@@ -573,94 +573,6 @@ try {
 }
 catch {
     Out-Log "[ERROR] Failed to collect serial number sources: $_" -Color Red
-    $secStatus = 'Failed'
-    $secReason = "$($_.Exception.Message)"
-}
-Close-EvidenceSection -Status $secStatus -Reason $secReason
-
-# ============================================================
-# §11 Installed Software (Desktop + Store)
-# ============================================================
-# Desktop apps come from 4 registry roots:
-#   - HKLM\SOFTWARE\...\Uninstall                (machine-wide x64)
-#   - HKLM\SOFTWARE\WOW6432Node\...\Uninstall    (machine-wide x86 on x64 OS)
-#   - HKU:\<source-sid>\SOFTWARE\...\Uninstall   (source-user per-user install)
-#   - HKU:\<source-sid>\SOFTWARE\WOW6432Node\... (source-user x86 per-user)
-# The HKU paths catch installs that target users do "Just me" rather than
-# "All users". Without the HKU sweep, under cross-user admin elevation the
-# admin's HKCU is captured instead (wrong user). Resolve-HkcuRoot picks
-# either HKCU: (= current user) or HKU:\<SID> based on logged-on user
-# context.
-#
-# Store apps use Get-AppxPackage. Under cross-user admin elevation this
-# enumerates the admin's Appx packages, NOT the source user's. This is the
-# operator-accepted "manager-recommended apps" compromise; per-user
-# enumeration via Get-AppxPackage -User <name> needs ApplicationPackages
-# Discovery service + more permissions and is intentionally not attempted.
-Start-EvidenceSection -Id "11" -Title "Installed Software List (CSV)" -FileName $null
-$secStatus = 'Success'
-$secReason = $null
-try {
-    # 11a. Desktop Apps (registry)
-    $desktopPaths = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-    )
-    $hkcuInfo = $null
-    try {
-        $hkcuInfo = Resolve-HkcuRoot
-    } catch {
-        Out-Log "  [WARN] Resolve-HkcuRoot failed; per-user uninstall paths skipped: $($_.Exception.Message)" -Color Yellow
-    }
-    $perUserScanLabel = '(none)'
-    if ($null -ne $hkcuInfo -and -not [string]::IsNullOrWhiteSpace($hkcuInfo.PsDrivePath)) {
-        $desktopPaths += "$($hkcuInfo.PsDrivePath)\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
-        $desktopPaths += "$($hkcuInfo.PsDrivePath)\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-        $perUserScanLabel = $hkcuInfo.Label
-    }
-    Out-Log "  Per-user scan target: $perUserScanLabel"
-    if (-not [string]::IsNullOrWhiteSpace($sourceUserProfilePath)) {
-        Out-Log "  SourceUserProfilePath (informational): $sourceUserProfilePath"
-    }
-
-    $desktop = Get-ItemProperty $desktopPaths -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName } |
-        Select-Object @{N='Name';E={$_.DisplayName}},
-                      @{N='Version';E={$_.DisplayVersion}},
-                      Publisher,
-                      InstallDate,
-                      @{N='Scope';E={
-                          $p = $_.PSPath
-                          if     ($p -match 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node') { 'Machine (x86)' }
-                          elseif ($p -match 'HKEY_LOCAL_MACHINE')                       { 'Machine (x64)' }
-                          elseif ($p -match 'HKEY_USERS\\.*\\SOFTWARE\\WOW6432Node')    { 'User (x86)' }
-                          elseif ($p -match 'HKEY_USERS')                               { 'User (x64)' }
-                          else                                                          { 'Unknown' }
-                      }} |
-        Sort-Object Name
-
-    $outDesktop = Join-Path $sectionDir "11_DesktopApps.csv"
-    $desktop | Export-Csv -Path $outDesktop -NoTypeInformation -Encoding UTF8
-    Add-EvidenceSectionFile "11_DesktopApps.csv"
-
-    Out-Log "Desktop apps: $(@($desktop).Count) items -> 11_DesktopApps.csv"
-
-    # 11b. Store / UWP Apps (current admin's view)
-    $store = Get-AppxPackage |
-        Select-Object @{N='Name';E={$_.Name}},
-                      @{N='Version';E={$_.Version}},
-                      @{N='Publisher';E={$_.PublisherId}} |
-        Sort-Object Name
-
-    $outStore = Join-Path $sectionDir "11_StoreApps.csv"
-    $store | Export-Csv -Path $outStore -NoTypeInformation -Encoding UTF8
-    Add-EvidenceSectionFile "11_StoreApps.csv"
-
-    Out-Log "Store apps: $(@($store).Count) items -> 11_StoreApps.csv"
-    Out-Log "  (Store apps reflect the current admin context, not necessarily the source user.)"
-}
-catch {
-    Out-Log "[ERROR] Failed to get software list: $_" -Color Red
     $secStatus = 'Failed'
     $secReason = "$($_.Exception.Message)"
 }
