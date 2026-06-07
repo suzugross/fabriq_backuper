@@ -273,6 +273,15 @@ function New-BackupView {
     $script:BackupEntryGrid = $eGrid
 
     # ---- Start button (Y +30 by v0.26.0) ----------------
+    # v0.56.0 (t-0003): backup redo loop. Within one app session, every backup run
+    # for the (fixed) host MERGES into the first run's aggregate dir = one growing
+    # backup; relaunching the app starts a fresh session/backup. This label shows
+    # the session-continuation state (set by Update-BackupRetryState). The merge is
+    # automatic -- no toggle.
+    $retryLbl = New-StyledLabel -Text "" -X 24 -Y 660 -Width 668 -Height 18 -FgColor $script:fgDim
+    $panel.Controls.Add($retryLbl)
+    $script:BackupRetryStatusLabel = $retryLbl
+
     $btnStart = New-StyledButton -Text "バックアップ開始" -X 700 -Y 654 -Width 204 -Height 44 -BgColor $script:bgAccent
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-BackupStart })
@@ -356,6 +365,74 @@ function Read-BackupEntryGridIntoMemory {
         $checked = ($row.Cells['Enabled'].Value -eq $true)
         $script:BackupEntries[$i].Enabled = if ($checked) { '1' } else { '0' }
     }
+}
+
+function Update-BackupRetryState {
+    # v0.56.0 (t-0003): session-consistent backup. Once a backup has run THIS
+    # session for the (fixed) host, every subsequent run merges into that backup
+    # (engine -RetryIntoAggregateDir, gated in Invoke-BackupStart). This hook shows
+    # the continuation status and pre-sets the selection to "keep ONLY the
+    # previously failed/partial parts checked" (successful parts unchecked):
+    #   - after Partial/Failed: failed sections + failed userdata entries pre-checked (穴埋め);
+    #   - after Success: nothing pre-checked, so the operator checks/adds what to include.
+    # The userdata SECTION checkbox is intentionally left checked so a newly-added
+    # entry can still be captured. No prior run -> normal CSV defaults (untouched).
+    $hasPrior = ($null -ne $script:BackupLastResult) -and `
+                (-not [string]::IsNullOrWhiteSpace("$($script:BackupLastAggregateDir)")) -and `
+                (Test-Path -LiteralPath "$($script:BackupLastAggregateDir)") -and `
+                ($null -ne $script:CurrentHost) -and `
+                ("$($script:BackupLastHostName)" -eq "$($script:CurrentHost.OldPCname)")
+
+    if ($null -ne $script:BackupRetryStatusLabel) {
+        if (-not $hasPrior) {
+            $script:BackupRetryStatusLabel.Text = ''
+        }
+        else {
+            $priorStatus = "$($script:BackupLastResult.Status)"
+            $failParts = @()
+            foreach ($key in $script:BackupLastResult.SectionResults.Keys) {
+                $st = "$($script:BackupLastResult.SectionResults[$key].Status)"
+                if ($st -eq 'Failed' -or $st -eq 'Partial') { $failParts += ("{0}({1})" -f $key, (Get-LocalizedStatusLabel $st)) }
+            }
+            $tail = if ($failParts.Count -gt 0) { " — 要再試行: $($failParts -join ', ')（失敗分をチェック済み）" } else { "" }
+            $script:BackupRetryStatusLabel.Text =
+                ("セッション継続中：このバックアップは {0} に統合されます（前回: {1}）{2}" -f `
+                    (Split-Path -Leaf "$($script:BackupLastAggregateDir)"), (Get-LocalizedStatusLabel $priorStatus), $tail)
+        }
+    }
+
+    if (-not $hasPrior) { return }
+
+    # Keep ONLY previously failed/partial SECTIONS checked. Skip system_evidence
+    # (always-on) and userdata (its SECTION stays checked so added/redone entries
+    # can be captured; its ENTRIES are pre-selected just below).
+    foreach ($name in @($script:BackupSectionChecks.Keys)) {
+        if ($name -eq 'system_evidence' -or $name -eq 'userdata') { continue }
+        $cb = $script:BackupSectionChecks[$name]
+        if ($null -eq $cb) { continue }
+        $sr = $script:BackupLastResult.SectionResults[$name]
+        $st = if ($null -ne $sr) { "$($sr.Status)" } else { '' }
+        $cb.Checked = ($st -eq 'Failed' -or $st -eq 'Partial')
+    }
+
+    # userdata ENTRIES: check ONLY the previously failed/partial ones (from the
+    # last run's section manifest). After a full success this unchecks every entry,
+    # so only entries the operator (re-)checks or newly adds are captured.
+    $failedSources = @{}
+    $udManifest = Join-Path "$($script:BackupLastAggregateDir)" 'sections\userdata\manifest.json'
+    if (Test-Path -LiteralPath $udManifest) {
+        try {
+            $um = (Get-Content -LiteralPath $udManifest -Raw -Encoding UTF8) | ConvertFrom-Json
+            foreach ($e in @($um.items.entries)) {
+                $est = "$($e.status)"
+                if ($est -eq 'Failed' -or $est -eq 'Partial') { $failedSources["$($e.sourcePath)"] = $true }
+            }
+        } catch { }
+    }
+    foreach ($e in $script:BackupEntries) {
+        $e.Enabled = if ($failedSources.ContainsKey("$($e.SourcePath)")) { '1' } else { '0' }
+    }
+    Update-BackupEntryGridFromMemory
 }
 
 function Invoke-EntryAdd {
@@ -509,6 +586,10 @@ function Show-BackupView {
     $csvPath = Join-Path $script:BackuperRoot 'data\userdata_list.csv'
     $script:BackupEntries = @(Read-UserdataCsv -Path $csvPath)
     Update-BackupEntryGridFromMemory
+
+    # v0.56.0 (t-0003): after a Partial/Failed run of this host, surface the
+    # status + pre-select only the failed parts and reveal the retry-merge toggle.
+    Update-BackupRetryState
 }
 
 function Invoke-BackupStart {
@@ -529,6 +610,34 @@ function Invoke-BackupStart {
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
+    }
+
+    # v0.56.0 (t-0003): retry-merge detection. When the redo-loop toggle is on and
+    # a prior Partial/Failed run of THIS host exists, this run re-executes the
+    # (failed) selection INTO that run's aggregate dir and merges, producing one
+    # complete backup. Build the sourcePath->originalId map from the prior run's
+    # userdata manifest so retried entries overwrite their ORIGINAL entry dirs.
+    # v0.56.0: session-consistent -- ANY run after the first (same session, same
+    # fixed host, prior aggregate dir still present) merges into that first dir. No
+    # toggle; relaunching the app starts a fresh session/backup.
+    $retryAggDir   = $null
+    $retryEntryIds = @{}
+    $isBackupRetry = $false
+    if (-not [string]::IsNullOrWhiteSpace("$($script:BackupLastAggregateDir)") -and `
+        (Test-Path -LiteralPath "$($script:BackupLastAggregateDir)") -and `
+        ("$($script:BackupLastHostName)" -eq "$($script:CurrentHost.OldPCname)")) {
+        $isBackupRetry = $true
+        $retryAggDir   = "$($script:BackupLastAggregateDir)"
+        $udManifest    = Join-Path $retryAggDir 'sections\userdata\manifest.json'
+        if (Test-Path -LiteralPath $udManifest) {
+            try {
+                $um = (Get-Content -LiteralPath $udManifest -Raw -Encoding UTF8) | ConvertFrom-Json
+                foreach ($e in @($um.items.entries)) {
+                    $sp = "$($e.sourcePath)"
+                    if (-not [string]::IsNullOrWhiteSpace($sp)) { $retryEntryIds[$sp] = "$($e.id)" }
+                }
+            } catch { }
+        }
     }
 
     $selectedPrinters = @()
@@ -559,6 +668,10 @@ function Invoke-BackupStart {
         userdata = @{
             IncludeEntries        = $selectedEntries
             SourceUserProfilePath = $sourceUserProfilePath
+            # v0.56.0 (t-0003): retry-merge -- fold the (failed) entries into the
+            # previous run's manifest using their original ids.
+            RetryMerge            = $isBackupRetry
+            RetryEntryIds         = $retryEntryIds
         }
         # Phase 2.9.0a: outlook_pop reads HKCU under the selected user too
         outlook_pop = @{
@@ -613,8 +726,11 @@ function Invoke-BackupStart {
         "取得元ユーザ: $sourceUserProfilePath"
     }
 
+    $retryNote = if ($isBackupRetry) {
+        "【セッション継続】このバックアップは前回のバックアップ ($(Split-Path -Leaf $retryAggDir)) に統合されます。`n`n"
+    } else { "" }
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "$($script:CurrentHost.OldPCname) のバックアップを開始しますか?`n`n保存先: $destRoot`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`n$printerSummary`n$userdataSummary`n$userSummary",
+        "$retryNote$($script:CurrentHost.OldPCname) のバックアップを開始しますか?`n`n保存先: $destRoot`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`n$printerSummary`n$userdataSummary`n$userSummary",
         "Fabriq BackUper - 確認",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question
@@ -668,7 +784,12 @@ function Invoke-BackupStart {
     }
 
     Switch-View 'Progress'
-    Initialize-ProgressView -Title "バックアップ実行中..."
+    # v0.56.0 (t-0003): pass -ReturnView 'Backup' so the progress view reveals a
+    # "バックアップ画面へ戻る" button on finish, enabling the backup redo loop
+    # (return -> retry failed parts merged into the same backup). Restore-only
+    # auto-revert in the 完了 handler is gated on ReturnView='Restore', so backup
+    # just closes on 完了.
+    Initialize-ProgressView -Title "バックアップ実行中..." -ReturnView 'Backup'
     Add-ProgressLog "$($script:CurrentHost.OldPCname) のバックアップを開始します"
     Add-ProgressLog "保存先: $destRoot"
     Add-ProgressLog $userSummary
@@ -694,9 +815,16 @@ function Invoke-BackupStart {
         -FabriqRoot $script:FabriqRoot `
         -BackuperVersion $script:BackuperVersion `
         -SectionParamsBySection $sectionParams `
-        -DestinationRoot $destRoot
+        -DestinationRoot $destRoot `
+        -RetryIntoAggregateDir $retryAggDir
 
     $overallSw.Stop()
+
+    # v0.56.0 (t-0003): retain the run result so the redo loop (return -> retry)
+    # can show status, pre-select failures, and merge a retry into THIS dir.
+    $script:BackupLastResult       = $result
+    $script:BackupLastAggregateDir = $result.AggregateDir
+    $script:BackupLastHostName     = "$($script:CurrentHost.OldPCname)"
 
     Add-ProgressLog ""
     Add-ProgressLog "=========================================="

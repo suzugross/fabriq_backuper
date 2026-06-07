@@ -44,6 +44,17 @@ if ($SectionParams.ContainsKey('SourceUserProfilePath') -and `
     $sourceUserProfilePath = "$($SectionParams['SourceUserProfilePath'])"
 }
 
+# v0.56.0 (t-0003): retry-merge mode. When RetryMerge is set, this run folds its
+# (failed-entry) results INTO the existing section manifest instead of replacing
+# it, and uses the caller-supplied original ids (RetryEntryIds: sourcePath -> id)
+# so each retried entry overwrites its ORIGINAL entries/<id>/data dir. This keeps
+# the backup a single complete tree (successful entries from the first run stay).
+$retryMerge = ($SectionParams.ContainsKey('RetryMerge') -and $SectionParams['RetryMerge'])
+$retryEntryIds = @{}
+if ($SectionParams.ContainsKey('RetryEntryIds') -and $SectionParams['RetryEntryIds'] -is [hashtable]) {
+    $retryEntryIds = $SectionParams['RetryEntryIds']
+}
+
 # ----------------------------------------------------------
 # Load CSV (FabriqBackUper-owned)
 # ----------------------------------------------------------
@@ -167,8 +178,45 @@ function ConvertFrom-ExcludePattern {
 # ----------------------------------------------------------
 $planned = @()
 $entryIndex = 0
+# v0.56.0 (t-0003): retry-merge id allocation. Entries present in the ORIGINAL
+# backup reuse their original id (RetryEntryIds: sourcePath -> id) so they
+# overwrite their own entries/<id>/data dir. Entries NOT in the map (added since
+# the original backup, or otherwise unknown) get a FRESH id beyond every existing
+# id -- they must NEVER fall back to a positional id, which could collide with and
+# WIPE a successful sibling's dir (adversarial review finding).
+$retryNextFreeId = 1
+if ($retryMerge) {
+    # Fresh-id floor = beyond every existing id, taken from BOTH the caller's id
+    # map AND the entry dirs already on disk. Scanning the on-disk dirs makes this
+    # robust even if the map is empty (prior manifest unreadable): a new/unmapped
+    # entry then still gets an id beyond every existing entries/<id> dir, so it can
+    # never reuse (and wipe) a sibling's dir.
+    $maxId = 0
+    foreach ($v in $retryEntryIds.Values) {
+        $iv = 0
+        if ([int]::TryParse("$v", [ref]$iv) -and $iv -gt $maxId) { $maxId = $iv }
+    }
+    $entriesRoot = Join-Path $sectionDir 'entries'
+    if (Test-Path -LiteralPath $entriesRoot) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $entriesRoot -Directory -ErrorAction SilentlyContinue)) {
+            $iv = 0
+            if ([int]::TryParse($d.Name, [ref]$iv) -and $iv -gt $maxId) { $maxId = $iv }
+        }
+    }
+    $retryNextFreeId = $maxId + 1
+}
 foreach ($e in $entries) {
     $entryIndex++
+    if ($retryMerge) {
+        if ($retryEntryIds.ContainsKey($e.SourcePath)) {
+            $entryId = "$($retryEntryIds[$e.SourcePath])"
+        } else {
+            $entryId = "{0:D2}" -f $retryNextFreeId
+            $retryNextFreeId++
+        }
+    } else {
+        $entryId = "{0:D2}" -f $entryIndex
+    }
     $resolved = Resolve-EntryPath -Path $e.SourcePath
     $existsAsDir  = $false
     $existsAsFile = $false
@@ -178,7 +226,7 @@ foreach ($e in $entries) {
     }
     $planned += [PSCustomObject]@{
         Index          = $entryIndex
-        Id             = ("{0:D2}" -f $entryIndex)
+        Id             = $entryId
         SourcePath     = $e.SourcePath
         ResolvedPath   = $resolved
         ExistsAsDir    = $existsAsDir
@@ -258,10 +306,37 @@ foreach ($p in $planned) {
     }
 
     try {
+        # v0.56.0: on retry, wipe the re-processed entry's data first so its
+        # backup exactly matches the source (robocopy here is additive, not /MIR,
+        # so stale partial files from the failed first run could otherwise linger).
+        if ($retryMerge -and (Test-Path -LiteralPath $dataDir)) {
+            Remove-Item -LiteralPath $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
         $null = New-Item -ItemType Directory -Path $dataDir -Force -ErrorAction Stop
     } catch {
         $warnings += "Entry $($p.Id) dir creation failed: $($_.Exception.Message)"
         $failCount++
+        # v0.56.0: record a Failed manifest entry (mirroring the missing-source
+        # branch) so the manifest-driven status computation sees this failure --
+        # without it a dir-creation failure would be invisible and the section
+        # mis-reported as Success.
+        $manifestEntries += [PSCustomObject]@{
+            id              = $p.Id
+            sourcePath      = $p.SourcePath
+            resolvedPath    = $p.ResolvedPath
+            isDirectory     = [bool]$p.ExistsAsDir
+            recurse         = $p.Recurse
+            excludePattern  = $p.ExcludePattern
+            onConflict      = $p.OnConflict
+            includeAcl      = $p.IncludeAcl
+            fileCount       = 0
+            dirCount        = 0
+            byteCount       = 0
+            backupSubpath   = $null
+            robocopyExitCode = $null
+            status          = 'Failed'
+            reason          = 'dir creation failed'
+        }
         try { Set-EntryStatus -Id $p.Id -Status 'Failed' } catch { }
         continue
     }
@@ -382,6 +457,40 @@ foreach ($p in $planned) {
 }
 
 # ----------------------------------------------------------
+# v0.56.0 (t-0003): retry-merge -- fold the just-processed (retried) entries into
+# the ORIGINAL run's manifest entries so the section manifest stays COMPLETE
+# (successful entries from the first run are kept; retried entries replace their
+# old records by id). The counts / status / Summary below are then computed over
+# the merged set. id is stable across runs (caller passes the original ids), so
+# matching/overwriting by id is correct.
+# ----------------------------------------------------------
+$retryMergeAbort = $false
+if ($retryMerge) {
+    $existingManifestPath = Join-Path $sectionDir 'manifest.json'
+    if (Test-Path -LiteralPath $existingManifestPath) {
+        try {
+            $existingUd = (Get-Content -LiteralPath $existingManifestPath -Raw -Encoding UTF8) | ConvertFrom-Json
+            $existingEntries = @()
+            if ($existingUd -and $existingUd.items -and $existingUd.items.entries) {
+                $existingEntries = @($existingUd.items.entries)
+            }
+            $retriedIds = @{}
+            foreach ($me in $manifestEntries) { $retriedIds["$($me.id)"] = $true }
+            $kept = @($existingEntries | Where-Object { -not $retriedIds.ContainsKey("$($_.id)") })
+            $manifestEntries = @(@(@($kept) + @($manifestEntries)) | Sort-Object { [int]("$($_.id)") })
+            Show-Info "Retry-merge: kept $($kept.Count) existing + $($retriedIds.Count) retried = $($manifestEntries.Count) entry(ies)"
+        } catch {
+            # The existing manifest is present but unreadable. Do NOT overwrite it
+            # with a retried-only manifest (that would drop the previously-
+            # successful entries' records, so restore would skip their preserved
+            # data). Abort the manifest write below + mark the section Failed.
+            $retryMergeAbort = $true
+            Show-Error "Retry-merge: existing userdata manifest unreadable; preserving it and marking the section Failed for manual review: $($_.Exception.Message)"
+        }
+    }
+}
+
+# ----------------------------------------------------------
 # Build manifest (fabriq-userdata-backup schemaVersion=1)
 # ----------------------------------------------------------
 $hwUid = $null
@@ -438,13 +547,24 @@ $manifest = [ordered]@{
 }
 
 $manifestPath = Join-Path $sectionDir 'manifest.json'
-$manifest | ConvertTo-Json -Depth 8 | Out-File -FilePath $manifestPath -Encoding UTF8 -Force
+# v0.56.0: on a retry whose existing manifest was unreadable, do NOT overwrite it
+# (preserve the original records; see $retryMergeAbort above).
+if (-not $retryMergeAbort) {
+    $manifest | ConvertTo-Json -Depth 8 | Out-File -FilePath $manifestPath -Encoding UTF8 -Force
+}
 
 $sw.Stop()
 
-$status = if ($failCount -gt 0 -and $successCount -eq 0) { 'Failed' }
-          elseif ($failCount -gt 0) { 'Partial' }
+# v0.56.0: compute status over the (possibly merged) entry set via each entry's
+# status field, so a retry that fills the last failures flips the section to
+# Success even though THIS run only processed the previously-failed entries.
+$mFail = @($manifestEntries | Where-Object { "$($_.status)" -eq 'Failed' }).Count
+$mOk   = @($manifestEntries | Where-Object { "$($_.status)" -eq 'Success' -or "$($_.status)" -eq 'Partial' }).Count
+$status = if ($mFail -gt 0 -and $mOk -eq 0) { 'Failed' }
+          elseif ($mFail -gt 0) { 'Partial' }
           else { 'Success' }
+# v0.56.0: a retry that couldn't safely merge its manifest is a hard failure.
+if ($retryMergeAbort) { $status = 'Failed' }
 
 return [PSCustomObject]@{
     Status               = $status

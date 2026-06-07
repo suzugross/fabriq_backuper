@@ -218,7 +218,11 @@ function Set-ProgressFinished {
     # v0.50.0 (D6): reveal the "return to previous view" button when this run
     # was launched with a ReturnView (restore -> iterate loop).
     if ($null -ne $script:ProgressReturnBtn -and -not [string]::IsNullOrWhiteSpace($script:ProgressReturnView)) {
-        $label = if ($script:ProgressReturnView -eq 'Restore') { "リストア画面へ戻る" } else { "前の画面へ戻る" }
+        $label = switch ($script:ProgressReturnView) {
+            'Restore' { "リストア画面へ戻る" }
+            'Backup'  { "バックアップ画面へ戻る" }
+            default   { "前の画面へ戻る" }
+        }
         $script:ProgressReturnBtn.Text    = $label
         $script:ProgressReturnBtn.Visible = $true
         $script:ProgressReturnBtn.Enabled = $true

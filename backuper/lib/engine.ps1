@@ -197,7 +197,12 @@ function Invoke-BackuperBackupCore {
         # Phase 2.4: backup destination root. If empty/null, defaults to
         # $BackuperRoot\Backup. Can be UNC (e.g. \\server\share\backups).
         # Caller is responsible for UNC credential prep before invoking.
-        [string]$DestinationRoot = $null
+        [string]$DestinationRoot = $null,
+        # v0.56.0 (t-0003): when set to an EXISTING aggregate dir, this is a RETRY
+        # run -- re-run only the (failed) PickedSections INTO that dir and MERGE
+        # the results into its existing manifest, instead of creating a new
+        # timestamped dir. Null/empty = normal full backup (new timestamp dir).
+        [string]$RetryIntoAggregateDir = $null
     )
 
     Set-SelectedHostEnvVars -SelectedHost $SelectedHost
@@ -208,27 +213,40 @@ function Invoke-BackuperBackupCore {
     } else {
         $DestinationRoot
     }
-    $aggregateDir = Join-Path (Join-Path $rootDir $SelectedHost.OldPCname) $timestamp
-    try {
-        $null = New-Item -ItemType Directory -Path $aggregateDir -Force -ErrorAction Stop
+    # v0.56.0 (t-0003): retry mode reuses the original aggregate dir (keeping its
+    # timestamp) so the merged result stays ONE backup; normal mode creates a new
+    # timestamped dir.
+    $isRetry = (-not [string]::IsNullOrWhiteSpace($RetryIntoAggregateDir)) -and `
+               (Test-Path -LiteralPath $RetryIntoAggregateDir)
+    if ($isRetry) {
+        $aggregateDir = $RetryIntoAggregateDir
     }
-    catch {
-        return [PSCustomObject]@{
-            Status = 'Failed'
-            Message = "Failed to create aggregate dir: $($_.Exception.Message)"
-            AggregateDir = $null
-            SectionResults = @{}
-            ManifestPath = $null
+    else {
+        $aggregateDir = Join-Path (Join-Path $rootDir $SelectedHost.OldPCname) $timestamp
+        try {
+            $null = New-Item -ItemType Directory -Path $aggregateDir -Force -ErrorAction Stop
+        }
+        catch {
+            return [PSCustomObject]@{
+                Status = 'Failed'
+                Message = "Failed to create aggregate dir: $($_.Exception.Message)"
+                AggregateDir = $null
+                SectionResults = @{}
+                ManifestPath = $null
+            }
         }
     }
 
     # v0.34.0: best-effort cleanup marker so this backup tree can later be
     # bulk-deleted from the Cleanup view. (It is also recognisable via its
     # manifest.json, but the marker carries placedByHost / newPcName.)
-    $null = New-CleanupMarker -Dir $aggregateDir -ArtifactKind 'backup-tree' `
-        -OldPcName $SelectedHost.OldPCname `
-        -NewPcName $(if ($SelectedHost.PSObject.Properties.Name -contains 'NewPCname') { "$($SelectedHost.NewPCname)" } else { '' }) `
-        -BackuperVersion $BackuperVersion
+    # v0.56.0: skip on retry -- the marker already exists from the original run.
+    if (-not $isRetry) {
+        $null = New-CleanupMarker -Dir $aggregateDir -ArtifactKind 'backup-tree' `
+            -OldPcName $SelectedHost.OldPCname `
+            -NewPcName $(if ($SelectedHost.PSObject.Properties.Name -contains 'NewPCname') { "$($SelectedHost.NewPCname)" } else { '' }) `
+            -BackuperVersion $BackuperVersion
+    }
 
     $sectionResults = @{}
     foreach ($s in $PickedSections) {
@@ -249,13 +267,37 @@ function Invoke-BackuperBackupCore {
     $kernelVerFile = Join-Path $FabriqRoot 'kernel\KERNEL_VERSION'
     $kernelVer = if (Test-Path $kernelVerFile) { (Get-Content $kernelVerFile -Raw).Trim() } else { 'unknown' }
 
-    $manifest = New-AggregateManifest `
-        -OldPcName $SelectedHost.OldPCname `
-        -BackuperVersion $BackuperVersion `
-        -FabriqKernelVersion $kernelVer `
-        -SectionResults $sectionResults `
-        -Warnings @()
-    $manifestPath = Save-AggregateManifest -OutputDir $aggregateDir -Manifest $manifest
+    # v0.56.0 (t-0003): on retry, MERGE the retried sections into the existing
+    # manifest (keeps the original run's successful sections/entries). On a normal
+    # run -- or a retry whose existing manifest is unreadable -- build fresh.
+    $manifest = $null
+    $retryAggMergeFailed = $false
+    if ($isRetry) {
+        $existingManifestPath = Join-Path $aggregateDir 'manifest.json'
+        $manifest = Merge-AggregateManifest `
+            -ExistingManifestPath $existingManifestPath `
+            -RetriedSectionResults $sectionResults `
+            -Warnings @()
+        # On retry, a null merge result means the existing aggregate manifest was
+        # unreadable. Do NOT rebuild from the retried sections only (that would
+        # drop the original run's other sections); preserve the existing file and
+        # fail loudly so the operator investigates.
+        if ($null -eq $manifest) { $retryAggMergeFailed = $true }
+    }
+    if ($null -eq $manifest -and -not $retryAggMergeFailed) {
+        $manifest = New-AggregateManifest `
+            -OldPcName $SelectedHost.OldPCname `
+            -BackuperVersion $BackuperVersion `
+            -FabriqKernelVersion $kernelVer `
+            -SectionResults $sectionResults `
+            -Warnings @()
+    }
+    if ($retryAggMergeFailed) {
+        $manifestPath = Join-Path $aggregateDir 'manifest.json'
+    }
+    else {
+        $manifestPath = Save-AggregateManifest -OutputDir $aggregateDir -Manifest $manifest
+    }
 
     # Execution log
     $logPath = Join-Path $aggregateDir "_execution_log.txt"
@@ -280,13 +322,27 @@ function Invoke-BackuperBackupCore {
         }
         $logLines += ""
     }
-    $logLines | Out-File -FilePath $logPath -Encoding UTF8 -Force
-
-    $overall = 'Success'
-    foreach ($r in $sectionResults.Values) {
-        if ($r.Status -eq 'Failed')  { $overall = 'Failed'; break }
-        if ($r.Status -eq 'Partial') { $overall = 'Partial' }
+    # v0.56.0: on retry, append (keep the original run's log) instead of overwrite.
+    if ($isRetry -and (Test-Path -LiteralPath $logPath)) {
+        @("", "==== RETRY $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====") + $logLines |
+            Add-Content -Path $logPath -Encoding UTF8
     }
+    else {
+        $logLines | Out-File -FilePath $logPath -Encoding UTF8 -Force
+    }
+
+    # v0.56.0: derive overall from the (possibly merged) manifest summary so a
+    # retry that fills in the last failures correctly flips Partial/Failed ->
+    # Success over the WHOLE backup, not just the retried sections.
+    $overall = 'Success'
+    $sumFailed = 0; $sumPartial = 0
+    try { $sumFailed  = [int]$manifest.summary.failedCount }  catch { }
+    try { $sumPartial = [int]$manifest.summary.partialCount } catch { }
+    if ($sumPartial -gt 0) { $overall = 'Partial' }
+    if ($sumFailed  -gt 0) { $overall = 'Failed' }
+    # v0.56.0: an unreadable existing manifest on retry is a hard failure (the
+    # merged manifest was not written; see $retryAggMergeFailed).
+    if ($retryAggMergeFailed) { $overall = 'Failed' }
 
     # v0.41.0 (P1): drop a passive backup-completion flag at the destination
     # ROOT (in the local operation model this is the target's shared
@@ -294,11 +350,14 @@ function Invoke-BackuperBackupCore {
     # auto-select this backup. Best-effort; only on a non-Failed backup. No
     # consumer yet -- this is the producing half of the local-mode handshake.
     if ($overall -ne 'Failed') {
+        # v0.56.0: use the aggregate dir's own timestamp leaf so a retry updates
+        # the flag for the ORIGINAL backup instead of minting a new timestamp.
+        $flagTimestamp = Split-Path -Leaf $aggregateDir
         $null = New-BackupCompleteFlag `
             -RootDir $rootDir `
             -OldPcName $SelectedHost.OldPCname `
             -NewPcName $(if ($SelectedHost.PSObject.Properties.Name -contains 'NewPCname') { "$($SelectedHost.NewPCname)" } else { '' }) `
-            -Timestamp $timestamp `
+            -Timestamp $flagTimestamp `
             -Status $overall `
             -BackuperVersion $BackuperVersion
     }

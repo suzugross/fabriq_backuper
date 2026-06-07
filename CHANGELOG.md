@@ -15,6 +15,28 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.56.0: **バックアップのセッション一貫化＋やりなおしループ (TM t-0003)** —
+  リストアの D6 と対称に、バックアップ完了後も「バックアップ画面へ戻る」で操作を続けられる。さらに
+  **アプリ起動〜終了を1セッション＝1バックアップ**とし、同一セッション・同一ホストでの2回目以降の実行は
+  **最初の集約dir (同タイムスタンプ) に自動統合**される (アプリ再起動で新しいバックアップ)。部分失敗の穴埋めも、
+  成功後の項目追加も、すべて同じ1つのバックアップに「育てる」形でまとまる。
+  - **B1 戻るループ**: `Invoke-BackupStart` が `-ReturnView 'Backup'` で進捗画面に「バックアップ画面へ戻る」を表示
+    ([backup_view.ps1](backuper/lib/ui/backup_view.ps1) / [progress_view.ps1](backuper/lib/ui/progress_view.ps1))。
+    完了ボタンは Backup では素直に閉じる (auto-revert は Restore 限定)。
+  - **セッション統合 (トグルなし・自動)**: 同一セッションで先行集約dir があれば常にそこへ統合。戻った時は
+    「**失敗したもののみチェックを残す**」(成功項目はオフ) でプリセレクトし、状態サマリ
+    「セッション継続中：このバックアップは &lt;TS&gt; に統合されます」を表示。userdata セクションは追加項目を取れるよう
+    チェック維持、`system_evidence` は常時 ON。
+  - **マージ実装 (engine は後方互換)**: `Invoke-BackuperBackupCore -RetryIntoAggregateDir` (新規・optional) で
+    元dir再利用、[manifest_aggregator.ps1](backuper/lib/manifest_aggregator.ps1) の `Merge-AggregateManifest` が
+    aggregate manifest を更新 (summary 再集計・`lastRetriedAt`)、[userdata/backup.ps1](backuper/lib/sections/userdata/backup.ps1)
+    は呼出側の元id (`RetryEntryIds`) で**元の entry dir に上書き**＋ per-entry manifest を id 一致でマージ。
+    元バックアップに無い新規項目は**衝突しない新 id を採番**して追加 (既存の成功項目を壊さない)。再実行で項目を
+    外して Skipped になっても**既存の成功/失敗状態を降格しない**。
+  - normal backup / restore / manifest schema は不変。多エージェント敵対的検証3ラウンドで data-loss / 状態誤報を
+    検出→修正済み (実機スモーク推奨)。
+
 ### Fixed
 - backuper v0.55.1: **リストアの「項目別の状態」グリッドに userdata 項目が出ない不具合を修正 (TM t-0002)** —
   `Initialize-ProgressEntries` が呼ばれる度に `Rows.Clear()` でグリッドを全消去していたため、リストアで
