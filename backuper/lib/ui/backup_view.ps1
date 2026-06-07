@@ -703,6 +703,9 @@ function Invoke-BackupStart {
         -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
         $destPresetUser = $script:MigrationProfile.backuper.uncUsername
     }
+    # v0.64.0 (t-0011): prefer the extended-hostlist username for the selected
+    # host (the seam handles silent auto-connect; this prefills the fallback dialog).
+    $destPresetUser = Get-PresetUncUsername -ProfileUsername $destPresetUser
     if (-not (Resolve-UncAccess -Path $destRoot -PresetUsername $destPresetUser)) {
         [System.Windows.Forms.MessageBox]::Show(
             "保存先に接続できませんでした: $destRoot`n`n認証情報の入力をキャンセルしたか、接続に失敗しました。資格情報を確認して再度バックアップを実行してください。",

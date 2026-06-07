@@ -7,6 +7,12 @@
 # accidentally committing project-confidential application names.
 backuper/data/app_migration_list.csv
 
+# Per-satellite extended hostlist (t-0011). The committed sample
+# (extended_hostlist.sample.csv) is the template; the live file is created in
+# the field and holds ENCRYPTED UNC passwords (ENC:), so it must never be
+# committed.
+backuper/data/extended_hostlist.csv
+
 # Build artifacts
 *.pdb
 

@@ -1,0 +1,3 @@
+﻿Enabled,OldPCname,NewPCname,UncHost,UncShare,UncUsername,UncPassword,VisualLabel,VisualColor,Note
+1,OLD-PC-01,NEW-PC-01,192.168.250.20,FabriqBackup,miguser,ENC:REPLACE_WITH_ENCRYPTED_PASSWORD_BASE64,本社 経理PC,#9366BD,主担当
+0,OLD-PC-02,NEW-PC-02,NEW-PC-02,FabriqBackup,miguser,,予備機,,要確認(資格情報 未登録)

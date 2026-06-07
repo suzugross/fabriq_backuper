@@ -31,6 +31,20 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.64.0: **拡張HOSTLIST（per-satellite ホストリスト）で UNC 資格情報を自動投入 (TM t-0011 P0+P1)** —
+  Fabriq hostlist とは別に BackUper が持つ拡張ホストリスト（`backuper/data/extended_hostlist.csv`）を新設。
+  新旧PC名で **Fabriq hostlist（絶対正）と完全一致**したホストの UNC 資格情報を自動で読み込み、未接続の共有へ
+  **サイレント自動接続**する（t-0010 の差し込み口を実装）。
+  - `common.ps1` `Protect-FabriqValue`（`Unprotect-FabriqValue` の**厳密な逆**・機種跨ぎ移植可能なマスターパスフレーズ AES／`ENC:`）を追加。
+  - 新 `backuper/lib/extended_hostlist.ps1`：reader（生読み・`ENC:` は復号せず保持・平文パスワードは load guard で拒否）／
+    純突合 `Resolve-ExtendedHostlistMatch`（`(OldPCname,NewPCname)` 完全一致・trim＋大小無視・空は空のみ）／
+    seam `Connect-UncFromExtendedHostlist`（識別キーは `$script:CurrentHost`・パスワードはオンデマンド復号・成功時のみ `$true`・失敗時は従来ダイアログへ）。
+  - backup/restore の資格情報プロンプトで拡張HOSTLIST の username を優先（fallback ダイアログ用）。
+  - 独立管理ツール `fabriq_exthostlist.ps1`（＋ `.bat`）：Fabriq hostlist から seed（**実在 pair のみ登録可＝書込時も突合強制**）、
+    パスワードは `Protect-FabriqValue` で暗号化＋round-trip 検証してから保存（平文は disk に書かない）。
+  - サンプル `extended_hostlist.sample.csv`（commit）＋ live ファイルは `.gitignore`。manifest / section interface 不変。
+  - 段階 **P2**（視覚情報の session_form / handoff_viewer 表示）は後回し。`Fabriq_ExtHostlist.exe` は他ツール同様に要ビルド（暫定は `.bat`）。
+  - 検証: 静的（全 BOM/balance）＋多エージェント敵対的レビュー（26報告→**実バグ0**：crypto 8項目 byte-identical・突合は値ベース大小無視で正）。実機スモーク推奨。
 - backuper v0.62.0: **アプリ移行突合に「新PC ライブ取得＋3-way 判定」を追加 (TM t-0009 P3)** —
   移行情報ビューアの「アプリ移行を突合」に、起動時に**新PC（現在 PC）のインストール済みアプリをライブ取得**し、
   **旧PC × 突合リスト × 新PC の3点比較**で「**移行済 / 要移行 / 未検出**」を色分け判定する機能を追加。

@@ -584,6 +584,7 @@ function Invoke-RestoreBrowse {
             -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
             $browsePresetUser = $script:MigrationProfile.backuper.uncUsername
         }
+        $browsePresetUser = Get-PresetUncUsername -ProfileUsername $browsePresetUser
         [void](Resolve-UncAccess -Path $dlg.SelectedPath -PresetUsername $browsePresetUser)
     }
 
@@ -597,6 +598,7 @@ function Invoke-RestoreBrowse {
         -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
         $chosenPresetUser = $script:MigrationProfile.backuper.uncUsername
     }
+    $chosenPresetUser = Get-PresetUncUsername -ProfileUsername $chosenPresetUser
     if (-not (Resolve-UncAccess -Path $chosen -PresetUsername $chosenPresetUser)) {
         [System.Windows.Forms.MessageBox]::Show(
             "フォルダに接続できませんでした: $chosen`n`n認証情報の入力をキャンセルしたか、接続に失敗しました。資格情報を確認して再度お試しください。",
@@ -1141,6 +1143,7 @@ function Invoke-RestoreStart {
             -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
             $startPresetUser = $script:MigrationProfile.backuper.uncUsername
         }
+        $startPresetUser = Get-PresetUncUsername -ProfileUsername $startPresetUser
         if (-not (Resolve-UncAccess -Path $script:RestoreExplicitDir -PresetUsername $startPresetUser)) {
             [System.Windows.Forms.MessageBox]::Show(
                 "バックアップ元の共有に接続できませんでした:`n$($script:RestoreExplicitDir)`n`n認証情報の入力をキャンセルしたか、接続に失敗しました。",

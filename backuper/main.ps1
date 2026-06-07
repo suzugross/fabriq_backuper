@@ -116,6 +116,7 @@ $global:AutoPilotWaitSec = 0
 $libsToLoad = @(
     'lib\migration_paths.ps1',         # v0.40.0: shared migration-path resolver (local mode)
     'lib\hostlist_reader.ps1',
+    'lib\extended_hostlist.ps1',       # v0.64.0 (t-0011): per-satellite extended hostlist + UNC auto-connect seam
     'lib\manifest_aggregator.ps1',
     'lib\ui\console_menu.ps1',         # legacy console UI, kept as fallback
     'lib\engine.ps1',

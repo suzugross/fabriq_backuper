@@ -145,6 +145,55 @@ function global:Unprotect-FabriqValue {
     return $plainText
 }
 
+# v0.64.0 (t-0011): the ENCRYPT side, added as the STRICT inverse of
+# Unprotect-FabriqValue above. Used by the extended hostlist register tool to
+# write ENC: UNC passwords. The crypto parameters (salt / iterations / hash /
+# key+IV derivation ORDER) MUST stay byte-identical to Unprotect-FabriqValue
+# (and to fabriq main's CryptoPoC) or values become cross-tool undecryptable.
+# Round-trip invariant: Unprotect-FabriqValue (Protect-FabriqValue $x $pp) $pp -eq $x.
+function global:Protect-FabriqValue {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$PlainValue,
+        [Parameter(Mandatory)][string]$Passphrase
+    )
+
+    # Crypto parameters - must match Unprotect-FabriqValue exactly.
+    $salt       = [System.Text.Encoding]::UTF8.GetBytes("fabriq-fixed-salt-2024")
+    $iterations = 100000
+    $keySize    = 32   # AES-256
+    $ivSize     = 16   # AES block size
+
+    # PBKDF2-HMAC-SHA256 key derivation (same instance, GetBytes(32) then
+    # GetBytes(16) - identical order to the decrypt side so the IV matches).
+    $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes(
+        $Passphrase, $salt, $iterations,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256
+    )
+    $key = $kdf.GetBytes($keySize)
+    $iv  = $kdf.GetBytes($ivSize)
+    $kdf.Dispose()
+
+    # AES-256-CBC encryption
+    $aes         = [System.Security.Cryptography.Aes]::Create()
+    $aes.Mode    = [System.Security.Cryptography.CipherMode]::CBC
+    $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+    $aes.Key     = $key
+    $aes.IV      = $iv
+
+    $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($PlainValue)
+    $encryptor  = $aes.CreateEncryptor()
+    $ms         = New-Object System.IO.MemoryStream
+    $cs         = New-Object System.Security.Cryptography.CryptoStream(
+                      $ms, $encryptor,
+                      [System.Security.Cryptography.CryptoStreamMode]::Write)
+    $cs.Write($plainBytes, 0, $plainBytes.Length)
+    $cs.FlushFinalBlock()
+    $cipherBytes = $ms.ToArray()
+
+    $cs.Dispose(); $ms.Dispose(); $encryptor.Dispose(); $aes.Dispose()
+    return 'ENC:' + [Convert]::ToBase64String($cipherBytes)
+}
+
 function global:Test-MasterPassphrase {
     param(
         [Parameter(Mandatory)][string]$Passphrase,
