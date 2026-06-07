@@ -19,6 +19,9 @@ function Test-UncPath {
 function Connect-UncWithCredentials {
     # Pop a Windows-standard credential dialog and map the share via
     # New-PSDrive with -Credential. Returns $true on success, $false otherwise.
+    # v0.63.0: retained as a standalone/legacy helper. The default in-flow
+    # path now uses the app-styled Show-UncConnectDialog (see Resolve-UncAccess)
+    # so the operator gets path/username prefill instead of a bare Get-Credential.
     param([Parameter(Mandatory = $true)][string]$UncPath)
 
     # Extract \\server\share for the credential target
@@ -52,8 +55,38 @@ function Resolve-UncAccess {
     # Probe + optionally prompt for credentials. Returns $true if we end
     # up with a working path, $false if user cancelled or auth failed.
     # ('Resolve' is an approved PowerShell verb.)
-    param([Parameter(Mandatory = $true)][string]$Path)
+    #
+    # v0.63.0: the standalone "UNC 接続" button was removed; UNC credential
+    # entry is now unified into the backup/restore flow. When a UNC path is
+    # not reachable we pop the app-styled Show-UncConnectDialog (prefilled
+    # with the known path + optional username) so the operator only types the
+    # password -- replacing BOTH the old Get-Credential prompt and the
+    # explicit connect button in a single in-flow step.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        # Optional username preset. Today this comes from
+        # migration_profile.backuper.uncUsername; in future it can be
+        # resolved from the per-satellite extended hostlist (see seam below).
+        # Lets the dialog jump straight to the password field.
+        [string]$PresetUsername = ""
+    )
     if (-not $Path.StartsWith('\\')) { return $true }   # local path, no UNC concerns
     if (Test-UncPath -Path $Path) { return $true }      # already accessible
-    return (Connect-UncWithCredentials -UncPath $Path)
+
+    # --- 拡張HOSTLIST seam (future, inert until implemented) ---------------
+    # A future per-satellite "extended hostlist" may store connection
+    # credentials keyed by PC name (NewPC/OldPC columns + saved creds), so the
+    # operator never types them. If such a resolver function is later defined,
+    # try it SILENTLY here BEFORE prompting. This hook is a no-op today
+    # (Get-Command finds nothing) -- it adds zero behaviour now and marks the
+    # exact insertion point. The resolver is expected to accept -Path and
+    # return $true after a successful New-PSDrive.
+    $extResolver = Get-Command -Name Connect-UncFromExtendedHostlist -ErrorAction SilentlyContinue
+    if ($extResolver -and (& $extResolver -Path $Path)) { return $true }
+    # ----------------------------------------------------------------------
+
+    # In-flow interactive prompt (app-styled, prefilled with the known path +
+    # optional username). Returns the connected path on success or $null.
+    $connected = Show-UncConnectDialog -InitialPath $Path -InitialUsername $PresetUsername
+    return (-not [string]::IsNullOrWhiteSpace($connected))
 }

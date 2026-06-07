@@ -117,22 +117,10 @@ function New-BackupView {
     })
     $panel.Controls.Add($btnDestBrowse)
 
-    $btnUncConnect = New-StyledButton -Text "UNC 接続..." -X 762 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
-    $btnUncConnect.Add_Click({
-        $initial = if ($script:BackupDestinationBox.Text -like '\\*') { $script:BackupDestinationBox.Text } else { '' }
-        # v0.23.0: if a migration profile is loaded, forward uncUsername as a
-        # preset so the operator only needs to type the password.
-        $initialUser = ''
-        if ($null -ne $script:MigrationProfile -and `
-            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
-            $initialUser = $script:MigrationProfile.backuper.uncUsername
-        }
-        $unc = Show-UncConnectDialog -InitialPath $initial -InitialUsername $initialUser
-        if (-not [string]::IsNullOrWhiteSpace($unc)) {
-            $script:BackupDestinationBox.Text = $unc
-        }
-    })
-    $panel.Controls.Add($btnUncConnect)
+    # v0.63.0: the standalone "UNC 接続" button was removed. Credential entry
+    # for a UNC destination is now unified into the flow: pressing バックアップ
+    # triggers Resolve-UncAccess, which pops the prefilled Show-UncConnectDialog
+    # when the share is not yet reachable (see Invoke-BackupStart below).
 
     # ---- Sections row -------------------------------------
     $sectionGroupLbl = New-StyledLabel -Text "セクション" `
@@ -708,9 +696,16 @@ function Invoke-BackupStart {
     if ([string]::IsNullOrWhiteSpace($destRoot)) {
         $destRoot = Join-Path $script:BackuperRoot 'Backup'
     }
-    if (-not (Resolve-UncAccess -Path $destRoot)) {
+    # v0.63.0: pass the migration-profile username (if any) as a prefill so the
+    # in-flow Show-UncConnectDialog only asks for the password.
+    $destPresetUser = ''
+    if ($null -ne $script:MigrationProfile -and `
+        -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
+        $destPresetUser = $script:MigrationProfile.backuper.uncUsername
+    }
+    if (-not (Resolve-UncAccess -Path $destRoot -PresetUsername $destPresetUser)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "保存先に接続できません: $destRoot`n`n認証情報が必要な場合は [UNC 接続...] を使用してください。",
+            "保存先に接続できませんでした: $destRoot`n`n認証情報の入力をキャンセルしたか、接続に失敗しました。資格情報を確認して再度バックアップを実行してください。",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         return

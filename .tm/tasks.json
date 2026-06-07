@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T18:13:58+09:00",
+  "updatedAt": "2026-06-07T18:54:28+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -83,6 +83,24 @@
       "status": "完了",
       "createdAt": "2026-06-07T13:33:57.7559026+09:00",
       "updatedAt": "2026-06-07T18:13:58+09:00"
+    },
+    {
+      "id": "t-0010",
+      "title": "UNCについて",
+      "content": "現状、UNCボタンから明示的に接続確認を行うか、バックアップボタンを押下すると、未接続の状態であれば、標準ダイアログから資格情報を求められるようになっているが、これをUNCボタンを全面的に排除して、手順の流れで資格情報を入力する形式に統一したい。そうした場合のデメリットも検討してほしい。",
+      "claudeNote": "完了(v0.63.0)。UNC 接続ボタンを backup/restore 両画面から撤去し、資格情報入力を手順フローに一本化。Resolve-UncAccess を Get-Credential→Show-UncConnectDialog(プリフィル)に格上げ+ -PresetUsername(profile uncUsername) 追加。backup=開始時に保存先認証。restore=①参照前の preset 事前認証(ツリー探索用)②選択後 manifest 読取前③Invoke-RestoreStart で timestamp/Browse 双方を engine 前に認証 の3点でボタン代替、New-PSDrive global+Test-UncPath 短絡で二重プロンプトなし。Connect-UncWithCredentials は legacy 残置。拡張HOSTLIST 差し込み口(Connect-UncFromExtendedHostlist フック)を inert で設置(将来 PC 別資格情報の事前流し込み構想)。多エージェント敵対的レビュー(22報告→実バグ0: cross-file 依存 main.ps1 128/129 で充足/idempotency/PS5.1 null-safe/btnUncConnect 完全除去)。残:実機スモーク(profile有り UNC backup/restore で password のみ入力→成功, 既知トレードオフ=profile無し手動UNC restore は事前認証導線弱)。",
+      "status": "完了",
+      "createdAt": "2026-06-07T18:16:23.0537054+09:00",
+      "updatedAt": "2026-06-07T18:54:28+09:00"
+    },
+    {
+      "id": "t-0011",
+      "title": "拡張HOSTLIST",
+      "content": "FabriqがもつHOSTLISTとは別で、このアプリがもつHOSTLISTを用意したい。新旧PC名カラムはそのままに、本アプリでいうと、視覚情報などを書き込めるようにすると、そのPCで必要な資格情報が自動で読み込まれて、入力される仕組み。\r\n拡張ホストリストは、念のため、Fabriqのホストリストと突合せ、新旧PC名カラムのエントリが完全に一致しているときのみ採用する。\r\nFabriq側のホストリストのPCエントリが絶対的な正とするため。",
+      "claudeNote": "",
+      "status": "未着手",
+      "createdAt": "2026-06-07T18:31:37.2042554+09:00",
+      "updatedAt": "2026-06-07T18:39:13.2052766+09:00"
     }
   ]
 }

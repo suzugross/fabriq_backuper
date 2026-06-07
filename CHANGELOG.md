@@ -15,6 +15,21 @@
 
 ## [Unreleased]
 
+### Changed
+- backuper v0.63.0: **「UNC 接続」ボタンを廃止し、資格情報入力を手順フローに一本化 (TM t-0010)** —
+  バックアップ／リストア両画面から独立した「UNC 接続…」ボタンを撤去。未接続の UNC へアクセスする際は、
+  フローの中で**アプリ独自ダイアログ `Show-UncConnectDialog`（パス・ユーザ名をプリフィル、パスワードのみ入力）**を表示する。
+  - `Resolve-UncAccess` を `Get-Credential`（OS 標準）から `Show-UncConnectDialog`（プリフィル）に格上げし、
+    `-PresetUsername`（migration_profile の uncUsername）を受け取れるよう拡張。`Connect-UncWithCredentials` は legacy として残置。
+  - バックアップ：開始時に保存先 UNC を `Resolve-UncAccess`（従来どおり・プリフィル付き）で認証。
+  - リストア：①参照ダイアログを開く**前**に preset 共有を事前認証（ツリー探索のため）②選択後に manifest 読取前認証
+    ③`Invoke-RestoreStart` で **timestamp(hostlist) / Browse 双方**を engine 実行前に認証 ― の3点でボタンの事前接続を代替。
+    一度マウントすれば `Test-UncPath` が短絡し二重プロンプトしない。
+  - **拡張HOSTLIST 差し込み口（seam）を用意**（未実装・inert）：将来サテライト独自ホストリストに PC 別接続資格情報を
+    持たせる構想に備え、`Resolve-UncAccess` 内にプロンプト前の `Connect-UncFromExtendedHostlist` フックを設置（現状 no-op）。
+  - 文言修正（エラー／参照ダイアログのヒントから旧ボタン参照を除去）。manifest / section interface 不変。多エージェント敵対的レビュー指摘ゼロ・実機スモーク推奨。
+  - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
+
 ### Added
 - backuper v0.62.0: **アプリ移行突合に「新PC ライブ取得＋3-way 判定」を追加 (TM t-0009 P3)** —
   移行情報ビューアの「アプリ移行を突合」に、起動時に**新PC（現在 PC）のインストール済みアプリをライブ取得**し、

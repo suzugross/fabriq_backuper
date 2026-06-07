@@ -120,31 +120,11 @@ function New-RestoreView {
     $btnBrowse.Add_Click({ Invoke-RestoreBrowse })
     $panel.Controls.Add($btnBrowse)
 
-    $btnUncConnect = New-StyledButton -Text "UNC 接続..." -X 670 -Y 64 -Width 130 -Height 28 -BgColor $script:bgAccent
-    $btnUncConnect.Add_Click({
-        # v0.23.0: pre-fill UNC path + username from the migration profile
-        # when present. Restore reads from the same share that backup wrote
-        # to, so backupRootUnc is the right preset for both modes.
-        $initial = ''
-        $initialUser = ''
-        if ($null -ne $script:MigrationProfile) {
-            if (-not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.backupRootUnc)) {
-                $initial = $script:MigrationProfile.backuper.backupRootUnc
-            }
-            if (-not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
-                $initialUser = $script:MigrationProfile.backuper.uncUsername
-            }
-        }
-        $unc = Show-UncConnectDialog -InitialPath $initial -InitialUsername $initialUser
-        if (-not [string]::IsNullOrWhiteSpace($unc)) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "接続成功:`n$unc`n`n続けて [バックアップを参照...] をクリックし、この共有内の実際のバックアップフォルダを選択してください。",
-                "UNC 接続成功",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-        }
-    })
-    $panel.Controls.Add($btnUncConnect)
+    # v0.63.0: the standalone "UNC 接続" button was removed. UNC credential
+    # entry is unified into the flow -- Invoke-RestoreBrowse authenticates the
+    # preset share before/after the folder picker, and Invoke-RestoreStart
+    # authenticates the resolved source (timestamp OR Browse) before the engine
+    # runs (all via Resolve-UncAccess -> prefilled Show-UncConnectDialog).
 
     # v0.42.0 (P2): backup-arrival wait toggle + poll timer. The manual toggle
     # is always available; Show-RestoreView also auto-starts the wait when the
@@ -523,7 +503,7 @@ function Invoke-RestoreBrowse {
     # top of the open folder picker.
     Stop-RestoreWait
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "バックアップフォルダを選択 (manifest.json を含むこと)。UNC の場合は先に [UNC 接続...] で認証してください。"
+    $dlg.Description = "バックアップフォルダを選択 (manifest.json を含むこと)。UNC 共有の場合は認証情報の入力を求められます。"
 
     # v0.24.5: when a migration profile is loaded and a host is selected,
     # pre-seed SelectedPath so the operator lands directly in the target
@@ -594,12 +574,32 @@ function Invoke-RestoreBrowse {
         }
     }
 
+    # v0.63.0: with the explicit "UNC 接続" button gone, authenticate the preset
+    # UNC share (if SelectedPath was seeded to one) BEFORE opening the picker so
+    # the operator can navigate into it. Cancelling just leaves the picker to
+    # open at its default (they may still choose a local path).
+    if ($dlg.SelectedPath -like '\\*' -and -not (Test-UncPath -Path $dlg.SelectedPath)) {
+        $browsePresetUser = ''
+        if ($null -ne $script:MigrationProfile -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
+            $browsePresetUser = $script:MigrationProfile.backuper.uncUsername
+        }
+        [void](Resolve-UncAccess -Path $dlg.SelectedPath -PresetUsername $browsePresetUser)
+    }
+
     if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
     $chosen = $dlg.SelectedPath
 
-    if (-not (Resolve-UncAccess -Path $chosen)) {
+    # v0.63.0: confirm access to the chosen folder before reading its manifest
+    # (post-selection prompt; prefilled with the profile username when present).
+    $chosenPresetUser = ''
+    if ($null -ne $script:MigrationProfile -and `
+        -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
+        $chosenPresetUser = $script:MigrationProfile.backuper.uncUsername
+    }
+    if (-not (Resolve-UncAccess -Path $chosen -PresetUsername $chosenPresetUser)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "フォルダに接続できません: $chosen`n`nUNC 共有の場合は先に [UNC 接続...] をクリックしてください。",
+            "フォルダに接続できませんでした: $chosen`n`n認証情報の入力をキャンセルしたか、接続に失敗しました。資格情報を確認して再度お試しください。",
             "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         return
@@ -1128,6 +1128,26 @@ function Invoke-RestoreStart {
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
+    }
+
+    # v0.63.0: unify UNC credential entry into the flow (the explicit "UNC 接続"
+    # button was removed). If the resolved source is a UNC share that is not
+    # reachable yet, prompt for credentials here -- this covers BOTH timestamp
+    # (hostlist) and Browse modes before the engine runs. Idempotent: once the
+    # share is mapped, Test-UncPath short-circuits so there is no duplicate prompt.
+    if ($script:RestoreExplicitDir -like '\\*' -and -not (Test-UncPath -Path $script:RestoreExplicitDir)) {
+        $startPresetUser = ''
+        if ($null -ne $script:MigrationProfile -and `
+            -not [string]::IsNullOrWhiteSpace($script:MigrationProfile.backuper.uncUsername)) {
+            $startPresetUser = $script:MigrationProfile.backuper.uncUsername
+        }
+        if (-not (Resolve-UncAccess -Path $script:RestoreExplicitDir -PresetUsername $startPresetUser)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "バックアップ元の共有に接続できませんでした:`n$($script:RestoreExplicitDir)`n`n認証情報の入力をキャンセルしたか、接続に失敗しました。",
+                "Fabriq BackUper", [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            return
+        }
     }
 
     $picked = @()
