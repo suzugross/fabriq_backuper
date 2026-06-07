@@ -16,6 +16,20 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.58.0: **新ツール「Fabriq 移行情報ビューア」(Fabriq_HandoffViewer.exe) — 集約フォルダのホスト別ブラウザ＋既存ビューアへのショートカット (TM t-0006 第1段)** —
+  LAN-Prep / Cleanup と同レイヤーの独立アプリ。ホストリストで選択した端末の operator handoff（集約）フォルダを
+  `Get-CleanupCandidate`（`Kind='handoff'`）で発見し、自端末を `Resolve-HostByComputerName` で自動選択、選択フォルダに対し
+  既存の各種ビューア／ランチャを1クリックで起動する。
+  - **発見・ホスト照合は再利用**：cleanup エンジンの `Get-CleanupCandidate` をそのまま使い handoff のみ抽出（新規 scanner なし）。
+    subdir 名は `Resolve-OperatorHandoffSectionDir`（共有）で解決（名前の二重定義なし）。
+  - **ショートカット GUI**：資格情報を表示（`Show-Credentials.ps1 -CsvPath`）／ Outlook 設定を表示
+    （`Show-OutlookAccounts.ps1 -DataDir`）は単体 GUI を起動；移行元PC情報／プリンタはフォルダ・既定アプリで開く；
+    登録／Outlook 自動復元／プリンタインストールの各 .bat も起動可（実行前に確認ダイアログ）。存在しない subdir/資産はグレーアウト。
+  - **構成**：[fabriq_handoffviewer.ps1](fabriq_handoffviewer.ps1)（入口・cleanup 骨格を踏襲）／
+    [handoffviewer_view.ps1](tools/handoff_viewer/lib/handoffviewer_view.ps1)／
+    `dev/launcher/{Launcher_HandoffViewer.cs, app_handoffviewer.manifest(asInvoker), build_handoffviewer.ps1}`／`Fabriq_HandoffViewer.exe`。
+    本体は **asInvoker**（読み取り専用ブラウザ・各 .bat が自前で user 文脈/UAC を処理）。
+  - restore / backuper 本体 / manifest schema は不変（第1段では集約フォルダの出力先は無変更。Backuper 内移設は t-0006 第2段で別途）。
 - backuper v0.57.0: **リストア画面に「更新」ボタン — 選択中バックアップの再読込 (TM t-0008)** —
   リストア画面のエントリ操作行に「更新」ボタンを追加。選択中バックアップの manifest を disk から読み直し
   ([restore_view.ps1](backuper/lib/ui/restore_view.ps1) の `Update-RestoreSelection`)、エントリ一覧・種別/状態・

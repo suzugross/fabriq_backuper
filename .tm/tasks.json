@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T11:07:10+09:00",
+  "updatedAt": "2026-06-07T11:37:01+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -52,10 +52,10 @@
       "id": "t-0006",
       "title": "デスクトップ集約フォルダの集約",
       "content": "現状、オペレータが使用するための情報集約フォルダをデスクトップに配置しているが、これを、Backuper内の専用ディレクトリに移動させた上で、LANPREPやcleanupと同様に個別アプリ化する。そのディレクトリを走査し、ホストリストで選択された端末用の集約フォルダを見つける。\r\n最終的には、そのアプリのGUI上で、各種情報を閲覧できるようにする。（それぞれの設定情報確認基盤は整っている認識なのでそれを呼び出すショートカットをわかりやすくGUI上に配置するのがいいと感じている。）",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "調査+計画確定。新アプリ Fabriq 移行情報ビューア (Fabriq_HandoffViewer.exe / fabriq_handoffviewer.ps1 / tools/handoff_viewer)。決定: (1)集約フォルダを Backuper 内 Handoff 配下 (<BackuperRoot>/Handoff/<日付>_<OldPC>_BK) へ移設=restore 出力先変更(additive・Desktop関数は温存) (2)MVP=資格情報+Outlook はGUIショートカット, 移行元PC情報/プリンタはフォルダ/既定アプリ (3)名称 移行情報ビューア (4)登録/インストール.bat も起動可(本体 asInvoker)。再利用: Get-CleanupCandidate(Kind=handoff) / Resolve-HostByComputerName / Show-Credentials -CsvPath / Show-OutlookAccounts -DataDir。2段階(第1=ビューア本体 restore無改変, 第2=Backuper内移設+Get-CleanupCandidate に Handoff root 追加)。骨格は fabriq_cleanup.ps1 複製。",
+      "status": "対応中",
       "createdAt": "2026-06-06T13:34:30.3063088+09:00",
-      "updatedAt": "2026-06-06T13:39:05.9900745+09:00"
+      "updatedAt": "2026-06-07T11:37:01+09:00"
     },
     {
       "id": "t-0007",
