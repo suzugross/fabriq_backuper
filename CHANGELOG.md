@@ -16,6 +16,12 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.58.1: **移行情報ビューア：Outlook をアカウント別ショートカットに (TM t-0006)** —
+  `02_outlook_アカウント情報` 直下の per-account 起動 .bat（`<番号> <email> の設定を表示.bat`）を全列挙し、
+  メールアカウントごとに「表示」ショートカットを生成（複数アカウントをすべて反映）。ショートカットパネルは
+  スクロール対応（`AutoScroll`）。per-account .bat は確認なしで起動（読み取り専用ビューア）、適用系 .bat
+  （登録／Restore-Outlook／Install-Printers）は従来どおり確認あり。per-account .bat が無い旧レイアウトは
+  単一の「Outlook 設定を表示」にフォールバック。移行元PC情報は当面フォルダを開く据え置き（将来 ビューア拡張余地）。
 - backuper v0.58.0: **新ツール「Fabriq 移行情報ビューア」(Fabriq_HandoffViewer.exe) — 集約フォルダのホスト別ブラウザ＋既存ビューアへのショートカット (TM t-0006 第1段)** —
   LAN-Prep / Cleanup と同レイヤーの独立アプリ。ホストリストで選択した端末の operator handoff（集約）フォルダを
   `Get-CleanupCandidate`（`Kind='handoff'`）で発見し、自端末を `Resolve-HostByComputerName` で自動選択、選択フォルダに対し

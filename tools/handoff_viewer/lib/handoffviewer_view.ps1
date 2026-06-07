@@ -108,6 +108,7 @@ function global:New-HandoffViewerView {
     $sp.Size     = New-Object System.Drawing.Size(308, 540)
     $sp.BackColor = $script:bgForm
     $sp.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $sp.AutoScroll = $true   # many Outlook accounts -> let the shortcut list scroll
     $script:HvShortcutPanel = $sp
     $panel.Controls.Add($sp)
 
@@ -209,7 +210,7 @@ function global:Update-HandoffViewerShortcuts {
     $folder = $script:HvSelectedFolder
     if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder)) {
         $hint = New-StyledLabel -Text "左の一覧から集約フォルダを選択してください。" `
-            -X 12 -Y 16 -Width 284 -Height 40 -FgColor $script:fgDim
+            -X 12 -Y 16 -Width 268 -Height 40 -FgColor $script:fgDim
         $p.Controls.Add($hint)
         return
     }
@@ -234,24 +235,44 @@ function global:Update-HandoffViewerShortcuts {
     $prnTxt  = Join-Path $prnDir '_printer_settings.txt'
 
     $y = 8
-    $hdr = New-StyledLabel -Text (Split-Path -Leaf $folder) -X 12 -Y $y -Width 284 -Height 20 `
+    $hdr = New-StyledLabel -Text (Split-Path -Leaf $folder) -X 12 -Y $y -Width 268 -Height 20 `
         -Font $script:fontBold -FgColor $script:fgHeader
     $p.Controls.Add($hdr); $y += 30
 
-    $lbl1 = New-StyledLabel -Text "── 情報を表示 ──" -X 12 -Y $y -Width 284 -Height 16 -FgColor $script:fgDim
+    $lbl1 = New-StyledLabel -Text "── 情報を表示 ──" -X 12 -Y $y -Width 268 -Height 16 -FgColor $script:fgDim
     $p.Controls.Add($lbl1); $y += 22
 
     Add-HvActionButton -Panel $p -Text "資格情報を表示" -Y $y -Enabled (-not [string]::IsNullOrWhiteSpace($credCsv)) `
         -Tag @{ Action='viewer'; Script=$credViewer; ArgName='-CsvPath'; ArgValue=$credCsv } ; $y += 36
-    Add-HvActionButton -Panel $p -Text "Outlook 設定を表示" -Y $y -Enabled (-not [string]::IsNullOrWhiteSpace($olkData)) `
-        -Tag @{ Action='viewer'; Script=$olkViewer; ArgName='-DataDir'; ArgValue=$olkData } ; $y += 36
+    # Outlook: one view shortcut per account. The restore section drops one
+    # per-account launcher .bat ("<num> <email> の設定を表示.bat") into 02_*, so
+    # reflect ALL of them (multiple mailboxes => one shortcut each). Restore-Outlook.bat
+    # is the apply action and lives in the .bat section below, not here. Fall back to a
+    # single canonical viewer for older handoff layouts that have no per-account .bat.
+    $olkViewBats = @()
+    if (-not [string]::IsNullOrWhiteSpace($olkDir) -and (Test-Path -LiteralPath $olkDir)) {
+        $olkViewBats = @(Get-ChildItem -LiteralPath $olkDir -Filter '*.bat' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch '(?i)^Restore-Outlook\.bat$' } | Sort-Object Name)
+    }
+    if ($olkViewBats.Count -gt 0) {
+        $lblO = New-StyledLabel -Text "Outlook 設定（アカウント別）" -X 12 -Y $y -Width 268 -Height 16 -FgColor $script:fgDim
+        $p.Controls.Add($lblO); $y += 20
+        foreach ($vb in $olkViewBats) {
+            Add-HvActionButton -Panel $p -Text $vb.BaseName -Y $y -Enabled $true `
+                -Tag @{ Action='batview'; Value="$($vb.FullName)" } ; $y += 36
+        }
+    }
+    else {
+        Add-HvActionButton -Panel $p -Text "Outlook 設定を表示" -Y $y -Enabled (-not [string]::IsNullOrWhiteSpace($olkData)) `
+            -Tag @{ Action='viewer'; Script=$olkViewer; ArgName='-DataDir'; ArgValue=$olkData } ; $y += 36
+    }
     Add-HvActionButton -Panel $p -Text "移行元PC情報フォルダを開く" -Y $y -Enabled ($null -ne $sysDir -and (Test-Path -LiteralPath $sysDir)) `
         -Tag @{ Action='open'; Value=$sysDir } ; $y += 36
     $prnOpenTarget = Find-HvFirstPath @( $prnTxt, $prnDir )
     Add-HvActionButton -Panel $p -Text "プリンタ情報を開く" -Y $y -Enabled (-not [string]::IsNullOrWhiteSpace($prnOpenTarget)) `
         -Tag @{ Action='open'; Value=$prnOpenTarget } ; $y += 44
 
-    $lbl2 = New-StyledLabel -Text "── 設定を適用 (.bat) ──" -X 12 -Y $y -Width 284 -Height 16 -FgColor $script:fgDim
+    $lbl2 = New-StyledLabel -Text "── 設定を適用 (.bat) ──" -X 12 -Y $y -Width 268 -Height 16 -FgColor $script:fgDim
     $p.Controls.Add($lbl2); $y += 22
 
     Add-HvActionButton -Panel $p -Text "資格情報を登録 (登録.bat)" -Y $y -Enabled (Test-Path -LiteralPath $credBat) `
@@ -275,16 +296,16 @@ function global:Add-HvActionButton {
         $BgColor = $null
     )
     if ($null -ne $BgColor) {
-        $b = New-StyledButton -Text $Text -X 12 -Y $Y -Width 284 -Height 32 -BgColor $BgColor
+        $b = New-StyledButton -Text $Text -X 12 -Y $Y -Width 268 -Height 32 -BgColor $BgColor
         $b.ForeColor = $script:fgWhite
     }
     else {
-        $b = New-StyledButton -Text $Text -X 12 -Y $Y -Width 284 -Height 32
+        $b = New-StyledButton -Text $Text -X 12 -Y $Y -Width 268 -Height 32
     }
     $b.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
     $b.Tag = $Tag
     $b.Enabled = $Enabled
-    $b.Add_Click({ param($sender, $e) Invoke-HvDispatch -Tag $sender.Tag })
+    $b.Add_Click({ param($s, $e) Invoke-HvDispatch -Tag $s.Tag })
     $Panel.Controls.Add($b)
     return $b
 }
@@ -293,9 +314,10 @@ function global:Invoke-HvDispatch {
     param($Tag)
     if ($null -eq $Tag) { return }
     switch ("$($Tag.Action)") {
-        'viewer' { Invoke-HvViewer -ScriptPath $Tag.Script -ArgName $Tag.ArgName -ArgValue $Tag.ArgValue }
-        'open'   { Invoke-HvOpenPath -Path $Tag.Value }
-        'bat'    { Invoke-HvRunBat  -BatPath $Tag.Value }
+        'viewer'  { Invoke-HvViewer -ScriptPath $Tag.Script -ArgName $Tag.ArgName -ArgValue $Tag.ArgValue }
+        'open'    { Invoke-HvOpenPath -Path $Tag.Value }
+        'bat'     { Invoke-HvRunBat  -BatPath $Tag.Value }
+        'batview' { Invoke-HvRunBat  -BatPath $Tag.Value -NoConfirm }
     }
 }
 
@@ -343,16 +365,21 @@ function global:Invoke-HvOpenPath {
 }
 
 function global:Invoke-HvRunBat {
-    param([string]$BatPath)
+    # -NoConfirm: read-only view launchers (the per-account "設定を表示.bat") just
+    # open a viewer window, so they skip the apply-confirmation dialog. The apply
+    # batches (登録 / Restore-Outlook / Install-Printers) confirm before running.
+    param([string]$BatPath, [switch]$NoConfirm)
     if ([string]::IsNullOrWhiteSpace($BatPath) -or -not (Test-Path -LiteralPath $BatPath)) {
         Show-HvWarn "バッチが見つかりません: $BatPath"; return
     }
-    $name = Split-Path -Leaf $BatPath
-    $ans = [System.Windows.Forms.MessageBox]::Show(
-        "『$name』を実行します。`n`nこのバッチは移行先ユーザの設定（資格情報 / Outlook / プリンタ）を変更します。`n移行先ユーザでログイン中であることを確認してください。`n`n実行しますか？",
-        "Fabriq 移行情報ビューア - 実行確認",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
-    if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    if (-not $NoConfirm) {
+        $name = Split-Path -Leaf $BatPath
+        $ans = [System.Windows.Forms.MessageBox]::Show(
+            "『$name』を実行します。`n`nこのバッチは移行先ユーザの設定（資格情報 / Outlook / プリンタ）を変更します。`n移行先ユーザでログイン中であることを確認してください。`n`n実行しますか？",
+            "Fabriq 移行情報ビューア - 実行確認",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    }
     try { Start-Process -FilePath $BatPath -WorkingDirectory (Split-Path -Parent $BatPath) | Out-Null }
     catch { Show-HvWarn "起動に失敗しました: $($_.Exception.Message)" }
 }
