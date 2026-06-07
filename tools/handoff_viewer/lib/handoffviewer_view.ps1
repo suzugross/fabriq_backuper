@@ -32,6 +32,7 @@ $script:HvAppShowExtra  = $null
 $script:HvAppCmp        = $null
 $script:HvAppFolder     = $null
 $script:HvAppSrcCount   = 0
+$script:HvAppNewCount   = 0
 
 function global:New-HandoffViewerView {
     $panel = New-Object System.Windows.Forms.Panel
@@ -491,9 +492,11 @@ function global:Get-HvStateColor {
 }
 
 function global:Show-AppCompareModal {
-    # In-app app-migration cross-check GUI (t-0009 P1, 2-way: 旧PC × 突合リスト).
+    # In-app app-migration cross-check GUI (t-0009 P3, 3-way: 旧PC × 突合リスト × 新PC).
     # Reads the source-PC app CSVs from the selected handoff folder + the project
-    # 突合リスト, runs the shared Compare-AppMigrationList, and shows a color-coded grid.
+    # 突合リスト, ALSO enumerates the current (new) PC live, runs the shared
+    # Compare-AppMigrationList against both, and shows a color-coded verdict grid
+    # (移行済 / 要移行 / 未検出).
     param([Parameter(Mandatory = $true)][string]$HandoffFolder)
     $data = Get-HvAppData -HandoffFolder $HandoffFolder
     if ($null -eq $data.Desktop -and $null -eq $data.Store) {
@@ -533,13 +536,14 @@ function global:Show-AppCompareModal {
     $grid.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom `
         -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $defs = @(
-        @{ N = 'name';   H = 'アプリ名';        W = 210 },
-        @{ N = 'req';    H = '要否';            W = 56  },
-        @{ N = 'cat';    H = '分類';            W = 100 },
-        @{ N = 'old';    H = '旧PC';            W = 52  },
-        @{ N = 'state';  H = '状態';            W = 84  },
-        @{ N = 'detail'; H = '検出 / パターン'; W = 226 },
-        @{ N = 'note';   H = '備考';            W = 120 }
+        @{ N = 'name';   H = 'アプリ名';        W = 190 },
+        @{ N = 'req';    H = '要否';            W = 46  },
+        @{ N = 'cat';    H = '分類';            W = 88  },
+        @{ N = 'old';    H = '旧PC';            W = 46  },
+        @{ N = 'new';    H = '新PC';            W = 46  },
+        @{ N = 'state';  H = '状態';            W = 80  },
+        @{ N = 'detail'; H = '検出 / パターン'; W = 240 },
+        @{ N = 'note';   H = '備考';            W = 110 }
     )
     foreach ($d in $defs) {
         $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
@@ -573,7 +577,9 @@ function global:Show-AppCompareModal {
 }
 
 function global:Invoke-HvAppCompareRefresh {
-    # Re-read the CSVs + 突合リスト for the current folder, recompute, re-render.
+    # Re-read the 突合リスト + 旧PC CSVs for the current folder, enumerate the NEW PC
+    # live, run the shared matcher against BOTH, combine per entry into a 3-way verdict
+    # (移行済 / 要移行 / 未検出), and re-render.
     if ([string]::IsNullOrWhiteSpace($script:HvAppFolder)) { return }
     $data = Get-HvAppData -HandoffFolder $script:HvAppFolder
     $listRows = @(Import-AppMigrationList -Path $data.List)
@@ -581,12 +587,52 @@ function global:Invoke-HvAppCompareRefresh {
         Show-HvWarn "突合リストが空、または読み込めませんでした: $($data.List)"
         $script:HvAppCmp = @{ Entries = @(); Unmatched = @(); Skipped = @() }
         $script:HvAppSrcCount = 0
+        $script:HvAppNewCount = 0
+        Update-HvAppCompareGrid
+        return
     }
-    else {
-        $srcApps = @(Get-AppMigrationSourceApp -DesktopCsvPath $data.Desktop -StoreCsvPath $data.Store)
-        $script:HvAppCmp = Compare-AppMigrationList -ListRows $listRows -SourceApps $srcApps
-        $script:HvAppSrcCount = $srcApps.Count
+
+    $oldApps = @(Get-AppMigrationSourceApp -DesktopCsvPath $data.Desktop -StoreCsvPath $data.Store)
+    # Live enumerate the current (new) PC -- can take a few seconds; show a cue.
+    if ($null -ne $script:HvAppInfoLabel) {
+        $script:HvAppInfoLabel.Text = "新PC のインストール済みアプリを取得中..."
+        [System.Windows.Forms.Application]::DoEvents()
     }
+    $newApps = @(Get-LiveInstalledApp)
+
+    $cmpOld = Compare-AppMigrationList -ListRows $listRows -SourceApps $oldApps
+    $cmpNew = Compare-AppMigrationList -ListRows $listRows -SourceApps $newApps
+    # Both iterate the SAME list rows with the SAME skip rules, so Entries align by index.
+    $oldE = @($cmpOld.Entries)
+    $newE = @($cmpNew.Entries)
+    $combined = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $oldE.Count; $i++) {
+        $eo = $oldE[$i]
+        $en = if ($i -lt $newE.Count) { $newE[$i] } else { $null }
+        $onOld = [bool]$eo.Matched
+        $onNew = if ($null -ne $en) { [bool]$en.Matched } else { $false }
+        # Verdict: on new PC = 移行済; else on old PC = 要移行; else (neither) = 未検出.
+        $state = if ($onNew) { '移行済' } elseif ($onOld) { '要移行' } else { '未検出' }
+        $combined.Add([PSCustomObject]@{
+            Name          = $eo.Name
+            IsRequired    = $eo.IsRequired
+            Category      = $eo.Category
+            Note          = $eo.Note
+            MatchPatterns = $eo.MatchPatterns
+            OnOld         = $onOld
+            OnNew         = $onNew
+            State         = $state
+            HitsOld       = @($eo.Hits)
+            HitsNew       = $(if ($null -ne $en) { @($en.Hits) } else { @() })
+        })
+    }
+    $script:HvAppCmp = @{
+        Entries   = @($combined.ToArray())
+        Unmatched = @($cmpOld.Unmatched)
+        Skipped   = @($cmpOld.Skipped)
+    }
+    $script:HvAppSrcCount = $oldApps.Count
+    $script:HvAppNewCount = $newApps.Count
     Update-HvAppCompareGrid
 }
 
@@ -596,21 +642,28 @@ function global:Update-HvAppCompareGrid {
     $cmp = $script:HvAppCmp
     $grid.Rows.Clear()
     if ($null -eq $cmp) { return }
-    $need = 0; $nf = 0
+    $done = 0; $need = 0; $nf = 0
     foreach ($e in @($cmp.Entries)) {
-        $old   = if ($e.Matched) { '○' } else { '-' }
-        $state = if ($e.Matched) { '要移行' } else { '未検出' }
-        if ($e.Matched) { $need++ } else { $nf++ }
-        $detail = if ($e.Matched) { (@($e.Hits | ForEach-Object { "$($_.Name)" }) -join ', ') } else { "パターン: $($e.MatchPatterns)" }
+        $old   = if ($e.OnOld) { '○' } else { '-' }
+        $new   = if ($e.OnNew) { '○' } else { '-' }
+        $state = "$($e.State)"
+        switch ($state) {
+            '移行済' { $done++ }
+            '要移行' { $need++ }
+            default  { $nf++ }
+        }
+        $detail = if ($e.OnOld) { (@($e.HitsOld | ForEach-Object { "$($_.Name)" }) -join ', ') }
+                  elseif ($e.OnNew) { (@($e.HitsNew | ForEach-Object { "$($_.Name)" }) -join ', ') }
+                  else { "パターン: $($e.MatchPatterns)" }
         $req = if ($e.IsRequired) { '必須' } else { '任意' }
-        $idx = $grid.Rows.Add($e.Name, $req, $e.Category, $old, $state, $detail, $e.Note)
+        $idx = $grid.Rows.Add($e.Name, $req, $e.Category, $old, $new, $state, $detail, $e.Note)
         $grid.Rows[$idx].DefaultCellStyle.BackColor = Get-HvStateColor -State $state
     }
     $extra = 0
     if ($null -ne $script:HvAppShowExtra -and $script:HvAppShowExtra.Checked) {
         foreach ($a in @($cmp.Unmatched)) {
             $extra++
-            $idx = $grid.Rows.Add("$($a.Name)", '', "$($a.Source)", '○', '対象外', "v$($a.Version)", '')
+            $idx = $grid.Rows.Add("$($a.Name)", '', "$($a.Source)", '○', '-', '対象外', "v$($a.Version)", '')
             $grid.Rows[$idx].DefaultCellStyle.BackColor = Get-HvStateColor -State '対象外'
         }
     }
@@ -618,7 +671,8 @@ function global:Update-HvAppCompareGrid {
         $skip = if ($null -ne $cmp.Skipped) { @($cmp.Skipped).Count } else { 0 }
         $skipTxt  = if ($skip)  { " / 設定不備 $skip" } else { '' }
         $extraTxt = if ($extra) { " / リスト外 $extra" } else { '' }
-        $script:HvAppInfoLabel.Text = ("突合リスト {0} 件 / 移行元アプリ {1} 件  ―  要移行 {2} / 未検出 {3}{4}{5}" -f @($cmp.Entries).Count, $script:HvAppSrcCount, $need, $nf, $skipTxt, $extraTxt)
+        $script:HvAppInfoLabel.Text = ("リスト {0} / 旧PC {1} / 新PC {2}  ―  移行済 {3} / 要移行 {4} / 未検出 {5}{6}{7}" -f `
+            @($cmp.Entries).Count, $script:HvAppSrcCount, $script:HvAppNewCount, $done, $need, $nf, $skipTxt, $extraTxt)
     }
 }
 
@@ -634,9 +688,11 @@ function global:Export-HvAppCompareCsv {
             アプリ名 = $e.Name
             要否     = if ($e.IsRequired) { '必須' } else { '任意' }
             分類     = $e.Category
-            旧PC     = if ($e.Matched) { '○' } else { '-' }
-            状態     = if ($e.Matched) { '要移行' } else { '未検出' }
-            検出     = if ($e.Matched) { (@($e.Hits | ForEach-Object { "$($_.Name)" }) -join '; ') } else { '' }
+            旧PC     = if ($e.OnOld) { '○' } else { '-' }
+            新PC     = if ($e.OnNew) { '○' } else { '-' }
+            状態     = "$($e.State)"
+            検出_旧PC = (@($e.HitsOld | ForEach-Object { "$($_.Name)" }) -join '; ')
+            検出_新PC = (@($e.HitsNew | ForEach-Object { "$($_.Name)" }) -join '; ')
             パターン = $e.MatchPatterns
             備考     = $e.Note
         })

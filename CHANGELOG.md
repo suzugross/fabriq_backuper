@@ -16,6 +16,15 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.62.0: **アプリ移行突合に「新PC ライブ取得＋3-way 判定」を追加 (TM t-0009 P3)** —
+  移行情報ビューアの「アプリ移行を突合」に、起動時に**新PC（現在 PC）のインストール済みアプリをライブ取得**し、
+  **旧PC × 突合リスト × 新PC の3点比較**で「**移行済 / 要移行 / 未検出**」を色分け判定する機能を追加。
+  - `common.ps1` `Get-LiveInstalledApp`（現在 PC＝新PC を `Get-InstalledDesktopApp`(HKLM+HKCU 直)＋`Get-InstalledStoreApp` で列挙し、
+    `Get-AppMigrationSourceApp` と同形に正規化・**昇格不要**・現ユーザ文脈）。
+  - `Show-AppCompareModal`：**新PC 列を追加（8列）**、状態を 移行済(緑)/要移行(黄)/未検出(灰) で色分け、
+    サマリ「リスト N / 旧PC M / 新PC K ― 移行済 a / 要移行 b / 未検出 c」。CSV エクスポートに 新PC＋検出_新PC を追加。
+  - 突合は共通 `Compare-AppMigrationList` を旧PC・新PC 双方に適用（同一判定）。`cmpOld`/`cmpNew` は同一リスト・同一スキップ規則のため index 整合。
+  - 本体 asInvoker（現ユーザの HKCU/HKLM のみ）。backup / restore / section / manifest schema は不変。敵対的レビュー指摘ゼロ・実機スモーク推奨。
 - backuper v0.61.0: **アプリ情報を独立した application セクションへ移設 (TM t-0009 P2)** —
   インストール済みアプリの採取を system_evidence（PC情報）から新 `application` セクション
   （handoff `05_アプリケーション情報`）へ移設。後方互換（旧バックアップはアプリが system_evidence 配下のため

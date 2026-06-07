@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T17:22:44+09:00",
+  "updatedAt": "2026-06-07T17:37:09+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -79,10 +79,10 @@
       "id": "t-0009",
       "title": "アプリケーション突合ビューア",
       "content": "現在、PC情報に格納されている、アプリケーション突合バッチですが、これを専用ビューアに仕立てたのち、PC情報とは別のセクションとして、アプリケーション情報セクションを設けてそこに格納したい。\r\nハンドオフビューア上で選択して、突合を行い、視覚的にわかりやすい形で移行が必要なアプリを表示させる。\r\nまた、可能であれば、事前に設定された突合リストと、新PCのアプリケーション情報（動的に取得）を比較し、移行が完了しているかどうかも含めた確認ができる機能もあると、都合がよい。\r\nつまり\r\n・旧PCアプリケーション情報\r\n・突合リスト\r\n・新PCアプリケーション情報\r\nの三点を比較し、\r\n・移行が必要なアプリはなにか\r\n・移行が終わっているのかどうか\r\nを確認できるイメージです。",
-      "claudeNote": "P0+P1+P2 実装+コミット+実機確認OK。P0 v0.59.1(突合共通ヘルパー common.ps1)/P1 v0.60.0(Handoff Viewer アプリ突合GUI 旧PC×リスト 2-way 色分け)/P2 v0.61.0(アプリ情報を独立 application section へ移設・handoff 05・Get-InstalledDesktopApp/StoreApp 共通化・後方互換 dual-location・sections.csv登録+BOM・backup_view 4列化・restore_view 配線+README)+v0.61.1(Get-RegisteredSections に -Encoding UTF8)。実機で application 採取/突合 表示を確認OK。当初 application が出なかった直接原因は deploy パッチが検証用設定値backup 内の古い sections.csv を最新コードに上書きしていたため→パッチ Step3 で sections.csv 除外(/XF)＋設定値backup の sections.csv を最新化して解消。残: P3(新PCライブ取得3-way 移行済判定=本命)/P4(legacy Check-AppMigration.bat 廃止)。",
+      "claudeNote": "P0-P3 実装+コミット。P0 v0.59.1(突合共通ヘルパー)/P1 v0.60.0(アプリ突合GUI 2-way)/P2 v0.61.0(独立 application section へ移設・後方互換 dual-location)+v0.61.1(sections.csv -Encoding UTF8)/P3 v0.62.0(新PCライブ取得+3-way 判定 移行済/要移行/未検出・Get-LiveInstalledApp・新PC列・本体 asInvoker 現ユーザ HKCU/HKLM)。P0-P2 実機確認OK(当初 application が出なかった直接原因=deploy パッチが検証用設定値の古い sections.csv を最新コードに上書き→パッチで sections.csv 除外/XF＋設定値backup の sections.csv 最新化で解消)。P3 は敵対的レビュー指摘ゼロ・実機未確認。残: P4(legacy Check-AppMigration.bat 廃止・GUI 実機実証後)。",
       "status": "対応中",
       "createdAt": "2026-06-07T13:33:57.7559026+09:00",
-      "updatedAt": "2026-06-07T17:22:44+09:00"
+      "updatedAt": "2026-06-07T17:37:09+09:00"
     }
   ]
 }

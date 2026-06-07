@@ -1297,6 +1297,29 @@ function global:Get-InstalledStoreApp {
         Sort-Object Name)
 }
 
+function global:Get-LiveInstalledApp {
+    # v0.62.0 (t-0009 P3): enumerate the CURRENT (new/target) PC's installed apps for
+    # the logged-on user, normalized to the same {Name,Publisher,Version,Scope,Source}
+    # shape as Get-AppMigrationSourceApp so Compare-AppMigrationList can run against it
+    # for the "new PC" side of the 3-way compare. Desktop = HKLM + HKCU (no elevation,
+    # no cross-user SID redirect -- the viewer runs as the target user); Store =
+    # Get-AppxPackage (current user). Store Publisher blanked to match the matcher.
+    $apps = New-Object System.Collections.Generic.List[object]
+    foreach ($a in @(Get-InstalledDesktopApp -PerUserUninstallRoot 'HKCU:')) {
+        $apps.Add([PSCustomObject]@{
+            Name = "$($a.Name)".Trim(); Publisher = "$($a.Publisher)".Trim()
+            Version = "$($a.Version)".Trim(); Scope = "$($a.Scope)".Trim(); Source = 'Desktop'
+        })
+    }
+    foreach ($a in @(Get-InstalledStoreApp)) {
+        $apps.Add([PSCustomObject]@{
+            Name = "$($a.Name)".Trim(); Publisher = ''
+            Version = "$($a.Version)".Trim(); Scope = 'Store'; Source = 'Store'
+        })
+    }
+    return @($apps.ToArray())
+}
+
 function global:New-AppMigrationCheckBat {
     # Plain ASCII batch wrapper.
     #
