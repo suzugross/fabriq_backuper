@@ -16,6 +16,15 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.60.0: **移行情報ビューアに「アプリ移行を突合」GUI を追加 (TM t-0009 P1)** —
+  選択した集約フォルダの旧PCアプリ（`11_DesktopApps.csv`/`11_StoreApps.csv`）と案件の突合リスト
+  （`data/app_migration_list.csv`）を突合し、**色分けグリッドで「要移行／未検出」を視覚表示**するモーダルを
+  Handoff Viewer に追加（共通ヘルパー P0 を使用＝`.bat` と同一判定）。
+  - 「アプリ移行を突合」ボタン → `Show-AppCompareModal`（DataGridView：アプリ名/要否/分類/旧PC/状態/検出/備考、
+    要移行=黄・未検出/対象外=灰、`Get-HvStateColor`）。
+  - 集約フォルダの **dual-location 対応**（`05_アプリケーション情報` 優先・無ければ `03_移行元PC情報`）＝P2 移設の前後どちらでも動作。
+  - 「リスト外アプリも表示」(補足)／「更新」／「CSV エクスポート」(集約フォルダへ)／状態サマリ（要移行/未検出/設定不備/リスト外）。
+  - 本体 asInvoker・読み取り専用。新PC ライブ取得＋3-way 判定（移行済）は P3 で追加予定。
 - backuper v0.59.1: **アプリ突合の共通ヘルパーを common.ps1 に追加 (TM t-0009 P0)** —
   Handoff Viewer の in-app 突合 GUI（P1）と legacy `Check-AppMigration.bat` が同一ロジックで判定できるよう、
   突合ロジックを純関数として `common.ps1` に切り出し（additive・既存挙動不変）。

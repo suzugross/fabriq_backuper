@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T12:55:05+09:00",
+  "updatedAt": "2026-06-07T14:27:52+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -26,9 +26,9 @@
       "title": "バックアップ画面のやりなおしループ（リストアの D6 と対称）",
       "content": "・バックアップ完了後もバックアップ画面に戻れるようにする。\r\n ・万一バックアップが失敗したら、その分だけ同一セッションで再試行できる。\r\n ・可能であれば、バックアップ完了済みかどうかのステータス管理も行う。",
       "claudeNote": "実装完了→コミット(v0.56.0)。セッション一貫バックアップ: アプリ起動〜終了=1セッション=1バックアップ。同一セッション・同一ホストの2回目以降は初回集約dir(同TS)へ自動統合(トグルなし), 再起動で新TS。失敗の穴埋め/成功後の項目追加とも同じ1バックアップに統合。engine -RetryIntoAggregateDir / manifest_aggregator Merge-AggregateManifest / userdata id-mapマージ(新規項目は衝突しない新id採番) / backup_view UI / progress_view ラベル。多エージェント敵対的検証3R(HIGH data-loss・medium状態誤報を検出→修正→指摘ゼロ)。残: 実機スモーク。",
-      "status": "レビュー待ち",
+      "status": "完了",
       "createdAt": "2026-06-05T20:35:42.7140213+09:00",
-      "updatedAt": "2026-06-07T10:58:55+09:00"
+      "updatedAt": "2026-06-07T13:33:34.9761462+09:00"
     },
     {
       "id": "t-0004",
@@ -53,9 +53,9 @@
       "title": "デスクトップ集約フォルダの集約",
       "content": "現状、オペレータが使用するための情報集約フォルダをデスクトップに配置しているが、これを、Backuper内の専用ディレクトリに移動させた上で、LANPREPやcleanupと同様に個別アプリ化する。そのディレクトリを走査し、ホストリストで選択された端末用の集約フォルダを見つける。\r\n最終的には、そのアプリのGUI上で、各種情報を閲覧できるようにする。（それぞれの設定情報確認基盤は整っている認識なのでそれを呼び出すショートカットをわかりやすくGUI上に配置するのがいいと感じている。）",
       "claudeNote": "第1段(ビューア本体)+第2段(集約フォルダ移設)とも実装+コミット済。第1段 v0.58.0-0.58.2(88c6d28本体/b892969 Outlookアカウント別+AutoScroll/d157420 .txtアプリ内ビューア)。第2段 v0.59.0: 集約フォルダ出力先を移行先Desktop→<BackuperRoot>/Handoff/<日付>_<OldPC>_BK へ移設。Resolve-OperatorHandoffRootLocal新規(Desktop版は温存=後方互換)/Get-CleanupCandidate Root3b追加(ビューア+Cleanup双方が発見)/restore_view切替+チェックボックス文言+README+宣言コメント更新/Get-CleanupSourceLabelにHandoff(Backuper)ラベル追加。安全弁は子孫削除許可で新場所も削除可。section配備はroot非依存で不変・schema/interface不変。敵対的レビュー2R(stage1 PASS / stage2=確定2件[低:source label/stale comment]修正済)。全コミット実機未確認(実機スモーク推奨)。",
-      "status": "レビュー待ち",
+      "status": "完了",
       "createdAt": "2026-06-06T13:34:30.3063088+09:00",
-      "updatedAt": "2026-06-07T12:55:05+09:00"
+      "updatedAt": "2026-06-07T13:33:48.2068286+09:00"
     },
     {
       "id": "t-0007",
@@ -71,9 +71,18 @@
       "title": "リストア画面に更新(選択中バックアップ再読込)ボタンを追加",
       "content": "移行先でリストア画面を開いたまま、移行元がバックアップを追記/穴埋め(セッション統合)した内容を画面を開き直さずに反映できるようにする。選択中バックアップの manifest を読み直してエントリ一覧・状態・警告を更新する。",
       "claudeNote": "実装完了(v0.57.0,未コミット)。restore_view に更新ボタン追加→Update-RestoreSelection(選択中バックアップの manifest を disk から再読込→エントリ/状態/警告を再構築)を呼ぶ。エントリ操作行右端 X818。engine/選択契約 不変。残: 実機確認。",
-      "status": "レビュー待ち",
+      "status": "完了",
       "createdAt": "2026-06-07T11:06:23+09:00",
-      "updatedAt": "2026-06-07T11:06:23+09:00"
+      "updatedAt": "2026-06-07T13:33:48.2068678+09:00"
+    },
+    {
+      "id": "t-0009",
+      "title": "アプリケーション突合ビューア",
+      "content": "現在、PC情報に格納されている、アプリケーション突合バッチですが、これを専用ビューアに仕立てたのち、PC情報とは別のセクションとして、アプリケーション情報セクションを設けてそこに格納したい。\r\nハンドオフビューア上で選択して、突合を行い、視覚的にわかりやすい形で移行が必要なアプリを表示させる。\r\nまた、可能であれば、事前に設定された突合リストと、新PCのアプリケーション情報（動的に取得）を比較し、移行が完了しているかどうかも含めた確認ができる機能もあると、都合がよい。\r\nつまり\r\n・旧PCアプリケーション情報\r\n・突合リスト\r\n・新PCアプリケーション情報\r\nの三点を比較し、\r\n・移行が必要なアプリはなにか\r\n・移行が終わっているのかどうか\r\nを確認できるイメージです。",
+      "claudeNote": "P0+P1 実装+コミット済。P0 v0.59.1(5c3e9be): 突合共通ヘルパーを common.ps1 へ(Import-AppMigrationList/Get-AppMigrationSourceApp/Compare-AppMigrationList・legacy .bat と同一セマンティクス)。P1 v0.60.0: Handoff Viewer に「アプリ移行を突合」GUI(Show-AppCompareModal・色分けグリッド 要移行=黄/未検出=灰・dual-location 05優先/03フォールバック・補足表示/更新/CSVエクスポート)。決定: 移設(別section)/突合リストはファイルCSV読取のみ/状態4区分/P0+P1まで実装→確認。残: P2(新application section・§11を system_evidence から移設)/P3(新PCライブ取得3-way 移行済判定)/P4(legacy .bat廃止)。敵対的レビューで空MatchPatterns乖離1件検出→修正済(設定不備として除外)。全コミット実機未確認(実機スモーク推奨)。",
+      "status": "対応中",
+      "createdAt": "2026-06-07T13:33:57.7559026+09:00",
+      "updatedAt": "2026-06-07T14:27:52+09:00"
     }
   ]
 }
