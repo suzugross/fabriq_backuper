@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T18:54:28+09:00",
+  "updatedAt": "2026-06-07T20:00:26+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -101,6 +101,15 @@
       "status": "未着手",
       "createdAt": "2026-06-07T18:31:37.2042554+09:00",
       "updatedAt": "2026-06-07T18:39:13.2052766+09:00"
+    },
+    {
+      "id": "t-0012",
+      "title": "バックアップおよびリストア機構超大型改修",
+      "content": "現状、ローカル運用型バックアップは移行先の共有フォルダへ一括で運び、そこから移行先PCにて改めて本来の配備先へ配送する流れ。これは悪く言うと二度手間になる。そこで、その運用を解消すべく以下の手法を採れるか、また、時間的な節約になるかも含めて検討したい。\r\n１．移行先で先に配備先のフォルダを共有つけて作っておく（ユーザデータ移行リストを基に動的に配備）\r\n２．移行元で、移行リストをもとに動的に共有フォルダのUNCパスを算出→実際の配送リストとして使用。\r\n３．ネットワーク越しに直接それぞれの配備先に配送\r\n４．Outlookなどの設定値データは従来通り、ハンドオフ運用（このデータの格納先は変わらずアプリ内のディレクトリ）\r\n\r\n再配送を挟まない分、時間が節約になると思うが、メリットデメリットを洗い出して、実装価値を割り出してほしい。\r\n",
+      "claudeNote": "検討完了(多エージェント評価WF: 現状機構マッピング4 + 次元別評価5 + 統合提言)。結論=現仕様での実装は非推奨(do-not)。根拠: (1)時短前提が誤り: canonical local mode では staging=backupRootUnc=移行先PCの共有 で既に移行先上にあり、1回目=ネットワークhop/2回目=移行先内ローカルコピー。直接配送は『移行先内ローカルコピー(高速)』のみ削減・ネットワークbytesは不変 -> 生コピー時短は僅少(推定0-5分・大半はオペレータ時間)。(2)Step1/2 ブロック: 移行先ユーザの profile path は restore 時にオペレータが選ぶ値で source は backup 時に知り得ない(Fabriq hostlist は PC名のみ・t-0011 は UNC 認証用で profile-mapping 不可)。直接配送は cross-user 移行(restore.ps1 Expand-PathWithUser 再展開)を破壊。(3)Step3 危険: 2nd copy が onConflict/.bak/restored-marker/cross-user の本体。live profile 直書きは Outlook/Chrome 等の file-lock 違反 + staging snapshot 消失で中断時に live profile 半壊(復旧不能)、t-0003 retry/t-0008 reload/D2-D4 も破綻。(4)coupling/security: lockstep 化で arrival-wait 無効化、live profile を LAN に Everyone:Full 共有。代替案(価値=オペレータ時間 を安全に取る): staging 維持のまま backup 後に restore を自動チェーン。段階: P0 計測(restore ローカルleg を実測、小さければ中止) -> P1 auto-chain(staging 維持・安全) -> P2 PoC(temp-then-rename 直接配送, 要 target-user field + t-0011)。ユーザ決定待ち。 【決定 2026-06-07】ユーザ判断: 実装しない(現状維持で棚上げ)。現2コピー方式(staging->再配送)を維持。t-0012 は保留でクローズ(将来 再検討する場合は P0計測->P1自動チェーン から)。",
+      "status": "保留",
+      "createdAt": "2026-06-07T19:14:21.4122318+09:00",
+      "updatedAt": "2026-06-07T20:00:26+09:00"
     }
   ]
 }
