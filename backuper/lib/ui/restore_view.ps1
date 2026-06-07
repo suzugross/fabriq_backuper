@@ -225,6 +225,17 @@ function New-RestoreView {
     $script:RestoreEntryDeleteBtn.Add_Click({ Invoke-RestoreEntryDelete })
     $panel.Controls.Add($script:RestoreEntryDeleteBtn)
 
+    # v0.57.0 (t-0008): reload the currently-selected backup. Re-reads its manifest
+    # fresh from disk (Update-RestoreSelection) and rebuilds the entry list +
+    # warnings, so a backup updated externally AFTER this screen opened (e.g. the
+    # source augmented/completed it via the v0.56.0 backup session-merge) can be
+    # picked up without reopening the restore session.
+    $btnReload = New-StyledButton -Text "更新" -X 818 -Y 300 -Width 86 -Height 24
+    $btnReload.Add_Click({ Update-RestoreSelection })
+    $_reloadTt = New-Object System.Windows.Forms.ToolTip
+    $_reloadTt.SetToolTip($btnReload, "選択中バックアップを再読込（移行元で追記/穴埋めした内容を反映）")
+    $panel.Controls.Add($btnReload)
+
     # B warning (v0.47.0): own full-width line just above the list.
     $script:RestoreBackupWarningLabel = New-StyledLabel `
         -Text "" -X 24 -Y 326 -Width 880 -Height 18 -Font $script:fontBold -FgColor $script:bgDelete
