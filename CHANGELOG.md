@@ -16,6 +16,11 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.58.2: **移行情報ビューア：参照 .txt をアプリ内ビューアで表示（notepad を使わない）(TM t-0006)** —
+  プリンタ設定（`_printer_settings.txt`）などの参照テキストを、既定アプリ（notepad）ではなく**アプリ内の
+  読み取り専用テキストビューア** `Show-HvTextViewer`（等幅 Consolas・縦横スクロール・選択コピー可・書込なし・
+  `[System.IO.File]::ReadAllText` で BOM 自動判定）で表示し、移行先 PC の環境に痕跡を残さない。プリンタは
+  `_printer_settings.txt` があれば「プリンタ設定を表示」（in-app）、無ければ「プリンタフォルダを開く」にフォールバック。
 - backuper v0.58.1: **移行情報ビューア：Outlook をアカウント別ショートカットに (TM t-0006)** —
   `02_outlook_アカウント情報` 直下の per-account 起動 .bat（`<番号> <email> の設定を表示.bat`）を全列挙し、
   メールアカウントごとに「表示」ショートカットを生成（複数アカウントをすべて反映）。ショートカットパネルは

@@ -268,9 +268,18 @@ function global:Update-HandoffViewerShortcuts {
     }
     Add-HvActionButton -Panel $p -Text "移行元PC情報フォルダを開く" -Y $y -Enabled ($null -ne $sysDir -and (Test-Path -LiteralPath $sysDir)) `
         -Tag @{ Action='open'; Value=$sysDir } ; $y += 36
-    $prnOpenTarget = Find-HvFirstPath @( $prnTxt, $prnDir )
-    Add-HvActionButton -Panel $p -Text "プリンタ情報を開く" -Y $y -Enabled (-not [string]::IsNullOrWhiteSpace($prnOpenTarget)) `
-        -Tag @{ Action='open'; Value=$prnOpenTarget } ; $y += 44
+    # Printer settings: show the .txt in the IN-APP text viewer (no notepad / no
+    # default-app association) so the target PC environment stays untouched.
+    # Fall back to opening the folder when the summary .txt is absent.
+    if (-not [string]::IsNullOrWhiteSpace($prnTxt) -and (Test-Path -LiteralPath $prnTxt)) {
+        Add-HvActionButton -Panel $p -Text "プリンタ設定を表示" -Y $y -Enabled $true `
+            -Tag @{ Action='textview'; Value="$prnTxt"; Title='プリンタ設定' } ; $y += 36
+    }
+    else {
+        Add-HvActionButton -Panel $p -Text "プリンタフォルダを開く" -Y $y -Enabled ($null -ne $prnDir -and (Test-Path -LiteralPath $prnDir)) `
+            -Tag @{ Action='open'; Value="$prnDir" } ; $y += 36
+    }
+    $y += 8
 
     $lbl2 = New-StyledLabel -Text "── 設定を適用 (.bat) ──" -X 12 -Y $y -Width 268 -Height 16 -FgColor $script:fgDim
     $p.Controls.Add($lbl2); $y += 22
@@ -316,8 +325,9 @@ function global:Invoke-HvDispatch {
     switch ("$($Tag.Action)") {
         'viewer'  { Invoke-HvViewer -ScriptPath $Tag.Script -ArgName $Tag.ArgName -ArgValue $Tag.ArgValue }
         'open'    { Invoke-HvOpenPath -Path $Tag.Value }
-        'bat'     { Invoke-HvRunBat  -BatPath $Tag.Value }
-        'batview' { Invoke-HvRunBat  -BatPath $Tag.Value -NoConfirm }
+        'bat'      { Invoke-HvRunBat  -BatPath $Tag.Value }
+        'batview'  { Invoke-HvRunBat  -BatPath $Tag.Value -NoConfirm }
+        'textview' { Show-HvTextViewer -Path $Tag.Value -Title $Tag.Title }
     }
 }
 
@@ -382,4 +392,50 @@ function global:Invoke-HvRunBat {
     }
     try { Start-Process -FilePath $BatPath -WorkingDirectory (Split-Path -Parent $BatPath) | Out-Null }
     catch { Show-HvWarn "起動に失敗しました: $($_.Exception.Message)" }
+}
+
+function global:Show-HvTextViewer {
+    # In-app, read-only viewer for a .txt/.csv reference file. Used instead of
+    # Start-Process (which would invoke notepad / the default app and leave traces
+    # on the target PC). Monospace, scrollable, selectable (copy OK), no write.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Title = "テキストビューア"
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        Show-HvWarn "ファイルが見つかりません: $Path"; return
+    }
+    $text = ''
+    try { $text = [System.IO.File]::ReadAllText($Path) }   # auto-detects BOM, UTF-8 default
+    catch { Show-HvWarn "読み込みに失敗しました: $($_.Exception.Message)"; return }
+
+    $dlg = New-Object System.Windows.Forms.Form
+    Set-FormStyle -Form $dlg -Title "Fabriq 移行情報ビューア - $Title" -Width 760 -Height 600
+    $dlg.KeyPreview = $true
+
+    $box = New-Object System.Windows.Forms.TextBox
+    $box.Multiline  = $true
+    $box.ReadOnly   = $true
+    $box.WordWrap   = $false
+    $box.ScrollBars = [System.Windows.Forms.ScrollBars]::Both
+    $box.Font       = New-Object System.Drawing.Font('Consolas', 10)
+    $box.BackColor  = [System.Drawing.Color]::White
+    $box.Location   = New-Object System.Drawing.Point(12, 12)
+    $box.Size       = New-Object System.Drawing.Size(720, 500)
+    $box.Anchor     = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom `
+        -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $box.Text       = $text
+    $box.Select(0, 0)
+    $dlg.Controls.Add($box)
+
+    $btnClose = New-StyledButton -Text "閉じる" -X 620 -Y 522 -Width 110 -Height 32 -BgColor $script:bgAccent
+    $btnClose.ForeColor = $script:fgWhite
+    $btnClose.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+    $btnClose.Add_Click({ $dlg.Close() })
+    $dlg.Controls.Add($btnClose)
+
+    $dlg.Add_KeyDown({ if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { $dlg.Close() } })
+    $dlg.Add_Shown({ $dlg.Activate() })
+    [void]$dlg.ShowDialog()
+    $dlg.Dispose()
 }
