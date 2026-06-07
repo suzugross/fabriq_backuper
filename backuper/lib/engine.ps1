@@ -11,7 +11,10 @@ function Get-RegisteredSections {
         Show-Error "sections.csv not found: $csvPath"
         return @()
     }
-    $sections = Import-Csv -Path $csvPath
+    # -Encoding UTF8: sections.csv is UTF-8 (BOM) with Japanese DisplayName values.
+    # Be explicit so the registry parses correctly on every PS5.1 build (avoids the
+    # no--Encoding BOM-strip ambiguity that can mangle the first header to "?Enabled").
+    $sections = Import-Csv -Path $csvPath -Encoding UTF8
     return @($sections)
 }
 

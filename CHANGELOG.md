@@ -111,6 +111,10 @@
   - manifest schema / section interface は不変。
 
 ### Fixed
+- backuper v0.61.1: **sections.csv を `-Encoding UTF8` で読込（セクション登録の解釈ずれ防止）(TM t-0009)** —
+  `Get-RegisteredSections` の `Import-Csv` に `-Encoding UTF8` を明示。BOM 付き UTF-8 の sections.csv
+  （日本語 DisplayName ＋ v0.61.0 で追加した `application` 行）を全 PS5.1 環境で確実に読込む
+  （`-Encoding` 未指定時に BOM が除去されず先頭ヘッダが壊れて全セクション未チェック化する版差を回避）。
 - backuper v0.55.1: **リストアの「項目別の状態」グリッドに userdata 項目が出ない不具合を修正 (TM t-0002)** —
   `Initialize-ProgressEntries` が呼ばれる度に `Rows.Clear()` でグリッドを全消去していたため、リストアで
   userdata と outlook_pop の両 section が呼ぶと**後に走った section が前の項目を消し**、Outlook profile だけが
