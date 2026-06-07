@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T20:00:26+09:00",
+  "updatedAt": "2026-06-07T20:27:19+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -97,10 +97,10 @@
       "id": "t-0011",
       "title": "拡張HOSTLIST",
       "content": "FabriqがもつHOSTLISTとは別で、このアプリがもつHOSTLISTを用意したい。新旧PC名カラムはそのままに、本アプリでいうと、視覚情報などを書き込めるようにすると、そのPCで必要な資格情報が自動で読み込まれて、入力される仕組み。\r\n拡張ホストリストは、念のため、Fabriqのホストリストと突合せ、新旧PC名カラムのエントリが完全に一致しているときのみ採用する。\r\nFabriq側のホストリストのPCエントリが絶対的な正とするため。",
-      "claudeNote": "",
+      "claudeNote": "設計検討完了(多エージェント設計WF: 基盤マッピング+次元別設計4+統合)。実装承認待ち(未着手)。提案: (1)ファイル=backuper/data/extended_hostlist.csv(live・gitignore)+.sample.csv(commit)・UTF-8 BOM/CRLF・列=Enabled,OldPCname,NewPCname,UncHost,UncShare,UncUsername,UncPassword,VisualLabel,VisualColor,Note。Import-ModuleCsv 読込で ENC: 自動復号を流用。(2)資格情報=マスターパスフレーズ AES(ENC:・機種跨ぎ移植可・既存と同一)で UncPassword のみ暗号化。重要: 暗号化側 Protect-FabriqValue が repo 全体に不在 -> 新規追加(Unprotect の厳密な逆・round-trip 自己テスト必須)。非ENC: パスワードは load guard で warn+ignore。(3)突合=Fabriq hostlist を絶対正とし (OldPCname,NewPCname) 完全一致(trim+大小無視)のみ採用・不一致は無視(fatal/書戻しなし)・空NewPCname は空のみ一致・純関数 Resolve-ExtendedHostlistMatch。列名 casing 罠注意(fabriq ヘッダ大文字N/コード小文字n・PS case-insensitive 依存)。(4)結線=新 backuper/lib/extended_hostlist.ps1 で既存 seam Connect-UncFromExtendedHostlist 実装(識別は UNC server=IP でなく $script:CurrentHost に固定)。UX=成功時サイレント自動接続/失敗時は username プリフィルで Show-UncConnectDialog(password は可視欄に入れない)。視覚情報は session_form/handoff_viewer に cold/plaintext 表示。管理=独立 fabriq_exthostlist.ps1(handoff_viewer クローン・Fabriq pair から seed=書込時も突合強制)。(5)段階 P0 スキーマ+reader+突合 / P1 Protect+seam 自動接続+登録ツール / P2 視覚情報。MINOR・~2.5-4 dev-day。要決定(ユーザ): 自動接続 silent 可否 / 非ENC guard warn-or-fatal / 単一ファイル可否 / 管理ツール独立EXE 可否 / 視覚情報 P2 defer 可否 / 実装範囲。",
       "status": "未着手",
       "createdAt": "2026-06-07T18:31:37.2042554+09:00",
-      "updatedAt": "2026-06-07T18:39:13.2052766+09:00"
+      "updatedAt": "2026-06-07T20:27:19+09:00"
     },
     {
       "id": "t-0012",
