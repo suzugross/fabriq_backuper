@@ -67,6 +67,20 @@
   - normal backup / restore / manifest schema は不変。多エージェント敵対的検証3ラウンドで data-loss / 状態誤報を
     検出→修正済み (実機スモーク推奨)。
 
+### Changed
+- backuper v0.59.0: **集約フォルダを移行先 Desktop → Backuper 内 `Handoff\` へ移設 (TM t-0006 第2段)** —
+  restore の operator handoff（集約）フォルダの出力先を、移行先ユーザの Desktop から
+  **`<BackuperRoot>\Handoff\<yyyy_MM_dd>_<OldPCname>_BK`**（`Backup\` と並ぶ sibling）へ変更。
+  Fabriq 移行情報ビューアで集中的に閲覧でき、`Get-CleanupCandidate` にも新 root を追加したので
+  ビューア・Cleanup の双方が新場所を発見する。
+  - `Resolve-OperatorHandoffRootLocal`（[common.ps1](backuper/common.ps1)・新規 additive）を追加。
+    Desktop 版 `Resolve-OperatorHandoffRoot` と root 非依存の `Resolve-OperatorHandoffSectionDir` は温存（後方互換）。
+  - `Get-CleanupCandidate` に「Root 3b: `<BackuperRoot>\Handoff\*_BK`」走査を追加（Desktop 走査も維持）。
+    Cleanup 安全弁（`Test-CleanupPathSafe`）は protected root の子孫削除を許可するため新場所も削除可。
+  - [restore_view.ps1](backuper/lib/ui/restore_view.ps1)：handoff root 解決を新 resolver に切替、
+    チェックボックス文言と README を更新。section の配備は `OperatorHandoffSubdir`（root 非依存）経由のため不変。
+  - manifest schema / section interface は不変。
+
 ### Fixed
 - backuper v0.55.1: **リストアの「項目別の状態」グリッドに userdata 項目が出ない不具合を修正 (TM t-0002)** —
   `Initialize-ProgressEntries` が呼ばれる度に `Rows.Clear()` でグリッドを全消去していたため、リストアで

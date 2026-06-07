@@ -764,6 +764,23 @@ function global:Resolve-OperatorHandoffRoot {
     return (Join-Path $desktop ("{0}_{1}_BK" -f $date, $OldPcName))
 }
 
+function global:Resolve-OperatorHandoffRootLocal {
+    # v0.59.0 (t-0006 stage 2): the handoff (集約) folder now lives INSIDE the
+    # Backuper install at <BackuperRoot>\Handoff\<yyyy_MM_dd>_<OldPcName>_BK
+    # (a sibling of Backup\) instead of the target user's Desktop, so it can be
+    # browsed centrally by Fabriq Handoff Viewer and is found by Get-CleanupCandidate
+    # (Root 3b). The Desktop variant (Resolve-OperatorHandoffRoot) is kept for
+    # back-compat. Naming is identical (_BK + yyyy_MM_dd) so Test-CleanupArtifactRecognized
+    # still recognises it. Does NOT create the directory; caller mkdir's + writes README.
+    param(
+        [Parameter(Mandatory = $true)][string]$BackuperRoot,
+        [Parameter(Mandatory = $true)][string]$OldPcName
+    )
+    $handoffBase = Join-Path $BackuperRoot 'Handoff'
+    $date        = Get-Date -Format 'yyyy_MM_dd'
+    return (Join-Path $handoffBase ("{0}_{1}_BK" -f $date, $OldPcName))
+}
+
 function global:Resolve-OperatorHandoffSectionDir {
     # Returns the per-section subdir path under a handoff root, or $null
     # if the section has no operator-facing files (= not registered in
@@ -1597,6 +1614,10 @@ function global:Get-CleanupSourceLabel {
     if ($p -match '\\desktop\\') { return 'Desktop' }
     $bk = (Join-Path $BackuperRoot 'Backup').TrimEnd('\').ToLowerInvariant()
     if ($p.StartsWith($bk + '\') -or $p -eq $bk) { return 'Backup(local/USB)' }
+    # v0.59.0 (t-0006 stage 2): handoff folders relocated under <BackuperRoot>\Handoff\
+    # (were on the Desktop -> matched above). Label them before the LAN-share fallback.
+    $hoff = (Join-Path $BackuperRoot 'Handoff').TrimEnd('\').ToLowerInvariant()
+    if ($p.StartsWith($hoff + '\') -or $p -eq $hoff) { return 'Handoff(Backuper)' }
     return 'LAN-share' #
 }
 
@@ -1799,6 +1820,16 @@ function global:Get-CleanupCandidate {
                     Get-ChildItem -LiteralPath $desk -Directory -Filter '*_BK' -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.FullName) }
                 }
             }
+        }
+    }
+    catch {}
+
+    # Root 3b: handoff folders relocated under <BackuperRoot>\Handoff\ (v0.59.0, t-0006).
+    # Same _BK naming as the Desktop variant, so Test-CleanupArtifactRecognized handles them.
+    try {
+        $handoffBase = Join-Path $BackuperRoot 'Handoff'
+        if (Test-Path -LiteralPath $handoffBase) {
+            Get-ChildItem -LiteralPath $handoffBase -Directory -Filter '*_BK' -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.FullName) }
         }
     }
     catch {}

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-07T12:28:14+09:00",
+  "updatedAt": "2026-06-07T12:55:05+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -52,10 +52,10 @@
       "id": "t-0006",
       "title": "デスクトップ集約フォルダの集約",
       "content": "現状、オペレータが使用するための情報集約フォルダをデスクトップに配置しているが、これを、Backuper内の専用ディレクトリに移動させた上で、LANPREPやcleanupと同様に個別アプリ化する。そのディレクトリを走査し、ホストリストで選択された端末用の集約フォルダを見つける。\r\n最終的には、そのアプリのGUI上で、各種情報を閲覧できるようにする。（それぞれの設定情報確認基盤は整っている認識なのでそれを呼び出すショートカットをわかりやすくGUI上に配置するのがいいと感じている。）",
-      "claudeNote": "計画確定→第1段(ビューア本体)実装+コミット済 v0.58.0-0.58.2: 88c6d28(本体/発見=Get-CleanupCandidate Kind=handoff再利用/Resolve-HostByComputerName自動選択/ショートカットGUI/Fabriq_HandoffViewer.exe), b892969(Outlookをアカウント別ショートカット+AutoScroll), d157420(参照.txtをアプリ内テキストビューアで表示=notepad不使用)。骨格はfabriq_cleanup.ps1複製・本体asInvoker。敵対的レビューPASS(初回)。第2段=集約フォルダを <BackuperRoot>/Handoff へ移設(restore経路additive改修+Get-CleanupCandidateにHandoff root追加)は未着手・ユーザ指示待ち(高リスクのため第1段の実機確認後を推奨)。全コミット実機未確認。",
-      "status": "対応中",
+      "claudeNote": "第1段(ビューア本体)+第2段(集約フォルダ移設)とも実装+コミット済。第1段 v0.58.0-0.58.2(88c6d28本体/b892969 Outlookアカウント別+AutoScroll/d157420 .txtアプリ内ビューア)。第2段 v0.59.0: 集約フォルダ出力先を移行先Desktop→<BackuperRoot>/Handoff/<日付>_<OldPC>_BK へ移設。Resolve-OperatorHandoffRootLocal新規(Desktop版は温存=後方互換)/Get-CleanupCandidate Root3b追加(ビューア+Cleanup双方が発見)/restore_view切替+チェックボックス文言+README+宣言コメント更新/Get-CleanupSourceLabelにHandoff(Backuper)ラベル追加。安全弁は子孫削除許可で新場所も削除可。section配備はroot非依存で不変・schema/interface不変。敵対的レビュー2R(stage1 PASS / stage2=確定2件[低:source label/stale comment]修正済)。全コミット実機未確認(実機スモーク推奨)。",
+      "status": "レビュー待ち",
       "createdAt": "2026-06-06T13:34:30.3063088+09:00",
-      "updatedAt": "2026-06-07T12:28:14+09:00"
+      "updatedAt": "2026-06-07T12:55:05+09:00"
     },
     {
       "id": "t-0007",

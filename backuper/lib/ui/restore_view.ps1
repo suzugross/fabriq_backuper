@@ -59,9 +59,10 @@ $script:RestoreUserdataIncludeTargets    = $null
 # setup via Strategy A is the recommended path. Opt-in for advanced users
 # who want to try registry import.
 $script:RestoreOutlookAttemptStrategyBCheck = $null
-# v0.25.0: checkbox controlling whether operator-facing artifacts
-# (credentials payload + Outlook account info text) are consolidated into
-# a single Desktop\<date>_<host>_BK\ folder instead of being scattered
+# v0.25.0 (relocated v0.59.0): checkbox controlling whether operator-facing
+# artifacts (credentials / Outlook account info / source-PC evidence / printer)
+# are consolidated into a single <BackuperRoot>\Handoff\<date>_<OldPC>_BK\ folder
+# (was the target user's Desktop in v0.25-0.58.x) instead of being scattered
 # across Documents and PST folders. Default ON. When OFF, all sections
 # behave exactly as in v0.24.5 (legacy emit locations).
 $script:RestoreOperatorHandoffCheck = $null
@@ -175,7 +176,7 @@ function New-RestoreView {
 
     # ---- Operator handoff (v0.51.0: moved up) ----
     $handoffCheck = New-StyledCheckBox `
-        -Text "operator 用ファイル (資格情報 / Outlook 設定 / 移行元PC情報 / プリンタ) をデスクトップに統合 (推奨)" `
+        -Text "operator 用ファイル (資格情報 / Outlook 設定 / 移行元PC情報 / プリンタ) を集約フォルダ (Backuper\Handoff) に統合 (推奨)" `
         -X 24 -Y 172 -Width 820 -Height 22 -Checked $true
     $script:RestoreOperatorHandoffCheck = $handoffCheck
     $panel.Controls.Add($handoffCheck)
@@ -1264,9 +1265,15 @@ function Invoke-RestoreStart {
         -not [string]::IsNullOrWhiteSpace($targetUserProfilePath)) {
         $oldPcForHandoff = if ($null -ne $hostForEngine) { $hostForEngine.OldPCname } else { 'unknown' }
         if ([string]::IsNullOrWhiteSpace($oldPcForHandoff)) { $oldPcForHandoff = 'unknown' }
-        $script:RestoreHandoffRoot  = Resolve-OperatorHandoffRoot `
-            -TargetUserProfilePath $targetUserProfilePath `
-            -OldPcName             $oldPcForHandoff
+        # v0.59.0 (t-0006 stage 2): emit the handoff (集約) folder INTO the Backuper
+        # install (<BackuperRoot>\Handoff\<date>_<OldPC>_BK) instead of the target
+        # user's Desktop, so it is browsable via Fabriq Handoff Viewer and found by
+        # Get-CleanupCandidate (Root 3b). $targetUserProfilePath is still required by
+        # the gate above (sections register run-as-target-user) but no longer feeds
+        # the handoff LOCATION.
+        $script:RestoreHandoffRoot  = Resolve-OperatorHandoffRootLocal `
+            -BackuperRoot $script:BackuperRoot `
+            -OldPcName    $oldPcForHandoff
         $script:RestoreHandoffOldPc = $oldPcForHandoff
         $script:RestoreHandoffEnabled = $true
         $credSubdir        = Resolve-OperatorHandoffSectionDir -HandoffRoot $script:RestoreHandoffRoot -SectionName 'credentials'
@@ -1352,6 +1359,7 @@ Fabriq BackUper - 移行後セットアップフォルダ
 このフォルダには、移行元 PC ($($script:RestoreHandoffOldPc)) からの
 operator-facing な設定情報が番号順に集約されています。
 番号順に作業してください。
+(このフォルダは Backuper の Handoff フォルダ配下にあり、「Fabriq 移行情報ビューア」からも開けます。)
 
 01_資格情報\
   Windows 資格情報マネージャの再登録用ファイル。
