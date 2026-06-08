@@ -225,7 +225,9 @@ if ($_hostsRaw.Count -gt 0) {
         }
         else {
             $global:FabriqMasterPassphrase = $_pp
-            $_hostsRaw = @(Get-FabriqHostlist -FabriqRoot $script:FabriqRoot)
+            $_busy = Show-BusyOverlay   # v0.67.0 (t-0014): overlay during hostlist ENC: decrypt (console thread, pre-Run)
+            try { $_hostsRaw = @(Get-FabriqHostlist -FabriqRoot $script:FabriqRoot) }
+            finally { Close-BusyOverlay $_busy }
             if ($_hostsRaw.Count -gt 0) { $script:HostRows = $_hostsRaw; Show-Success "Hostlist decrypted: $($script:HostRows.Count) row(s)" }
         }
     }

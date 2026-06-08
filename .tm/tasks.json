@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-08T15:08:30+09:00",
+  "updatedAt": "2026-06-08T16:06:23+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -124,10 +124,10 @@
       "id": "t-0014",
       "title": "資格情報読み込み待ちについて",
       "content": "現状、資格情報を裏で読み込んでいそうな画面において、アプリが応答なしとなってさもハングしているかのような動きを見せたり、なにもなく待ち状態になっており、オペレータが不安がるので、読み込み中、のような画面を作ってほしい。あくまで読み込んでいるのがわかる雰囲気だけで大丈夫です。",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "P0+P1 実装+敵対的レビュー完了(v0.67.0・実バグ0)。Show-BusyOverlay/Close-BusyOverlay(theme.ps1・ボーダーレス ラベンダー 最前面・直前1描画 Show()+Refresh()+DoEvents・$null安全/例外不投・Close は null-safe)。P0(最大凍結=パスフレーズ後の hostlist ENC: 復号 多秒)=main_form hostlist復号 try/finally overlay / session_form 照合 WaitCursor($ppOk) / handoff_viewer 228 / fabriq_exthostlist 201 の4経路(ツールは console thread pre-Run で Show()+Refresh() 描画→Close)。P1=common.ps1 schtasks IPC poll(最大30s)+Stop-OutlookForSource 終了待ち の2ループに guarded DoEvents(if 'System.Windows.Forms.Application' -as [type])=WinForms 未ロード時 no-op・既存 progress_view も DoEvents 済で再入は新規リスクなし / Resolve-UncAccess の無人 probe+seam を overlay 包囲しダイアログ前に close(backup/restore 共通) / unc_connect_dialog 接続処理に WaitCursor+finally。文言一律「読み込み中…」。シングルスレッドのため一発処理中は静止(雰囲気のみ=要件OK)、ループ系は実応答維持。多エージェントレビュー39報告→実バグ0(ライフサイクル/スコープ/load順/guard/再入 すべて正)。残:実機(肥大ENC: hostlistで復号を長くし overlay 描画確認/未ログオン target で schtasks 30s 応答維持/UNC offline で接続中表示/各ツール起動)。",
+      "status": "対応中",
       "createdAt": "2026-06-08T09:51:41.1863415+09:00",
-      "updatedAt": "2026-06-08T09:53:57.8333515+09:00"
+      "updatedAt": "2026-06-08T16:06:23+09:00"
     }
   ]
 }

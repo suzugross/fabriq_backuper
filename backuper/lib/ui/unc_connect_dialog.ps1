@@ -101,6 +101,9 @@ function Show-UncConnectDialog {
         # Map share root via New-PSDrive
         $shareRoot = if ($uncPath -match '^(\\\\[^\\]+\\[^\\]+)') { $Matches[1] } else { $uncPath }
         $driveName = "FabriqBU$([System.Diagnostics.Process]::GetCurrentProcess().Id)"
+        # v0.67.0 (t-0014): wait cursor during New-PSDrive + Test-Path (the network
+        # connect can stall for seconds on a slow/unreachable share).
+        $dialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
             if (Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue) {
                 Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue
@@ -126,6 +129,9 @@ function Show-UncConnectDialog {
                 "接続失敗:`n$($_.Exception.Message)",
                 "接続", [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        }
+        finally {
+            $dialog.Cursor = [System.Windows.Forms.Cursors]::Default
         }
     })
 

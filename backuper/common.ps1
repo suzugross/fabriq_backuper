@@ -565,7 +565,14 @@ function global:Invoke-ChildAsTargetUser {
             $taskRegistered = $true
             Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
             $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-            while (-not (Test-Path $ipcJson) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
+            # v0.67.0 (t-0014): pump the WinForms message queue each iteration
+            # (guarded -- no-op when WinForms is not loaded) so the GUI stays
+            # responsive during the up-to-${TimeoutSeconds}s credential wait
+            # instead of going "応答なし".
+            while (-not (Test-Path $ipcJson) -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Milliseconds 300
+                if ('System.Windows.Forms.Application' -as [type]) { [System.Windows.Forms.Application]::DoEvents() }
+            }
             if (-not (Test-Path $ipcJson)) {
                 $warnings += "Target user '$TargetUser' did not produce output within ${TimeoutSeconds}s (likely not logged on, GPO restriction, or AppLocker)"
                 $result.Method = 'unavailable'
@@ -711,6 +718,9 @@ function global:Stop-OutlookForSource {
         }
         if (-not $stillAlive) { break }
         Start-Sleep -Milliseconds 500
+        # v0.67.0 (t-0014): keep the GUI responsive during the graceful-close wait
+        # (guarded -- no-op when WinForms is not loaded).
+        if ('System.Windows.Forms.Application' -as [type]) { [System.Windows.Forms.Application]::DoEvents() }
     }
 
     # Phase 4: force-kill survivors.

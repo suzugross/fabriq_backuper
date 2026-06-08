@@ -207,3 +207,50 @@ function Set-FormStyle {
     $Form.FormBorderStyle = "FixedSingle"
     $Form.MaximizeBox = $false
 }
+
+# ============================================================
+# Busy overlay (t-0014, v0.67.0)
+#
+# A lightweight borderless lavender "読み込み中..." panel shown ONCE, right
+# before a blocking credential / hostlist-decryption / network operation, so the
+# operator sees "working" instead of a blank / "応答なし" (Not Responding) window.
+#
+# PS5.1/WinForms is single-threaded: the overlay CANNOT animate while the
+# blocking call runs (the UI thread is busy). The single Show()+Refresh()+
+# DoEvents paint BEFORE the blocking call is what creates the impression -- that
+# static panel is enough (this is the "雰囲気だけで OK" the ticket asks for).
+# Use NON-modal Show() (never ShowDialog, which would block the caller), and
+# always pair with try/finally + Close-BusyOverlay. Returns $null on any failure
+# so it can never break the underlying operation.
+# ============================================================
+function Show-BusyOverlay {
+    param([string]$Message = '読み込み中...', $Owner = $null)
+    try {
+        $f = New-Object System.Windows.Forms.Form
+        $f.FormBorderStyle = 'None'
+        $f.StartPosition   = if ($null -ne $Owner) { 'CenterParent' } else { 'CenterScreen' }
+        $f.Size            = New-Object System.Drawing.Size(320, 110)
+        $f.BackColor       = $script:bgAccent
+        $f.TopMost         = $true
+        $f.ShowInTaskbar   = $false
+        $f.ControlBox      = $false
+        if ($null -ne $Owner) { $f.Owner = $Owner }
+        $lbl = New-StyledLabel -Text $Message -X 0 -Y 34 -Width 320 -Height 42 -FgColor $script:fgWhite -Font $script:fontLarge
+        $lbl.TextAlign = 'MiddleCenter'
+        $f.Controls.Add($lbl)
+        $f.Show()
+        $f.Refresh()
+        [System.Windows.Forms.Application]::DoEvents()   # flush WM_PAINT so the label actually draws before the block
+        return @{ Form = $f; Label = $lbl }
+    }
+    catch {
+        return $null
+    }
+}
+
+function Close-BusyOverlay {
+    param($Handle)
+    if ($null -ne $Handle -and $null -ne $Handle.Form) {
+        try { $Handle.Form.Close(); $Handle.Form.Dispose() } catch {}
+    }
+}

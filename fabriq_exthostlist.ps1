@@ -198,7 +198,9 @@ $global:FabriqMasterPassphrase = $_pp
 Show-Success "Master passphrase verified."
 
 # ---- hostlist load (decrypted) ----
-$script:EhFabriqRows = @(Get-FabriqHostlist -FabriqRoot $script:FabriqRoot)
+$_busy = Show-BusyOverlay   # v0.67.0 (t-0014): overlay during hostlist ENC: decrypt (console thread, pre-Run)
+try { $script:EhFabriqRows = @(Get-FabriqHostlist -FabriqRoot $script:FabriqRoot) }
+finally { Close-BusyOverlay $_busy }
 Show-Info "Hostlist loaded: $($script:EhFabriqRows.Count) row(s)."
 if ($script:EhFabriqRows.Count -eq 0) {
     Show-Warning "Hostlist empty or unreadable. The editor grid will be empty."

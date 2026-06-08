@@ -71,19 +71,26 @@ function Resolve-UncAccess {
         [string]$PresetUsername = ""
     )
     if (-not $Path.StartsWith('\\')) { return $true }   # local path, no UNC concerns
-    if (Test-UncPath -Path $Path) { return $true }      # already accessible
 
-    # --- 拡張HOSTLIST seam (future, inert until implemented) ---------------
-    # A future per-satellite "extended hostlist" may store connection
-    # credentials keyed by PC name (NewPC/OldPC columns + saved creds), so the
-    # operator never types them. If such a resolver function is later defined,
-    # try it SILENTLY here BEFORE prompting. This hook is a no-op today
-    # (Get-Command finds nothing) -- it adds zero behaviour now and marks the
-    # exact insertion point. The resolver is expected to accept -Path and
-    # return $true after a successful New-PSDrive.
-    $extResolver = Get-Command -Name Connect-UncFromExtendedHostlist -ErrorAction SilentlyContinue
-    if ($extResolver -and (& $extResolver -Path $Path)) { return $true }
-    # ----------------------------------------------------------------------
+    # v0.67.0 (t-0014): the silent probe + extended-hostlist auto-connect below
+    # involve NO operator interaction but can stall on a slow/unreachable share.
+    # Show a "読み込み中..." overlay around them so it does not look like a hang,
+    # and CLOSE it before the operator-facing Show-UncConnectDialog.
+    $busy = Show-BusyOverlay
+    try {
+        if (Test-UncPath -Path $Path) { return $true }      # already accessible
+
+        # --- 拡張HOSTLIST seam ------------------------------------------------
+        # The per-satellite extended hostlist (t-0011) may store connection
+        # credentials keyed by PC name, so the operator never types them. If the
+        # resolver function is defined, try it SILENTLY here BEFORE prompting.
+        $extResolver = Get-Command -Name Connect-UncFromExtendedHostlist -ErrorAction SilentlyContinue
+        if ($extResolver -and (& $extResolver -Path $Path)) { return $true }
+        # ----------------------------------------------------------------------
+    }
+    finally {
+        Close-BusyOverlay $busy
+    }
 
     # In-flow interactive prompt (app-styled, prefilled with the known path +
     # optional username). Returns the connected path on success or $null.

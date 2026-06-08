@@ -66,7 +66,12 @@ function Start-FabriqBackuperGui {
     # Load hostlist + section registry up-front. The caller must have set
     # $global:FabriqMasterPassphrase before invoking this function, so the
     # ENC: values will be transparently decrypted by Import-ModuleCsv.
-    $script:Hostlist = @(Get-FabriqHostlist -FabriqRoot $FabriqRoot)
+    # v0.67.0 (t-0014): show a "読み込み中..." overlay during the (potentially
+    # multi-second) hostlist ENC: decryption so the operator does not face a blank
+    # "応答なし" window before the main form appears.
+    $script:LoadBusy = Show-BusyOverlay
+    try { $script:Hostlist = @(Get-FabriqHostlist -FabriqRoot $FabriqRoot) }
+    finally { Close-BusyOverlay $script:LoadBusy }
     if ($null -eq $script:Hostlist -or $script:Hostlist.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show(
             "hostlist の読み込みに失敗、または空です。$FabriqRoot\kernel\csv\hostlist.csv を確認してください。",

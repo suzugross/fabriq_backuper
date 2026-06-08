@@ -66,6 +66,12 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.67.0: **資格情報／ホスト情報の読み込み中に「読み込み中…」表示を追加 (TM t-0014)** —
+  資格情報・hostlist 復号・ネットワーク接続中に UI が「応答なし」風に固まりオペレータが不安になる問題へ、軽量な busy インジケータを追加。
+  - `theme.ps1` に **`Show-BusyOverlay`/`Close-BusyOverlay`**（ボーダーレスのラベンダー最前面「読み込み中…」パネル。ブロッキング処理の**直前に1回描画**＝シングルスレッドでも「作業中」が伝わる。失敗時は `$null`・例外を投げない安全設計）。
+  - **P0（最大の凍結点＝パスフレーズ後の hostlist `ENC:` 復号）**：本体 `main_form` / `session_form` 照合（WaitCursor）/ `handoff_viewer` / `fabriq_exthostlist` の4経路に適用。
+  - **P1**：`common.ps1` の schtasks 資格情報ダンプ（最大30秒）と Outlook 終了待ちの両ポーリングループに **guarded `DoEvents`**（WinForms 未ロード時は no-op／＝実際に「応答なし」を抑止）。`Resolve-UncAccess` の**無人 probe＋拡張HOSTLIST 自動接続**を overlay 包囲（操作ダイアログの前に閉じる・backup/restore 共通）。UNC 接続ダイアログに WaitCursor。
+  - 文言は一律「読み込み中…」。backup / restore / seam / 復号 / 突合の挙動は不変。多エージェント敵対的レビュー指摘ゼロ・実機スモーク推奨。
 - backuper v0.66.0: **拡張HOSTLIST 管理ツールに「本家との突合状態」表示を追加 (TM t-0011)** —
   エディタ上部に、**ランタイムと同一の厳格ゲート（`Test-ExtendedHostlistGate`）**で判定した突合状態を常時表示
   （**○ 完全一致＝採用 / × 不一致＝全体無視**、本家のみ・拡張のみ件数つき・緑/赤で色分け）。読込／保存／削除／一括取込のたびに自動更新。

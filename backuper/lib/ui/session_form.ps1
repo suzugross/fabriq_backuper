@@ -301,7 +301,12 @@ function global:Show-BackuperSessionForm {
             $msgLabel.Text = ('verify token が見つかりません: {0}' -f $VerifyTokenPath)
             return
         }
-        if (-not (Test-MasterPassphrase -Passphrase $pp -VerifyTokenPath $VerifyTokenPath)) {
+        # v0.67.0 (t-0014): brief wait cursor during passphrase verify (single
+        # ENC: decrypt, ~100-500ms) so the click does not feel like a freeze.
+        [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
+        try { $ppOk = Test-MasterPassphrase -Passphrase $pp -VerifyTokenPath $VerifyTokenPath }
+        finally { [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::Default }
+        if (-not $ppOk) {
             $msgLabel.Text = 'パスフレーズが正しくありません。再入力してください。'
             $ppBox.SelectAll()
             $ppBox.Focus()
