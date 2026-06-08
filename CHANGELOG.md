@@ -16,6 +16,10 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.64.1: **拡張HOSTLIST のスキーマを「ユーザ名＋パスワードのみ」に簡素化 (TM t-0011)** —
+  `UncHost` / `UncShare` 列を削除。接続先の共有ルートは seam が**フローの渡すパス（`backupRootUnc`／選択中バックアップ場所）から導出**しており、
+  資格情報の特定は新旧PC名（`$script:CurrentHost`）で行うため、ホスト/共有の指定は不要だった（両列は未参照だった）。
+  新スキーマ: `Enabled, OldPCname, NewPCname, UncUsername, UncPassword, VisualLabel, VisualColor, Note`。seam ロジックは変更なし（元々未使用）。
 - backuper v0.63.0: **「UNC 接続」ボタンを廃止し、資格情報入力を手順フローに一本化 (TM t-0010)** —
   バックアップ／リストア両画面から独立した「UNC 接続…」ボタンを撤去。未接続の UNC へアクセスする際は、
   フローの中で**アプリ独自ダイアログ `Show-UncConnectDialog`（パス・ユーザ名をプリフィル、パスワードのみ入力）**を表示する。

@@ -11,7 +11,7 @@
 # Comments / console output English; WinForms UI Japanese (CLAUDE.md rules).
 # ============================================================
 
-$script:EhColumns = @('Enabled','OldPCname','NewPCname','UncHost','UncShare','UncUsername','UncPassword','VisualLabel','VisualColor','Note')
+$script:EhColumns = @('Enabled','OldPCname','NewPCname','UncUsername','UncPassword','VisualLabel','VisualColor','Note')
 $script:EhFabriqRows = @()
 $script:EhRows       = $null    # System.Collections.Generic.List[object] of raw extended rows
 $script:EhGrid       = $null
@@ -118,8 +118,6 @@ function Set-EhEditFieldsFromSelection {
     $script:EhFields['IdentityLabel'].Text = "対象: $old  ->  $newDisp"
     $ext = Get-EhExtendedRowForPair -OldName $old -NewName $new
     $get = { param($r, $c) if ($null -ne $r -and $r.PSObject.Properties.Name -contains $c) { "$($r.$c)" } else { '' } }
-    $script:EhFields['UncHost'].Text     = (& $get $ext 'UncHost')
-    $script:EhFields['UncShare'].Text    = (& $get $ext 'UncShare')
     $script:EhFields['UncUsername'].Text = (& $get $ext 'UncUsername')
     $script:EhFields['Password'].Text    = ''   # never show the stored secret
     $script:EhFields['VisualLabel'].Text = (& $get $ext 'VisualLabel')
@@ -187,8 +185,6 @@ function Invoke-EhSave {
         Enabled     = $enabledStr
         OldPCname   = $old
         NewPCname   = $new
-        UncHost     = $script:EhFields['UncHost'].Text.Trim()
-        UncShare    = $script:EhFields['UncShare'].Text.Trim()
         UncUsername = $script:EhFields['UncUsername'].Text.Trim()
         UncPassword = $encPw
         VisualLabel = $script:EhFields['VisualLabel'].Text
@@ -289,8 +285,6 @@ function New-ExtHostlistEditorView {
     $script:EhFields = @{ IdentityLabel = $idLbl }
     $script:EhY += 34
 
-    Add-EhField -Panel $panel -Caption "UNCホスト/IP" -Key 'UncHost' -Masked $false
-    Add-EhField -Panel $panel -Caption "共有名" -Key 'UncShare' -Masked $false
     Add-EhField -Panel $panel -Caption "ユーザ名" -Key 'UncUsername' -Masked $false
     Add-EhField -Panel $panel -Caption "パスワード" -Key 'Password' -Masked $true
     $pwHint = New-StyledLabel -Text "" -X $script:EhFx -Y $script:EhY -Width $script:EhFw -Height 16 -FgColor $script:fgDim
