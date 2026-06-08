@@ -254,3 +254,19 @@ function Close-BusyOverlay {
         try { $Handle.Form.Close(); $Handle.Form.Dispose() } catch {}
     }
 }
+
+# t-0011 P2 (v0.68.0): parse an operator '#RRGGBB' (extended-hostlist VisualColor)
+# into @{ Back=<Color>; Fore=<auto-contrast Color> } for a readable swatch, or
+# $null when blank/invalid. Foreground flips to white on dark / dark on light by
+# luminance so the label text stays legible regardless of the chosen color.
+function Get-VisualCellColor {
+    param([string]$Hex)
+    if ([string]::IsNullOrWhiteSpace($Hex)) { return $null }
+    try {
+        $c = [System.Drawing.ColorTranslator]::FromHtml($Hex.Trim())
+        $lum = (0.299 * $c.R) + (0.587 * $c.G) + (0.114 * $c.B)
+        $fore = if ($lum -lt 140) { $script:fgWhite } else { $script:fgText }
+        return @{ Back = $c; Fore = $fore }
+    }
+    catch { return $null }
+}

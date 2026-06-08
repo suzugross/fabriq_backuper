@@ -186,6 +186,33 @@ function Get-PresetUncUsername {
     return $ProfileUsername
 }
 
+function Get-ExtendedVisualInfo {
+    # t-0011 P2: plaintext, cold-safe per-host visual info for a Fabriq host.
+    # INDEPENDENT of the strict credential gate (visual info is cosmetic, shown
+    # per matching row). Returns @{ Label; Color; Note } when an extended row
+    # matches the host's (OldPCname, NewPCname) pair, else $null.
+    # The visual columns are plaintext so this works even before the master
+    # passphrase is entered -- BUT reconciliation needs the Fabriq names in
+    # plaintext too; if they are still ENC: (cold), no match is found -> $null.
+    # Optional -Rows lets a caller (e.g. a grid populate loop) pass a single
+    # pre-loaded Get-ExtendedHostlistRows result instead of re-reading per host.
+    param($FabriqHost, $Rows = $null)
+    if ($null -eq $FabriqHost) { return $null }
+    if ($null -eq $Rows) { $Rows = Get-ExtendedHostlistRows }
+    $rows = @($Rows)
+    if ($rows.Count -eq 0) { return $null }
+    $hk = Get-NormalizedHostKey -Row $FabriqHost
+    foreach ($r in $rows) {
+        if ($null -eq $r) { continue }
+        if ((Get-NormalizedHostKey -Row $r) -ne $hk) { continue }
+        $label = if ($r.PSObject.Properties.Name -contains 'VisualLabel') { "$($r.VisualLabel)" } else { '' }
+        $color = if ($r.PSObject.Properties.Name -contains 'VisualColor') { "$($r.VisualColor)" } else { '' }
+        $note  = if ($r.PSObject.Properties.Name -contains 'Note') { "$($r.Note)" } else { '' }
+        return @{ Label = $label; Color = $color; Note = $note }
+    }
+    return $null
+}
+
 function Connect-UncFromExtendedHostlist {
     # SEAM TARGET (called by Resolve-UncAccess in unc_helper.ps1 BEFORE the manual
     # dialog). Anchors identity on the IN-SESSION selected host

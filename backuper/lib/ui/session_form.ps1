@@ -123,9 +123,16 @@ function global:Show-BackuperSessionForm {
     $colNew = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
     $colNew.Name = 'NewPCname'
     $colNew.HeaderText = 'NewPCname'
-    $colNew.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
+    $colNew.Width = 170
     $colNew.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::Automatic
     $hostGrid.Columns.Add($colNew) | Out-Null
+
+    # t-0011 P2: per-host visual label from the extended hostlist (plaintext).
+    $colLabel = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colLabel.Name = 'VisualLabel'
+    $colLabel.HeaderText = 'メモ'
+    $colLabel.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
+    $hostGrid.Columns.Add($colLabel) | Out-Null
 
     # Track auto-detect by object reference so it survives filter redraws
     # (DataGridView indices shift when Rows.Clear()+rebuild).
@@ -147,6 +154,12 @@ function global:Show-BackuperSessionForm {
         }
     }
 
+    # t-0011 P2: load the extended hostlist ONCE (raw, plaintext visual fields) so
+    # the grid populate can show per-host メモ/色 without re-reading per row.
+    # script-scoped so it is unambiguously visible inside the $refreshHostGrid
+    # scriptblock (and to keep the analyzer's used-vars check happy).
+    $script:SessionExtRows = @(Get-ExtendedHostlistRows)
+
     # Live filter / refresh scriptblock
     $refreshHostGrid = {
         param([string]$searchText)
@@ -166,6 +179,16 @@ function global:Show-BackuperSessionForm {
                 $rowIdx = $hostGrid.Rows.Add($oldPc, $newPc)
                 # Store the source object reference + its absolute index in $HostList
                 $hostGrid.Rows[$rowIdx].Tag = $h
+                # t-0011 P2: show the extended-hostlist visual label/note/color for
+                # this host (plaintext; opportunistic -- blank when names are ENC: cold).
+                $vi = Get-ExtendedVisualInfo -FabriqHost $h -Rows $script:SessionExtRows
+                if ($null -ne $vi) {
+                    $cell = $hostGrid.Rows[$rowIdx].Cells['VisualLabel']
+                    $cell.Value = $vi.Label
+                    if (-not [string]::IsNullOrWhiteSpace($vi.Note)) { $cell.ToolTipText = $vi.Note }
+                    $vc = Get-VisualCellColor -Hex $vi.Color
+                    if ($null -ne $vc) { $cell.Style.BackColor = $vc.Back; $cell.Style.ForeColor = $vc.Fore }
+                }
                 $matched++
             }
         }

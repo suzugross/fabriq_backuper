@@ -133,6 +133,7 @@ try {
     . (Join-Path $script:BackuperLib 'lib\ui\theme.ps1')
     . (Join-Path $script:BackuperLib 'lib\ui\fabriq_select_form.ps1')
     . (Join-Path $script:BackuperLib 'lib\hostlist_reader.ps1')
+    . (Join-Path $script:BackuperLib 'lib\extended_hostlist.ps1')   # v0.68.0 (t-0011 P2): Get-ExtendedVisualInfo
     . (Join-Path $script:HandoffViewerRoot 'lib\handoffviewer_view.ps1')
 }
 catch {

@@ -66,6 +66,13 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.68.0: **拡張HOSTLIST の視覚情報（ラベル/色/メモ）を各画面に表示 (TM t-0011 P2)** —
+  拡張HOSTLIST の `VisualLabel`／`VisualColor`／`Note`（いずれも平文）を、オペレータがホストを識別する画面に表示。
+  - `extended_hostlist.ps1` `Get-ExtendedVisualInfo`（平文・cold 安全・突合ゲートとは独立した per-host 照合）／`theme.ps1` `Get-VisualCellColor`（`#RRGGBB`→自動コントラスト配色）を追加。
+  - **session_form のホスト選択グリッド**に「メモ」列（VisualLabel）＋ Note ツールチップ＋セル色タイントを追加（cold 表示なので Fabriq 名が `ENC:` の場合は自動的に空＝graceful）。
+  - **handoff_viewer** の対象ホストコンボ項目にラベルを付記（例: `OLD → NEW  [本社 経理PC]`）。
+  - **本体メイン画面**の「対象ホスト:」ラベルにラベルを付記。
+  - 表示のみ・資格情報/突合/seam ロジック不変。多エージェント敵対的レビュー指摘ゼロ・実機スモーク推奨。
 - backuper v0.67.0: **資格情報／ホスト情報の読み込み中に「読み込み中…」表示を追加 (TM t-0014)** —
   資格情報・hostlist 復号・ネットワーク接続中に UI が「応答なし」風に固まりオペレータが不安になる問題へ、軽量な busy インジケータを追加。
   - `theme.ps1` に **`Show-BusyOverlay`/`Close-BusyOverlay`**（ボーダーレスのラベンダー最前面「読み込み中…」パネル。ブロッキング処理の**直前に1回描画**＝シングルスレッドでも「作業中」が伝わる。失敗時は `$null`・例外を投げない安全設計）。

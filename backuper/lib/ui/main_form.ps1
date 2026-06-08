@@ -42,7 +42,10 @@ function Update-HostHeader {
                 $script:CurrentHost.NewPCname
             } else { '' }
             $suffix = if (-not [string]::IsNullOrWhiteSpace($newName)) { " -> $newName" } else { '' }
-            $script:HostLabel.Text = "対象ホスト: $($script:CurrentHost.OldPCname)$suffix"
+            # t-0011 P2: append the extended-hostlist visual label when present.
+            $vi = Get-ExtendedVisualInfo -FabriqHost $script:CurrentHost
+            $visualSuffix = if ($null -ne $vi -and -not [string]::IsNullOrWhiteSpace($vi.Label)) { "   [$($vi.Label)]" } else { '' }
+            $script:HostLabel.Text = "対象ホスト: $($script:CurrentHost.OldPCname)$suffix$visualSuffix"
         }
     }
 }

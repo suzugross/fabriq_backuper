@@ -56,6 +56,10 @@ function global:New-HandoffViewerView {
         $old = "$($h.OldPCname)"
         $new = "$($h.NewPCname)"
         $disp = if (-not [string]::IsNullOrWhiteSpace($new)) { "$old  ->  $new" } else { $old }
+        # t-0011 P2: append the extended-hostlist visual label so the operator can
+        # identify the PC at pick time (e.g. "old -> new  [本社 経理PC]").
+        $vi = Get-ExtendedVisualInfo -FabriqHost $h
+        if ($null -ne $vi -and -not [string]::IsNullOrWhiteSpace($vi.Label)) { $disp = "$disp   [$($vi.Label)]" }
         [void]$hostCombo.Items.Add($disp)
     }
     $hostCombo.Add_SelectedIndexChanged({
