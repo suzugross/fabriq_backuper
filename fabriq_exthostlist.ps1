@@ -117,6 +117,21 @@ catch {
     return
 }
 
+# v0.66.1: route any WinForms event-handler exception to the transcript instead
+# of the default JIT / ThreadException dialog. Belt-and-suspenders alongside the
+# root fix in the editor (a PS5.1 dynamic-binder quirk surfaced that dialog).
+try {
+    [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
+    [System.Windows.Forms.Application]::add_ThreadException({
+        param($s, $e)
+        Write-Host "[ThreadException] $($e.Exception.GetType().FullName): $($e.Exception.Message)" -ForegroundColor Red
+        if ($e.Exception.StackTrace) { Write-Host $e.Exception.StackTrace -ForegroundColor DarkGray }
+    })
+}
+catch {
+    Write-Host "[warn] Could not install WinForms exception guard: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 # Dot-source backuper libraries (single source of truth) + the editor view.
 try {
     . (Join-Path $script:BackuperLib 'common.ps1')

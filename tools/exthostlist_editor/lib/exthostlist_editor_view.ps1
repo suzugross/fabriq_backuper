@@ -149,6 +149,18 @@ function Show-EhGateDetail {
         [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
 }
 
+function Get-EhCellValue {
+    # Plain helper (NOT a '& scriptblock' call) to read a row property by name.
+    # v0.66.1: using a regular function avoids a PS5.1 dynamic-binder bug
+    # (PSToObjectArrayBinder / Expression.Condition "argument types do not match"
+    # ArgumentException) that fired when invoking a scriptblock via '&' with a
+    # PSObject argument inside the grid SelectionChanged handler (the recurring
+    # ThreadException/JIT dialog).
+    param($Row, [string]$Col)
+    if ($null -ne $Row -and $Row.PSObject.Properties.Name -contains $Col) { return "$($Row.$Col)" }
+    return ''
+}
+
 function Set-EhEditFieldsFromSelection {
     # Populate the edit fields from the selected fabriq row + its extended row.
     if ($null -eq $script:EhGrid -or $script:EhGrid.SelectedRows.Count -eq 0) { return }
@@ -159,13 +171,12 @@ function Set-EhEditFieldsFromSelection {
     $newDisp = if ([string]::IsNullOrWhiteSpace($new)) { '(NewPCname なし)' } else { $new }
     $script:EhFields['IdentityLabel'].Text = "対象: $old  ->  $newDisp"
     $ext = Get-EhExtendedRowForPair -OldName $old -NewName $new
-    $get = { param($r, $c) if ($null -ne $r -and $r.PSObject.Properties.Name -contains $c) { "$($r.$c)" } else { '' } }
-    $script:EhFields['UncUsername'].Text = (& $get $ext 'UncUsername')
+    $script:EhFields['UncUsername'].Text = Get-EhCellValue -Row $ext -Col 'UncUsername'
     $script:EhFields['Password'].Text    = ''   # never show the stored secret
-    $script:EhFields['VisualLabel'].Text = (& $get $ext 'VisualLabel')
-    $script:EhFields['VisualColor'].Text = (& $get $ext 'VisualColor')
-    $script:EhFields['Note'].Text        = (& $get $ext 'Note')
-    $enabledVal = (& $get $ext 'Enabled')
+    $script:EhFields['VisualLabel'].Text = Get-EhCellValue -Row $ext -Col 'VisualLabel'
+    $script:EhFields['VisualColor'].Text = Get-EhCellValue -Row $ext -Col 'VisualColor'
+    $script:EhFields['Note'].Text        = Get-EhCellValue -Row $ext -Col 'Note'
+    $enabledVal = Get-EhCellValue -Row $ext -Col 'Enabled'
     $script:EhFields['Enabled'].Checked  = -not ($enabledVal -eq '0' -or $enabledVal -ieq 'false' -or $enabledVal -ieq 'no')
     $pwHint = Get-EhCredentialStatus -Row $ext
     $script:EhFields['PasswordHint'].Text = "現在: $pwHint （新パスワード入力で更新／空欄で現状維持）"
@@ -442,7 +453,10 @@ function New-ExtHostlistEditorView {
         $col.Name = $d.N; $col.HeaderText = $d.H; $col.Width = $d.W; $col.ReadOnly = $true
         $grid.Columns.Add($col) | Out-Null
     }
-    $grid.Add_SelectionChanged({ Set-EhEditFieldsFromSelection })
+    $grid.Add_SelectionChanged({
+        try { Set-EhEditFieldsFromSelection }
+        catch { Write-Host "[SelectionChanged] $($_.Exception.Message)" -ForegroundColor DarkYellow }
+    })
     $panel.Controls.Add($grid)
     $script:EhGrid = $grid
 

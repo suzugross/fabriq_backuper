@@ -15,6 +15,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- backuper v0.66.1: **拡張HOSTLIST エディタで選択操作のたびに ThreadException (JIT) ダイアログが出る不具合を修正 (TM t-0011)** —
+  グリッドの選択変更ハンドラ内で `& $scriptblock`（PSObject 引数つきスクリプトブロック呼び出し）を使っていたため、
+  PS5.1 の動的バインダ不具合（`PSToObjectArrayBinder` / `Expression.Condition`「引数の型が一致しません」ArgumentException）が
+  **選択のたびに発火**していた。当該スクリプトブロックを通常関数 `Get-EhCellValue` に置換（**根本対処**）。
+  併せて `fabriq_exthostlist` に WinForms `ThreadException` ガード（例外を JIT ダイアログでなく transcript へログ化）と
+  選択ハンドラの try/catch を追加（安全網）。バックアップ側・seam・突合判定には影響なし。handoff_viewer 等は同パターン未使用で無影響。
+
 ### Changed
 - backuper v0.65.1: **拡張HOSTLIST の突合を「行単位採用」→「リスト全体の厳格ゲート（集合完全一致）」に変更 (TM t-0011)** —
   拡張リストの `(OldPCname,NewPCname)` 集合が Fabriq hostlist（絶対正）と**完全一致するときだけリスト全体を採用**し、
