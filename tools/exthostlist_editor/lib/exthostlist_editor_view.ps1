@@ -311,10 +311,10 @@ function Resolve-EhImportField {
 }
 
 function Invoke-EhBulkImport {
-    # Bulk-import a staging CSV into extended_hostlist.csv. The staging CSV may
-    # carry PLAINTEXT passwords in a 'Password' column (encrypted here via
-    # Protect-FabriqValue + round-trip verify) OR a pre-encrypted 'UncPassword'
-    # (ENC:) accepted verbatim. Every row is reconciled against the Fabriq
+    # Bulk-import a staging CSV into extended_hostlist.csv. PLAINTEXT passwords may
+    # be supplied in EITHER the 'Password' or the 'UncPassword' column (encrypted
+    # here via Protect-FabriqValue + round-trip verify); an ENC:-prefixed
+    # 'UncPassword' is taken verbatim. Every row is reconciled against the Fabriq
     # hostlist (absolute source of truth); rows whose (OldPCname,NewPCname) has
     # no exact Fabriq match are SKIPPED. Rows are UPSERTED (merged) by pair.
     # The plaintext staging file is the operator's to delete afterwards (warned).
@@ -325,7 +325,7 @@ function Invoke-EhBulkImport {
         return
     }
     $ofd = New-Object System.Windows.Forms.OpenFileDialog
-    $ofd.Title = "一括取込する CSV を選択 (Password 列=平文 / UncPassword 列=ENC: 既存暗号化)"
+    $ofd.Title = "一括取込する CSV を選択 (Password / UncPassword に平文可・自動暗号化。ENC: 値はそのまま)"
     $ofd.Filter = "CSV (*.csv)|*.csv|All files (*.*)|*.*"
     $dataDir = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($dataDir) -and (Test-Path -LiteralPath $dataDir)) { $ofd.InitialDirectory = $dataDir }
@@ -357,22 +357,29 @@ function Invoke-EhBulkImport {
         if (-not $fabriqKeys.ContainsKey((Get-EhPairKey -OldName $o -NewName $n))) { $skip++; continue }
         $existing = Get-EhExtendedRowForPair -OldName $o -NewName $n
 
-        # Password resolution: plaintext 'Password' -> encrypt; else 'UncPassword'
-        # must be ENC: (verbatim) or is rejected; else keep existing.
+        # Password resolution (v0.66.4, forgiving): a PLAINTEXT value in EITHER the
+        # 'Password' OR the 'UncPassword' column is encrypted here; an ENC:-prefixed
+        # 'UncPassword' is taken verbatim (already encrypted); blank keeps the
+        # existing stored value. (Previously plaintext in 'UncPassword' was rejected,
+        # which surprised operators who filled the live-schema column with plaintext.)
         $encPw = if ($null -ne $existing -and $existing.PSObject.Properties.Name -contains 'UncPassword') { "$($existing.UncPassword)" } else { '' }
-        $plain = if ($r.PSObject.Properties.Name -contains 'Password') { "$($r.Password)" } else { '' }
+        $plain = ''
+        if ($r.PSObject.Properties.Name -contains 'Password' -and -not [string]::IsNullOrEmpty("$($r.Password)")) {
+            $plain = "$($r.Password)"
+        }
+        elseif ($r.PSObject.Properties.Name -contains 'UncPassword') {
+            $rawPw = "$($r.UncPassword)"
+            if (-not [string]::IsNullOrWhiteSpace($rawPw)) {
+                if ($rawPw.StartsWith('ENC:')) { $encPw = $rawPw }   # already encrypted -> verbatim
+                else { $plain = $rawPw }                              # plaintext -> encrypt below
+            }
+        }
         if (-not [string]::IsNullOrEmpty($plain)) {
             try {
                 $cand = Protect-FabriqValue -PlainValue $plain -Passphrase $global:FabriqMasterPassphrase
                 if ((Unprotect-FabriqValue -EncryptedValue $cand -Passphrase $global:FabriqMasterPassphrase) -ne $plain) { $errN++; continue }
                 $encPw = $cand
             } catch { $errN++; continue }
-        }
-        elseif ($r.PSObject.Properties.Name -contains 'UncPassword') {
-            $rawPw = "$($r.UncPassword)"
-            if (-not [string]::IsNullOrWhiteSpace($rawPw)) {
-                if ($rawPw.StartsWith('ENC:')) { $encPw = $rawPw } else { $errN++; continue }
-            }
         }
 
         $enabled = Resolve-EhImportField -StagingRow $r -ExistingRow $existing -Col 'Enabled'

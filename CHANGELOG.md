@@ -16,6 +16,10 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.66.4: **拡張HOSTLIST 一括取込で `UncPassword` 列に平文を書いた CSV を受理 (TM t-0011)** —
+  従来の一括取込は平文を **`Password` 列のみ**暗号化対象とし、**`UncPassword` 列の平文は「`ENC:` でない」として行をエラー扱いで弾いていた**（→ 取込 0 件）。
+  ライブ用スキーマ（`UncPassword` 列）に平文を書く運用が自然なため、**`Password` / `UncPassword` どちらの列でも平文を受理して自動暗号化**するよう変更（`ENC:` 値はそのまま採用）。
+  ※ 取込対象は引き続き **Fabriq hostlist と `(OldPCname,NewPCname)` が一致する行のみ**（不一致行はスキップ、エラーではない）。CSV は UTF-8(BOM 可)。
 - backuper v0.66.3: **拡張HOSTLIST エディタの ThreadException を完全修正（真因＝`@(List[object])`）(TM t-0011)** —
   v0.66.2 でも起動／突合詳細／一括取込で同じ例外が継続。**真因は呼び出し側の `@($script:EhRows)`**：
   `$script:EhRows` は `List[object]` で、**`@(List[object])` が現行 .NET 4.8.1 の `PSToObjectArrayBinder` / `MaybeDebase` → `Expression.Condition` を踏む**。
