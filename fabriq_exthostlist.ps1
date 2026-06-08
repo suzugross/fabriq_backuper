@@ -124,6 +124,7 @@ try {
     . (Join-Path $script:BackuperLib 'lib\ui\theme.ps1')
     . (Join-Path $script:BackuperLib 'lib\ui\fabriq_select_form.ps1')
     . (Join-Path $script:BackuperLib 'lib\hostlist_reader.ps1')
+    . (Join-Path $script:BackuperLib 'lib\extended_hostlist.ps1')   # v0.66.0: reuse Test-ExtendedHostlistGate for the in-editor 突合 check
     . (Join-Path $script:EditorRoot 'lib\exthostlist_editor_view.ps1')
 }
 catch {

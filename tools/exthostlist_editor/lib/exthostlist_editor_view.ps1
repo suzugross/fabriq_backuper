@@ -23,6 +23,7 @@ $script:EhBx         = 560
 $script:EhLw         = 100
 $script:EhFw         = 280
 $script:EhFx         = 660
+$script:EhGateLabel  = $null
 
 function Get-EhExtendedRowForPair {
     # Find the raw extended row whose normalized pair equals the given fabriq pair.
@@ -105,6 +106,47 @@ function Update-EhGrid {
         }
         [void]$script:EhGrid.Rows.Add($old, $new, $status, $user, $label, $enabled)
     }
+    Update-EhGateStatus
+}
+
+function Update-EhGateStatus {
+    # Reflect the runtime STRICT gate (Test-ExtendedHostlistGate, the SAME function
+    # the seam uses) in the editor, so the operator sees whether the current file
+    # would be ADOPTED or IGNORED at runtime. Called from Update-EhGrid so every
+    # load / save / delete / import refreshes it.
+    if ($null -eq $script:EhGateLabel) { return }
+    $er = if ($null -ne $script:EhRows) { @($script:EhRows) } else { @() }
+    $gate = Test-ExtendedHostlistGate -FabriqHosts $script:EhFabriqRows -ExtendedRows $er
+    if ($gate.Match) {
+        $script:EhGateLabel.Text = ("突合: ○ 本家と完全一致 ({0} ホスト) → このリストは採用されます" -f $gate.ExtCount)
+        $script:EhGateLabel.ForeColor = $script:bgAdd
+    }
+    else {
+        $script:EhGateLabel.Text = ("突合: × 不一致 → 拡張リスト全体が無視されます（本家にあり拡張に無い {0} / 拡張にあり本家に無い {1}）。[突合詳細]で確認" -f `
+            $gate.FabOnly.Count, $gate.ExtOnly.Count)
+        $script:EhGateLabel.ForeColor = $script:bgDelete
+    }
+}
+
+function Show-EhGateDetail {
+    # Popup listing the specific host-set discrepancies (normalized old|new keys).
+    $er = if ($null -ne $script:EhRows) { @($script:EhRows) } else { @() }
+    $gate = Test-ExtendedHostlistGate -FabriqHosts $script:EhFabriqRows -ExtendedRows $er
+    if ($gate.Match) {
+        [System.Windows.Forms.MessageBox]::Show(
+            ("本家 Fabriq hostlist と完全一致しています（{0} ホスト）。このリストは採用されます。" -f $gate.ExtCount),
+            "突合詳細", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    $msg = "拡張リストは本家と一致していないため、現状では【リスト全体が無視】されます。`n（表示は 旧PC名|新PC名 / 小文字）`n`n"
+    if ($gate.FabOnly.Count -gt 0) {
+        $msg += ("■ 本家にあるが拡張に無い（要追加 {0} 件）:`n" -f $gate.FabOnly.Count) + (($gate.FabOnly | Sort-Object) -join "`n") + "`n`n"
+    }
+    if ($gate.ExtOnly.Count -gt 0) {
+        $msg += ("■ 拡張にあるが本家に無い（要削除/確認 {0} 件）:`n" -f $gate.ExtOnly.Count) + (($gate.ExtOnly | Sort-Object) -join "`n") + "`n"
+    }
+    [System.Windows.Forms.MessageBox]::Show($msg, "突合詳細",
+        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
 }
 
 function Set-EhEditFieldsFromSelection {
@@ -372,10 +414,19 @@ function New-ExtHostlistEditorView {
     $btnImport.Add_Click({ Invoke-EhBulkImport -Path $script:EhDataPath })
     $panel.Controls.Add($btnImport)
 
+    $btnGate = New-StyledButton -Text "突合詳細" -X 760 -Y 44 -Width 200 -Height 28
+    $btnGate.Add_Click({ Show-EhGateDetail })
+    $panel.Controls.Add($btnGate)
+
+    # ---- gate (consistency vs fabriq hostlist) status ----
+    $gateLbl = New-StyledLabel -Text "突合: ..." -X 20 -Y 82 -Width 520 -Height 18 -Font $script:fontBold
+    $panel.Controls.Add($gateLbl)
+    $script:EhGateLabel = $gateLbl
+
     # ---- grid (left) ----
     $grid = New-Object System.Windows.Forms.DataGridView
-    $grid.Location = New-Object System.Drawing.Point(20, 90)
-    $grid.Size = New-Object System.Drawing.Size(520, 520)
+    $grid.Location = New-Object System.Drawing.Point(20, 104)
+    $grid.Size = New-Object System.Drawing.Size(520, 506)
     Set-GridStyle -Grid $grid
     $grid.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::None
     $defs = @(

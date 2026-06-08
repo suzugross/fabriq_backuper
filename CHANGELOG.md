@@ -42,6 +42,11 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.66.0: **拡張HOSTLIST 管理ツールに「本家との突合状態」表示を追加 (TM t-0011)** —
+  エディタ上部に、**ランタイムと同一の厳格ゲート（`Test-ExtendedHostlistGate`）**で判定した突合状態を常時表示
+  （**○ 完全一致＝採用 / × 不一致＝全体無視**、本家のみ・拡張のみ件数つき・緑/赤で色分け）。読込／保存／削除／一括取込のたびに自動更新。
+  - **「突合詳細」ボタン**で不一致ホスト（本家にあり拡張に無い／拡張にあり本家に無い）を一覧表示。
+  - `fabriq_exthostlist` が `extended_hostlist.ps1` を dot-source して**同一判定関数を再利用**＝「エディタの表示＝実際の採用挙動」を保証。
 - backuper v0.65.0: **拡張HOSTLIST 管理ツールに「CSV 一括取込」を追加 (TM t-0011)** —
   `fabriq_exthostlist` の「CSV一括取込」ボタンで、ステージング CSV（`Password` 列＝**平文**／`UncPassword` 列＝`ENC:` 既存暗号化）を一括取込。
   各行を **Fabriq hostlist（絶対正）と突合**し不一致行はスキップ、平文は `Protect-FabriqValue` で暗号化（＋round-trip 検証）、
