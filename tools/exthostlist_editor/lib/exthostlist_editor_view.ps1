@@ -106,7 +106,8 @@ function Update-EhGrid {
         }
         [void]$script:EhGrid.Rows.Add($old, $new, $status, $user, $label, $enabled)
     }
-    Update-EhGateStatus
+    try { Update-EhGateStatus }
+    catch { Write-Host "[FAIL Update-EhGateStatus] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
 }
 
 function Update-EhGateStatus {
@@ -115,8 +116,12 @@ function Update-EhGateStatus {
     # would be ADOPTED or IGNORED at runtime. Called from Update-EhGrid so every
     # load / save / delete / import refreshes it.
     if ($null -eq $script:EhGateLabel) { return }
-    $er = if ($null -ne $script:EhRows) { @($script:EhRows) } else { @() }
-    $gate = Test-ExtendedHostlistGate -FabriqHosts $script:EhFabriqRows -ExtendedRows $er
+    # v0.66.3: pass $script:EhRows (a List[object]) DIRECTLY -- do NOT wrap with
+    # @(...). @(List[object]) triggers the PS5.1 PSToObjectArrayBinder / MaybeDebase
+    # -> Expression.Condition "argument types do not match" ArgumentException on
+    # current .NET 4.8.1 (this was the recurring ThreadException). The gate iterates
+    # with a plain foreach + null guard, so a List/array/null/scalar are all safe.
+    $gate = Test-ExtendedHostlistGate -FabriqHosts $script:EhFabriqRows -ExtendedRows $script:EhRows
     if ($gate.Match) {
         $script:EhGateLabel.Text = ("突合: ○ 本家と完全一致 ({0} ホスト) → このリストは採用されます" -f $gate.ExtCount)
         $script:EhGateLabel.ForeColor = $script:bgAdd
@@ -130,8 +135,8 @@ function Update-EhGateStatus {
 
 function Show-EhGateDetail {
     # Popup listing the specific host-set discrepancies (normalized old|new keys).
-    $er = if ($null -ne $script:EhRows) { @($script:EhRows) } else { @() }
-    $gate = Test-ExtendedHostlistGate -FabriqHosts $script:EhFabriqRows -ExtendedRows $er
+    # v0.66.3: pass the List directly (no @() -- see Update-EhGateStatus note).
+    $gate = Test-ExtendedHostlistGate -FabriqHosts $script:EhFabriqRows -ExtendedRows $script:EhRows
     if ($gate.Match) {
         [System.Windows.Forms.MessageBox]::Show(
             ("本家 Fabriq hostlist と完全一致しています（{0} ホスト）。このリストは採用されます。" -f $gate.ExtCount),
@@ -422,11 +427,17 @@ function New-ExtHostlistEditorView {
     $panel.Controls.Add($hint)
 
     $btnImport = New-StyledButton -Text "CSV一括取込" -X 760 -Y 10 -Width 200 -Height 30 -BgColor $script:bgAccent
-    $btnImport.Add_Click({ Invoke-EhBulkImport -Path $script:EhDataPath })
+    $btnImport.Add_Click({
+        try { Invoke-EhBulkImport -Path $script:EhDataPath }
+        catch { Write-Host "[FAIL Invoke-EhBulkImport] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
+    })
     $panel.Controls.Add($btnImport)
 
     $btnGate = New-StyledButton -Text "突合詳細" -X 760 -Y 44 -Width 200 -Height 28
-    $btnGate.Add_Click({ Show-EhGateDetail })
+    $btnGate.Add_Click({
+        try { Show-EhGateDetail }
+        catch { Write-Host "[FAIL Show-EhGateDetail] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
+    })
     $panel.Controls.Add($btnGate)
 
     # ---- gate (consistency vs fabriq hostlist) status ----
@@ -485,22 +496,35 @@ function New-ExtHostlistEditorView {
     $script:EhY += 40
 
     $btnSave = New-StyledButton -Text "保存" -X $script:EhFx -Y $script:EhY -Width 140 -Height 34 -BgColor $script:bgAccent
-    $btnSave.Add_Click({ Invoke-EhSave -Path $script:EhDataPath })
+    $btnSave.Add_Click({
+        try { Invoke-EhSave -Path $script:EhDataPath }
+        catch { Write-Host "[FAIL Invoke-EhSave] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
+    })
     $panel.Controls.Add($btnSave)
     $btnDel = New-StyledButton -Text "削除" -X ($script:EhFx + 150) -Y $script:EhY -Width 140 -Height 34
-    $btnDel.Add_Click({ Invoke-EhDelete -Path $script:EhDataPath })
+    $btnDel.Add_Click({
+        try { Invoke-EhDelete -Path $script:EhDataPath }
+        catch { Write-Host "[FAIL Invoke-EhDelete] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
+    })
     $panel.Controls.Add($btnDel)
 
     return $panel
 }
 
 function Show-ExtHostlistEditorView {
-    # Initial population (called after the form is shown).
-    Read-EhExtendedRows -Path $script:EhDataPath
-    Update-EhGrid
-    if ($null -ne $script:EhGrid -and $script:EhGrid.Rows.Count -gt 0) {
-        $script:EhGrid.ClearSelection()
-        $script:EhGrid.Rows[0].Selected = $true
-        Set-EhEditFieldsFromSelection
+    # Initial population (called after the form is shown). v0.66.3: each step is
+    # wrapped so a failure logs WHICH step (and survives) instead of bubbling to
+    # the WinForms ThreadException handler as an opaque binder stack.
+    try { Read-EhExtendedRows -Path $script:EhDataPath }
+    catch { Write-Host "[FAIL Read-EhExtendedRows] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
+    try { Update-EhGrid }
+    catch { Write-Host "[FAIL Update-EhGrid] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
+    try {
+        if ($null -ne $script:EhGrid -and $script:EhGrid.Rows.Count -gt 0) {
+            $script:EhGrid.ClearSelection()
+            $script:EhGrid.Rows[0].Selected = $true
+            Set-EhEditFieldsFromSelection
+        }
     }
+    catch { Write-Host "[FAIL select/fields] $($_.Exception.GetType().Name): $($_.Exception.Message)" -ForegroundColor Red }
 }

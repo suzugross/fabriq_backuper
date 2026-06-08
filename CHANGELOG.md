@@ -16,6 +16,12 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.66.3: **拡張HOSTLIST エディタの ThreadException を完全修正（真因＝`@(List[object])`）(TM t-0011)** —
+  v0.66.2 でも起動／突合詳細／一括取込で同じ例外が継続。**真因は呼び出し側の `@($script:EhRows)`**：
+  `$script:EhRows` は `List[object]` で、**`@(List[object])` が現行 .NET 4.8.1 の `PSToObjectArrayBinder` / `MaybeDebase` → `Expression.Condition` を踏む**。
+  （editor は List を `@()`、backup は `.ToArray()` で object[] にしていたため **backup だけ無事**だった＝この非対称が決め手。）
+  修正: gate へ `$script:EhRows` を **`@()` せず直接**渡す（gate は plain foreach で List/array/null/scalar を処理）。
+  併せて起動の各段・全ボタン操作を **tagged try/catch** で包み、万一どこかで失敗してもどの段かを transcript に出して JIT ダイアログ化させない安全網を追加。
 - backuper v0.66.2: **拡張HOSTLIST 突合関数 `Test-ExtendedHostlistGate` の ArgumentException を修正（v0.66.1 の根本対処）(TM t-0011)** —
   v0.66.1 で選択ハンドラの `& $scriptblock` は解消したが、**起動時・「突合詳細」・「CSV一括取込」**で同じ ThreadException が継続していた。
   真因は `Test-ExtendedHostlistGate` のパラメータに付けた **型注釈なしの `[AllowEmptyCollection()]`**（引数の collection 強制変換時に
