@@ -1,0 +1,3 @@
+﻿OldPCname,NewPCname,UncUsername,Password,VisualLabel,VisualColor,Note,Enabled
+OLD-PC-01,NEW-PC-01,miguser,PLAINTEXT_PASSWORD_HERE,本社 経理PC,#9366BD,主担当,1
+OLD-PC-02,NEW-PC-02,miguser,PLAINTEXT_PASSWORD_HERE,予備機,,要確認,1

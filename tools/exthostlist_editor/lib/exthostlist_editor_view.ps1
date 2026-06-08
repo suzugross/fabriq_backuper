@@ -236,6 +236,120 @@ function Invoke-EhDelete {
     Set-EhEditFieldsFromSelection
 }
 
+function Get-EhPairKey {
+    # Normalized reconciliation key from a name pair (trim + lowercase).
+    param([string]$OldName, [string]$NewName)
+    return (("$OldName".Trim()) + '|' + ("$NewName".Trim())).ToLowerInvariant()
+}
+
+function Resolve-EhImportField {
+    # Field value for an imported row: prefer the staging column (even if blank,
+    # when the column is present = explicit intent), else keep the existing row's
+    # value (so partial staging CSVs do not wipe data), else ''.
+    param($StagingRow, $ExistingRow, [string]$Col)
+    if ($StagingRow.PSObject.Properties.Name -contains $Col) { return "$($StagingRow.$Col)" }
+    if ($null -ne $ExistingRow -and $ExistingRow.PSObject.Properties.Name -contains $Col) { return "$($ExistingRow.$Col)" }
+    return ''
+}
+
+function Invoke-EhBulkImport {
+    # Bulk-import a staging CSV into extended_hostlist.csv. The staging CSV may
+    # carry PLAINTEXT passwords in a 'Password' column (encrypted here via
+    # Protect-FabriqValue + round-trip verify) OR a pre-encrypted 'UncPassword'
+    # (ENC:) accepted verbatim. Every row is reconciled against the Fabriq
+    # hostlist (absolute source of truth); rows whose (OldPCname,NewPCname) has
+    # no exact Fabriq match are SKIPPED. Rows are UPSERTED (merged) by pair.
+    # The plaintext staging file is the operator's to delete afterwards (warned).
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($global:FabriqMasterPassphrase)) {
+        [System.Windows.Forms.MessageBox]::Show("マスターパスフレーズが未設定のため取込できません。", "拡張HOSTLIST 編集",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+    $ofd = New-Object System.Windows.Forms.OpenFileDialog
+    $ofd.Title = "一括取込する CSV を選択 (Password 列=平文 / UncPassword 列=ENC: 既存暗号化)"
+    $ofd.Filter = "CSV (*.csv)|*.csv|All files (*.*)|*.*"
+    $dataDir = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($dataDir) -and (Test-Path -LiteralPath $dataDir)) { $ofd.InitialDirectory = $dataDir }
+    if ($ofd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+    $staging = $ofd.FileName
+
+    $rows = $null
+    try { $rows = @(Import-Csv -Path $staging -Encoding UTF8) }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("CSV 読込に失敗しました: $($_.Exception.Message)", "拡張HOSTLIST 編集",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+
+    # Fabriq pair key set (absolute source of truth).
+    $fabriqKeys = @{}
+    foreach ($h in @($script:EhFabriqRows)) {
+        $o = if ($h.PSObject.Properties.Name -contains 'OldPCname') { "$($h.OldPCname)".Trim() } else { '' }
+        if ([string]::IsNullOrEmpty($o)) { continue }
+        $n = if ($h.PSObject.Properties.Name -contains 'NewPCname') { "$($h.NewPCname)".Trim() } else { '' }
+        $fabriqKeys[(Get-EhPairKey -OldName $o -NewName $n)] = $true
+    }
+
+    $imp = 0; $skip = 0; $errN = 0
+    foreach ($r in $rows) {
+        $o = if ($r.PSObject.Properties.Name -contains 'OldPCname') { "$($r.OldPCname)".Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($o)) { $skip++; continue }
+        $n = if ($r.PSObject.Properties.Name -contains 'NewPCname') { "$($r.NewPCname)".Trim() } else { '' }
+        if (-not $fabriqKeys.ContainsKey((Get-EhPairKey -OldName $o -NewName $n))) { $skip++; continue }
+        $existing = Get-EhExtendedRowForPair -OldName $o -NewName $n
+
+        # Password resolution: plaintext 'Password' -> encrypt; else 'UncPassword'
+        # must be ENC: (verbatim) or is rejected; else keep existing.
+        $encPw = if ($null -ne $existing -and $existing.PSObject.Properties.Name -contains 'UncPassword') { "$($existing.UncPassword)" } else { '' }
+        $plain = if ($r.PSObject.Properties.Name -contains 'Password') { "$($r.Password)" } else { '' }
+        if (-not [string]::IsNullOrEmpty($plain)) {
+            try {
+                $cand = Protect-FabriqValue -PlainValue $plain -Passphrase $global:FabriqMasterPassphrase
+                if ((Unprotect-FabriqValue -EncryptedValue $cand -Passphrase $global:FabriqMasterPassphrase) -ne $plain) { $errN++; continue }
+                $encPw = $cand
+            } catch { $errN++; continue }
+        }
+        elseif ($r.PSObject.Properties.Name -contains 'UncPassword') {
+            $rawPw = "$($r.UncPassword)"
+            if (-not [string]::IsNullOrWhiteSpace($rawPw)) {
+                if ($rawPw.StartsWith('ENC:')) { $encPw = $rawPw } else { $errN++; continue }
+            }
+        }
+
+        $enabled = Resolve-EhImportField -StagingRow $r -ExistingRow $existing -Col 'Enabled'
+        if ([string]::IsNullOrWhiteSpace($enabled)) { $enabled = '1' }
+        $vals = [ordered]@{
+            Enabled     = $enabled
+            OldPCname   = $o
+            NewPCname   = $n
+            UncUsername = (Resolve-EhImportField -StagingRow $r -ExistingRow $existing -Col 'UncUsername')
+            UncPassword = $encPw
+            VisualLabel = (Resolve-EhImportField -StagingRow $r -ExistingRow $existing -Col 'VisualLabel')
+            VisualColor = (Resolve-EhImportField -StagingRow $r -ExistingRow $existing -Col 'VisualColor')
+            Note        = (Resolve-EhImportField -StagingRow $r -ExistingRow $existing -Col 'Note')
+        }
+        if ($null -ne $existing) {
+            foreach ($c in $script:EhColumns) { $existing.$c = $vals[$c] }
+        } else {
+            [void]$script:EhRows.Add([pscustomobject]$vals)
+        }
+        $imp++
+    }
+
+    try { Save-EhRowsToDisk -Path $Path }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("保存に失敗しました: $($_.Exception.Message)", "拡張HOSTLIST 編集",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+    Update-EhGrid
+    Set-EhEditFieldsFromSelection
+    [System.Windows.Forms.MessageBox]::Show(
+        ("取込 {0} 件 / スキップ(Fabriq不一致) {1} 件 / エラー {2} 件`n`n注意: 平文パスワードを含むステージング CSV は取込後に削除してください:`n{3}" -f $imp, $skip, $errN, $staging),
+        "拡張HOSTLIST 編集", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+}
+
 function New-ExtHostlistEditorView {
     # Build the editor panel. $script:EhDataPath must be set by the launcher.
     param([Parameter(Mandatory = $true)][string]$DataPath)
@@ -251,8 +365,12 @@ function New-ExtHostlistEditorView {
     $panel.Controls.Add($info)
 
     $hint = New-StyledLabel -Text "一覧は Fabriq hostlist（絶対正）から生成。行を選び右側で資格情報・視覚情報を編集して保存します。" `
-        -X 20 -Y 62 -Width 900 -Height 18 -FgColor $script:fgDim
+        -X 20 -Y 62 -Width 720 -Height 18 -FgColor $script:fgDim
     $panel.Controls.Add($hint)
+
+    $btnImport = New-StyledButton -Text "CSV一括取込" -X 760 -Y 10 -Width 200 -Height 30 -BgColor $script:bgAccent
+    $btnImport.Add_Click({ Invoke-EhBulkImport -Path $script:EhDataPath })
+    $panel.Controls.Add($btnImport)
 
     # ---- grid (left) ----
     $grid = New-Object System.Windows.Forms.DataGridView

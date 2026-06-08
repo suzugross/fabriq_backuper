@@ -13,6 +13,10 @@ backuper/data/app_migration_list.csv
 # committed.
 backuper/data/extended_hostlist.csv
 
+# Filled bulk-import staging CSV (may contain PLAINTEXT passwords). Only the
+# committed template extended_hostlist_import.sample.csv is tracked.
+backuper/data/extended_hostlist_import.csv
+
 # Build artifacts
 *.pdb
 

@@ -35,6 +35,12 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.65.0: **拡張HOSTLIST 管理ツールに「CSV 一括取込」を追加 (TM t-0011)** —
+  `fabriq_exthostlist` の「CSV一括取込」ボタンで、ステージング CSV（`Password` 列＝**平文**／`UncPassword` 列＝`ENC:` 既存暗号化）を一括取込。
+  各行を **Fabriq hostlist（絶対正）と突合**し不一致行はスキップ、平文は `Protect-FabriqValue` で暗号化（＋round-trip 検証）、
+  `(OldPCname,NewPCname)` で **upsert**。取込後は**平文ステージング CSV の削除を警告**。テンプレート `extended_hostlist_import.sample.csv` 同梱。
+  - 補足: 非秘密列（PC名/ユーザ名/視覚情報/Enabled）は従来どおり Excel 等で手編集・一括追記も可。暗号化済み `ENC:` 値の貼り付けも可（移植可能）。
+    「平文を一括で入れて自動暗号化」だけ暗号化処理（このツール）を通す必要がある。filled staging CSV は `.gitignore`。
 - backuper v0.64.0: **拡張HOSTLIST（per-satellite ホストリスト）で UNC 資格情報を自動投入 (TM t-0011 P0+P1)** —
   Fabriq hostlist とは別に BackUper が持つ拡張ホストリスト（`backuper/data/extended_hostlist.csv`）を新設。
   新旧PC名で **Fabriq hostlist（絶対正）と完全一致**したホストの UNC 資格情報を自動で読み込み、未接続の共有へ
