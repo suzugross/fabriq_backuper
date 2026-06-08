@@ -70,43 +70,57 @@ function Get-NormalizedHostKey {
     # Build the normalized reconciliation key from a row: trim both names and
     # lower-case (Windows computer names are case-insensitive). Empty NewPCname
     # is preserved as empty so empty==empty is the only empty match.
-    param([Parameter(Mandatory)]$Row)
+    # v0.66.2: plain (unattributed) param to avoid PS5.1 binder edge cases.
+    param($Row)
+    if ($null -eq $Row) { return '|' }
     $old = if ($Row.PSObject.Properties.Name -contains 'OldPCname') { "$($Row.OldPCname)".Trim() } else { '' }
     $new = if ($Row.PSObject.Properties.Name -contains 'NewPCname') { "$($Row.NewPCname)".Trim() } else { '' }
     return ($old + '|' + $new).ToLowerInvariant()
 }
 
 function Test-ExtendedHostlistGate {
-    # STRICT whole-list gate (t-0011): returns a result whose .Match is $true ONLY
-    # when the extended (OldPCname,NewPCname) host set EXACTLY equals the Fabriq
-    # host set (both directions). Fabriq = absolute source of truth, so ANY
-    # discrepancy -- an extended host not in Fabriq (orphan/stale/forged) OR a
-    # Fabriq host not covered by the extended list -- fails the gate and the WHOLE
-    # extended list must be ignored. Credentials and Enabled do NOT affect the gate
-    # (host-name-only / empty-credential / disabled rows still count toward the set
-    # by their OldPCname|NewPCname pair). Pure (side-effect-free) so it is testable.
-    param(
-        [Parameter(Mandatory)][AllowEmptyCollection()]$FabriqHosts,
-        [Parameter(Mandatory)][AllowEmptyCollection()]$ExtendedRows
-    )
+    # STRICT whole-list gate (t-0011): .Match is $true ONLY when the extended
+    # (OldPCname,NewPCname) host set EXACTLY equals the Fabriq host set (both
+    # directions). Fabriq = absolute source of truth, so ANY discrepancy -- an
+    # extended host not in Fabriq (orphan/stale/forged) OR a Fabriq host not
+    # covered by the extended list -- fails the gate and the WHOLE extended list
+    # is ignored. Credentials and Enabled do NOT affect the gate (host-name-only /
+    # empty-credential / disabled rows still count toward the set by their pair).
+    #
+    # v0.66.2 (bugfix): plain params + explicit foreach over hashtable .Keys
+    # (NO [AllowEmptyCollection()] attribute and NO "$hash.Keys | Where-Object"
+    # pipeline). Both of those triggered a PS5.1 dynamic-binder defect
+    # (PSToObjectArrayBinder / PSEnumerableBinder.MaybeDebase -> Expression.Condition
+    # "argument types do not match" ArgumentException) when this was invoked from
+    # the WinForms editor (startup / 突合詳細 / 一括取込) and -- silently swallowed --
+    # from the backup-side Connect seam.
+    param($FabriqHosts, $ExtendedRows)
     $fset = @{}
-    foreach ($h in @($FabriqHosts)) {
-        $o = if ($h.PSObject.Properties.Name -contains 'OldPCname') { "$($h.OldPCname)".Trim() } else { '' }
-        if ([string]::IsNullOrEmpty($o)) { continue }
-        $fset[(Get-NormalizedHostKey -Row $h)] = $true
+    if ($null -ne $FabriqHosts) {
+        foreach ($h in $FabriqHosts) {
+            if ($null -eq $h) { continue }
+            $o = if ($h.PSObject.Properties.Name -contains 'OldPCname') { "$($h.OldPCname)".Trim() } else { '' }
+            if ([string]::IsNullOrEmpty($o)) { continue }
+            $fset[(Get-NormalizedHostKey -Row $h)] = $true
+        }
     }
     $eset = @{}
-    foreach ($r in @($ExtendedRows)) {
-        $o = if ($r.PSObject.Properties.Name -contains 'OldPCname') { "$($r.OldPCname)".Trim() } else { '' }
-        if ([string]::IsNullOrEmpty($o)) { continue }
-        $eset[(Get-NormalizedHostKey -Row $r)] = $true
+    if ($null -ne $ExtendedRows) {
+        foreach ($r in $ExtendedRows) {
+            if ($null -eq $r) { continue }
+            $o = if ($r.PSObject.Properties.Name -contains 'OldPCname') { "$($r.OldPCname)".Trim() } else { '' }
+            if ([string]::IsNullOrEmpty($o)) { continue }
+            $eset[(Get-NormalizedHostKey -Row $r)] = $true
+        }
     }
-    $extOnly = @($eset.Keys | Where-Object { -not $fset.ContainsKey($_) })
-    $fabOnly = @($fset.Keys | Where-Object { -not $eset.ContainsKey($_) })
+    $extOnly = New-Object System.Collections.Generic.List[string]
+    foreach ($k in $eset.Keys) { if (-not $fset.ContainsKey($k)) { [void]$extOnly.Add([string]$k) } }
+    $fabOnly = New-Object System.Collections.Generic.List[string]
+    foreach ($k in $fset.Keys) { if (-not $eset.ContainsKey($k)) { [void]$fabOnly.Add([string]$k) } }
     return [pscustomobject]@{
         Match    = ($extOnly.Count -eq 0 -and $fabOnly.Count -eq 0)
-        ExtOnly  = $extOnly
-        FabOnly  = $fabOnly
+        ExtOnly  = $extOnly.ToArray()
+        FabOnly  = $fabOnly.ToArray()
         FabCount = $fset.Count
         ExtCount = $eset.Count
     }

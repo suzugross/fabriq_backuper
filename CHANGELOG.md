@@ -16,6 +16,12 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.66.2: **拡張HOSTLIST 突合関数 `Test-ExtendedHostlistGate` の ArgumentException を修正（v0.66.1 の根本対処）(TM t-0011)** —
+  v0.66.1 で選択ハンドラの `& $scriptblock` は解消したが、**起動時・「突合詳細」・「CSV一括取込」**で同じ ThreadException が継続していた。
+  真因は `Test-ExtendedHostlistGate` のパラメータに付けた **型注釈なしの `[AllowEmptyCollection()]`**（引数の collection 強制変換時に
+  PS5.1 動的バインダ不具合を誘発）と **`$hash.Keys | Where-Object` パイプ**。両方を排除（プレーン引数＋明示 foreach＋`List`）。
+  これにより editor の起動／突合詳細／一括取込が正常動作し、**backup 側の自動接続**（同関数の例外が `Connect` の try/catch で握りつぶされ、
+  常に手動フォールバックしていた）も復旧。型注釈付き `[AllowEmptyCollection()][string[]]` 等（outlook_pop）は正用法で無影響。
 - backuper v0.66.1: **拡張HOSTLIST エディタで選択操作のたびに ThreadException (JIT) ダイアログが出る不具合を修正 (TM t-0011)** —
   グリッドの選択変更ハンドラ内で `& $scriptblock`（PSObject 引数つきスクリプトブロック呼び出し）を使っていたため、
   PS5.1 の動的バインダ不具合（`PSToObjectArrayBinder` / `Expression.Condition`「引数の型が一致しません」ArgumentException）が
