@@ -66,6 +66,9 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper: **`Fabriq_ExtHostlist.exe`（拡張HOSTLIST 編集ツールの独立ランチャ）をビルド (TM t-0011)** —
+  他ツールと同一トゥールチェーン（`dev/launcher/Launcher_ExtHostlist.cs` ＋ `app_exthostlist.manifest` を csc でコンパイル、`fabriq.ico`／asInvoker）。
+  `fabriq_exthostlist.ps1` を conhost＋powershell（ExecutionPolicy Bypass）で起動。再ビルドは `dev/launcher/build_exthostlist.ps1`。暫定 `.bat` は併存。
 - backuper v0.68.0: **拡張HOSTLIST の視覚情報（ラベル/色/メモ）を各画面に表示 (TM t-0011 P2)** —
   拡張HOSTLIST の `VisualLabel`／`VisualColor`／`Note`（いずれも平文）を、オペレータがホストを識別する画面に表示。
   - `extended_hostlist.ps1` `Get-ExtendedVisualInfo`（平文・cold 安全・突合ゲートとは独立した per-host 照合）／`theme.ps1` `Get-VisualCellColor`（`#RRGGBB`→自動コントラスト配色）を追加。

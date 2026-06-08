@@ -3,7 +3,7 @@
 <!-- このファイルは TM アプリが .tm/tasks.json から自動生成します。
      直接編集しないでください（次回保存で上書きされます）。
      タスクの追加・更新は tasks.json か TM アプリから行ってください。 -->
-最終更新: 2026-06-08 09:53
+最終更新: 2026-06-08 17:42
 
 ## 未着手 (4)
 
@@ -37,13 +37,14 @@
 
 <sub>更新: 2026-06-08 09:51 ／ 作成: 2026-06-08 09:48</sub>
 
-### [t-0014] 資格情報読み込み待ちについて
+### [t-0015] バックアップ完了後、IP復元へ自動遷移
 
 **内容:**
 
-現状、資格情報を裏で読み込んでいそうな画面において、アプリが応答なしとなってさもハングしているかのような動きを見せたり、なにもなく待ち状態になっており、オペレータが不安がるので、読み込み中、のような画面を作ってほしい。あくまで読み込んでいるのがわかる雰囲気だけで大丈夫です。
+リストア時と同じようにバックアップ完了ボタンを押下したら、自動的にIP復元を行うフローを追加する。
+流れはリストアと同じでよい。
 
-<sub>更新: 2026-06-08 09:53 ／ 作成: 2026-06-08 09:51</sub>
+<sub>更新: 2026-06-08 16:48 ／ 作成: 2026-06-08 16:47</sub>
 
 ## 対応中 (1)
 
@@ -57,11 +58,11 @@ Fabriq側のホストリストのPCエントリが絶対的な正とするため
 
 **Claudeメモ:**
 
-P0+P1 実装+敵対的レビュー完了(v0.64.0・実バグ0)。実装範囲=P0+P1/サイレント自動接続/独立EXE管理ツール/単一ファイル(ユーザ選択)。追加: common.ps1 Protect-FabriqValue(Unprotect の厳密な逆・byte-identical 検証済) / backuper/lib/extended_hostlist.ps1(reader 生読み+平文guard / 純突合 Resolve-ExtendedHostlistMatch=(OldPCname,NewPCname)完全一致 trim+大小無視 空は空のみ / Get-PresetUncUsername / seam Connect-UncFromExtendedHostlist=識別は $script:CurrentHost・オンデマンド復号・成功時のみ true・失敗で従来ダイアログ) / main.ps1 dot-source / backup_view+restore_view 4 call sites で拡張username優先 / extended_hostlist.sample.csv+.gitignore(live除外) / 独立ツール fabriq_exthostlist.ps1+.bat+tools/exthostlist_editor/lib/exthostlist_editor_view.ps1(Fabriq pair から seed=書込時突合強制・Protect+round-trip 検証後保存・平文非書込)。多エージェントレビュー26報告→実バグ0(crypto 8項目 byte-identical/突合 値ベース大小無視で正/seam graceful degradation)。残: P2(視覚情報 session_form/handoff_viewer 表示・後回し)・Fabriq_ExtHostlist.exe ビルド(暫定.bat)・実機スモーク(登録ツールで ENC: 登録→backup/restore でサイレント自動接続→不一致/未登録は従来ダイアログ)。 【v0.64.1】スキーマ簡素化: UncHost/UncShare 列を削除(未参照だったため)。接続先共有は seam がフローの $Path から導出・資格情報特定は新旧PC名なので、ユーザ名+パスワードのみで足りる(ユーザ指摘)。新スキーマ=Enabled,OldPCname,NewPCname,UncUsername,UncPassword,VisualLabel,VisualColor,Note。
+P0+P1 実装+敵対的レビュー完了(v0.64.0・実バグ0)。実装範囲=P0+P1/サイレント自動接続/独立EXE管理ツール/単一ファイル(ユーザ選択)。追加: common.ps1 Protect-FabriqValue(Unprotect の厳密な逆・byte-identical 検証済) / backuper/lib/extended_hostlist.ps1(reader 生読み+平文guard / 純突合 Resolve-ExtendedHostlistMatch=(OldPCname,NewPCname)完全一致 trim+大小無視 空は空のみ / Get-PresetUncUsername / seam Connect-UncFromExtendedHostlist=識別は $script:CurrentHost・オンデマンド復号・成功時のみ true・失敗で従来ダイアログ) / main.ps1 dot-source / backup_view+restore_view 4 call sites で拡張username優先 / extended_hostlist.sample.csv+.gitignore(live除外) / 独立ツール fabriq_exthostlist.ps1+.bat+tools/exthostlist_editor/lib/exthostlist_editor_view.ps1(Fabriq pair から seed=書込時突合強制・Protect+round-trip 検証後保存・平文非書込)。多エージェントレビュー26報告→実バグ0(crypto 8項目 byte-identical/突合 値ベース大小無視で正/seam graceful degradation)。残: P2(視覚情報 session_form/handoff_viewer 表示・後回し)・Fabriq_ExtHostlist.exe ビルド(暫定.bat)・実機スモーク(登録ツールで ENC: 登録→backup/restore でサイレント自動接続→不一致/未登録は従来ダイアログ)。 【v0.64.1】スキーマ簡素化: UncHost/UncShare 列を削除(未参照だったため)。接続先共有は seam がフローの $Path から導出・資格情報特定は新旧PC名なので、ユーザ名+パスワードのみで足りる(ユーザ指摘)。新スキーマ=Enabled,OldPCname,NewPCname,UncUsername,UncPassword,VisualLabel,VisualColor,Note。 【v0.65.1】突合を行単位採用→リスト全体の厳格ゲート(集合完全一致)に変更(ユーザ指定)。拡張の(Old,New)集合==Fabriq集合のときだけ全体採用、過不足1つでも全体無視(全ホスト手動)。creds/Enabled はゲート非関与(ホスト名のみ/空資格/無効 行も集合に算入)。採用後 各ホストで username+ENC:pw 揃えば自動接続/無ければ手動。空資格placeholderは集合充足かつ自動接続せず手動(ユーザ質問への回答)。Resolve-ExtendedHostlistMatch->Test-ExtendedHostlistGate, reader->Get-ExtendedHostlistRows(全行raw)。ファイル無/空は従来通り手動(警告なし)。 【v0.66.0】エディタに本家突合状態の常時表示を追加: ランタイム同一の Test-ExtendedHostlistGate で判定し ○完全一致=採用/×不一致=全体無視(本家のみ/拡張のみ件数・緑赤色分け)を上部ラベル表示、読込/保存/削除/一括取込で自動更新。突合詳細ボタンで不一致ホスト(本家のみ/拡張のみ)を一覧。fabriq_exthostlist が extended_hostlist.ps1 を dot-source して同一関数再利用=表示=実挙動を保証。 【v0.66.1 バグ修正】エディタで選択のたびに ThreadException(JIT) ダイアログが出る不具合を修正。原因=選択変更ハンドラ Set-EhEditFieldsFromSelection 内の '& $get $ext X'(PSObject 引数つき scriptblock を & 呼び出し)が PS5.1 動的バインダ不具合(PSToObjectArrayBinder/Expression.Condition 型不一致)を選択毎に誘発。修正=通常関数 Get-EhCellValue に置換(根本)。安全網=fabriq_exthostlist に WinForms ThreadException ガード(JITダイアログ→transcriptログ)+選択ハンドラ try/catch。backup/seam/突合判定 影響なし。handoff_viewer は同パターン未使用で無影響。 【v0.66.2 続報・根本】v0.66.1 後も起動/突合詳細/一括取込で ThreadException 継続。真因=Test-ExtendedHostlistGate の 型注釈なし [AllowEmptyCollection()](引数 collection 強制変換時に PS5.1 バインダ不具合 PSToObjectArrayBinder/Expression.Condition を誘発)+ $hash.Keys|Where-Object パイプ。両方排除(プレーン引数+明示foreach+List)で修正。editor 起動/突合詳細/一括取込 復旧、backup 自動接続も復旧(同関数の例外が Connect try/catch で握りつぶされ常に手動化していた)。型注釈付き [AllowEmptyCollection()][string[]] 等(outlook_pop)は正用法で無影響。教訓=PS5.1 では (1)型注釈なし [AllowEmptyCollection()] (2)& $scriptblock に PSObject 引数 (3)$hash.Keys|Where-Object がいずれも当該バインダ例外を誘発しうる。 【v0.66.3 真因確定・完全修正】v0.66.2 後も継続。真因=呼び出し側の @($script:EhRows)。EhRows は List[object] で @(List[object]) が .NET4.8.1 の PSToObjectArrayBinder/MaybeDebase->Expression.Condition を誘発。editor=List を @()/backup=Get-ExtendedHostlistRows の .ToArray() で object[] という非対称が決め手(backup だけ無事だった理由)。修正=gate へ EhRows を @() せず直接渡し(gate は plain foreach で List/array/null 処理)。安全網=起動各段+全ボタン+SelectionChanged を tagged try/catch で包み JIT ダイアログ化阻止+どの段か transcript 出力。教訓に @(List[object]) を追加(reference_ps51_binder_argexception)。 【v0.66.4】一括取込: UncPassword 列の平文も受理(自動暗号化)に変更。従来は Password 列のみ平文対象で UncPassword の平文行を弾いていた(取込0)。ユーザCSVが live スキーマ(UncPassword)+平文だったのが原因。CSV は UTF-8 BOM でエンコ問題なし。注意: 取込は (OldPCname,NewPCname) が本家 hostlist と一致する行のみ(不一致はスキップ)。 【v0.68.0 P2 完了】視覚情報(VisualLabel/VisualColor/Note・平文)を各画面に表示。extended_hostlist.ps1 Get-ExtendedVisualInfo(平文・cold安全・突合ゲート独立の per-host 照合・-Rows 任意で未指定時 Get-ExtendedHostlistRows フォールバック)/theme.ps1 Get-VisualCellColor(#RRGGBB→FromHtml+luminance 自動コントラスト・無効/空は null)。session_form ホストグリッドに メモ列(VisualLabel)+Note tooltip+セル色タイント(cold で Fabriq 名 ENC: なら未照合=空 graceful・$script:SessionExtRows で1回読込)。handoff_viewer コンボ項目にラベル付記(+extended_hostlist.ps1 dot-source 追加)。main_form Update-HostHeader にラベル付記。binder 安全(plain param/object[]/foreach/named-call・@(List)や& $sb 不使用)。多エージェントレビュー12報告→実バグ0。残: Fabriq_ExtHostlist.exe ビルド(暫定.bat)・実機スモーク(視覚情報を登録→session/handoff/main で表示確認)。
 
-<sub>更新: 2026-06-08 09:34 ／ 作成: 2026-06-07 18:31</sub>
+<sub>更新: 2026-06-08 16:45 ／ 作成: 2026-06-07 18:31</sub>
 
-## 完了 (8)
+## 完了 (9)
 
 ### [t-0001] バックアップデータのクリーンアップについて
 
@@ -175,6 +176,18 @@ LANPREPと同じく、別exeとして分離させたい。
 完了(v0.63.0)。UNC 接続ボタンを backup/restore 両画面から撤去し、資格情報入力を手順フローに一本化。Resolve-UncAccess を Get-Credential→Show-UncConnectDialog(プリフィル)に格上げ+ -PresetUsername(profile uncUsername) 追加。backup=開始時に保存先認証。restore=①参照前の preset 事前認証(ツリー探索用)②選択後 manifest 読取前③Invoke-RestoreStart で timestamp/Browse 双方を engine 前に認証 の3点でボタン代替、New-PSDrive global+Test-UncPath 短絡で二重プロンプトなし。Connect-UncWithCredentials は legacy 残置。拡張HOSTLIST 差し込み口(Connect-UncFromExtendedHostlist フック)を inert で設置(将来 PC 別資格情報の事前流し込み構想)。多エージェント敵対的レビュー(22報告→実バグ0: cross-file 依存 main.ps1 128/129 で充足/idempotency/PS5.1 null-safe/btnUncConnect 完全除去)。残:実機スモーク(profile有り UNC backup/restore で password のみ入力→成功, 既知トレードオフ=profile無し手動UNC restore は事前認証導線弱)。
 
 <sub>更新: 2026-06-07 18:54 ／ 作成: 2026-06-07 18:16</sub>
+
+### [t-0014] 資格情報読み込み待ちについて
+
+**内容:**
+
+現状、資格情報を裏で読み込んでいそうな画面において、アプリが応答なしとなってさもハングしているかのような動きを見せたり、なにもなく待ち状態になっており、オペレータが不安がるので、読み込み中、のような画面を作ってほしい。あくまで読み込んでいるのがわかる雰囲気だけで大丈夫です。
+
+**Claudeメモ:**
+
+P0+P1 実装+敵対的レビュー完了(v0.67.0・実バグ0)。Show-BusyOverlay/Close-BusyOverlay(theme.ps1・ボーダーレス ラベンダー 最前面・直前1描画 Show()+Refresh()+DoEvents・$null安全/例外不投・Close は null-safe)。P0(最大凍結=パスフレーズ後の hostlist ENC: 復号 多秒)=main_form hostlist復号 try/finally overlay / session_form 照合 WaitCursor($ppOk) / handoff_viewer 228 / fabriq_exthostlist 201 の4経路(ツールは console thread pre-Run で Show()+Refresh() 描画→Close)。P1=common.ps1 schtasks IPC poll(最大30s)+Stop-OutlookForSource 終了待ち の2ループに guarded DoEvents(if 'System.Windows.Forms.Application' -as [type])=WinForms 未ロード時 no-op・既存 progress_view も DoEvents 済で再入は新規リスクなし / Resolve-UncAccess の無人 probe+seam を overlay 包囲しダイアログ前に close(backup/restore 共通) / unc_connect_dialog 接続処理に WaitCursor+finally。文言一律「読み込み中…」。シングルスレッドのため一発処理中は静止(雰囲気のみ=要件OK)、ループ系は実応答維持。多エージェントレビュー39報告→実バグ0(ライフサイクル/スコープ/load順/guard/再入 すべて正)。残:実機(肥大ENC: hostlistで復号を長くし overlay 描画確認/未ログオン target で schtasks 30s 応答維持/UNC offline で接続中表示/各ツール起動)。
+
+<sub>更新: 2026-06-08 17:42 ／ 作成: 2026-06-08 09:51</sub>
 
 ## 保留 (1)
 
