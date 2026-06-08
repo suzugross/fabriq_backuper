@@ -16,6 +16,13 @@
 ## [Unreleased]
 
 ### Changed
+- backuper v0.65.1: **拡張HOSTLIST の突合を「行単位採用」→「リスト全体の厳格ゲート（集合完全一致）」に変更 (TM t-0011)** —
+  拡張リストの `(OldPCname,NewPCname)` 集合が Fabriq hostlist（絶対正）と**完全一致するときだけリスト全体を採用**し、
+  過不足が1つでもあれば**拡張リスト全体を無視**（全ホスト手動 UNC ダイアログ）。資格情報・`Enabled` はゲート判定に非関与
+  （ホスト名のみ／空資格／無効 行も `(Old,New)` ペアとして集合に数える）。採用後は各ホストで `username＋ENC:password` が
+  揃えば自動接続、無ければ手動。**空資格のプレースホルダ行**は「集合は満たすが自動接続しない（＝手動）」として機能。
+  実装: `Resolve-ExtendedHostlistMatch`→`Test-ExtendedHostlistGate` に置換、reader を `Get-ExtendedHostlistRows`（全行 raw）に整理。
+  ファイル無/空は従来どおり「拡張リスト無し＝手動」（ゲート警告は出さない）。
 - backuper v0.64.1: **拡張HOSTLIST のスキーマを「ユーザ名＋パスワードのみ」に簡素化 (TM t-0011)** —
   `UncHost` / `UncShare` 列を削除。接続先の共有ルートは seam が**フローの渡すパス（`backupRootUnc`／選択中バックアップ場所）から導出**しており、
   資格情報の特定は新旧PC名（`$script:CurrentHost`）で行うため、ホスト/共有の指定は不要だった（両列は未参照だった）。

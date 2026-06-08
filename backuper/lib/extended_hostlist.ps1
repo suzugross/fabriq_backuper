@@ -35,14 +35,11 @@ function Get-ExtendedHostlistPath {
     return (Join-Path $BackuperRoot 'data\extended_hostlist.csv')
 }
 
-function Get-ExtendedHostlist {
-    # Raw read (NO decryption): returns the ENABLED rows with UncPassword left as
-    # raw ENC: ciphertext so Connect-* can decrypt on demand. Visual + username
-    # fields are plaintext. Returns @() when the file is absent or unreadable.
-    #
-    # Load guard (mirrors the migration_profile no-plaintext-password rule):
-    # a row whose UncPassword is set but NOT ENC:-prefixed is WARNED + ignored,
-    # so a plaintext password can never silently sit in the file.
+function Get-ExtendedHostlistRows {
+    # Raw read of ALL extended rows (NO Enabled / credential / decrypt filtering).
+    # Used both for the strict host-set gate AND per-host lookup; UncPassword stays
+    # as raw ENC: so Connect-* decrypts on demand. Returns @() when the file is
+    # absent/unreadable. Rows with an empty OldPCname are dropped (with a skip log).
     param([string]$Path = $null)
     if ([string]::IsNullOrWhiteSpace($Path)) { $Path = Get-ExtendedHostlistPath }
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
@@ -59,19 +56,9 @@ function Get-ExtendedHostlist {
     }
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($r in $rows) {
-        # Enabled filter (default include when the column is absent/blank).
-        if ($r.PSObject.Properties.Name -contains 'Enabled') {
-            $ev = "$($r.Enabled)".Trim()
-            if ($ev -eq '0' -or $ev -ieq 'false' -or $ev -ieq 'no') { continue }
-        }
         $old = if ($r.PSObject.Properties.Name -contains 'OldPCname') { "$($r.OldPCname)".Trim() } else { '' }
         if ([string]::IsNullOrWhiteSpace($old)) {
             Show-Skip "Extended hostlist: a row with empty OldPCname was skipped."
-            continue
-        }
-        $pw = if ($r.PSObject.Properties.Name -contains 'UncPassword') { "$($r.UncPassword)" } else { '' }
-        if (-not [string]::IsNullOrWhiteSpace($pw) -and -not $pw.StartsWith('ENC:')) {
-            Show-Warning "Extended hostlist: UncPassword for '$old' is not ENC:-encrypted; row ignored (plaintext passwords are not allowed)."
             continue
         }
         [void]$out.Add($r)
@@ -89,64 +76,78 @@ function Get-NormalizedHostKey {
     return ($old + '|' + $new).ToLowerInvariant()
 }
 
-function Resolve-ExtendedHostlistMatch {
-    # PURE reconciler: returns ONLY the extended rows ADOPTED against the Fabriq
-    # hostlist (absolute source of truth). Adoption = exactly one Fabriq row with
-    # an identical normalized (OldPCname, NewPCname) key. Side-effect-free except
-    # for warnings on ambiguous/duplicate keys.
+function Test-ExtendedHostlistGate {
+    # STRICT whole-list gate (t-0011): returns a result whose .Match is $true ONLY
+    # when the extended (OldPCname,NewPCname) host set EXACTLY equals the Fabriq
+    # host set (both directions). Fabriq = absolute source of truth, so ANY
+    # discrepancy -- an extended host not in Fabriq (orphan/stale/forged) OR a
+    # Fabriq host not covered by the extended list -- fails the gate and the WHOLE
+    # extended list must be ignored. Credentials and Enabled do NOT affect the gate
+    # (host-name-only / empty-credential / disabled rows still count toward the set
+    # by their OldPCname|NewPCname pair). Pure (side-effect-free) so it is testable.
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()]$FabriqHosts,
         [Parameter(Mandatory)][AllowEmptyCollection()]$ExtendedRows
     )
-    $fabriqKeys = @{}
+    $fset = @{}
     foreach ($h in @($FabriqHosts)) {
         $o = if ($h.PSObject.Properties.Name -contains 'OldPCname') { "$($h.OldPCname)".Trim() } else { '' }
         if ([string]::IsNullOrEmpty($o)) { continue }
-        $key = Get-NormalizedHostKey -Row $h
-        if ($fabriqKeys.ContainsKey($key)) { $fabriqKeys[$key]++ } else { $fabriqKeys[$key] = 1 }
+        $fset[(Get-NormalizedHostKey -Row $h)] = $true
     }
-    $adopted = New-Object System.Collections.Generic.List[object]
-    $seen = @{}
+    $eset = @{}
     foreach ($r in @($ExtendedRows)) {
         $o = if ($r.PSObject.Properties.Name -contains 'OldPCname') { "$($r.OldPCname)".Trim() } else { '' }
         if ([string]::IsNullOrEmpty($o)) { continue }
-        $key = Get-NormalizedHostKey -Row $r
-        if (-not $fabriqKeys.ContainsKey($key)) { continue }          # no fabriq match -> ignore
-        if ($fabriqKeys[$key] -gt 1) {
-            Show-Warning "Extended hostlist: fabriq has a duplicate ($o) pair; row not adopted (ambiguous)."
-            continue
-        }
-        if ($seen.ContainsKey($key)) {
-            Show-Warning "Extended hostlist: duplicate extended row for ($o); first wins."
-            continue
-        }
-        $seen[$key] = $true
-        [void]$adopted.Add($r)
+        $eset[(Get-NormalizedHostKey -Row $r)] = $true
     }
-    return @($adopted.ToArray())
+    $extOnly = @($eset.Keys | Where-Object { -not $fset.ContainsKey($_) })
+    $fabOnly = @($fset.Keys | Where-Object { -not $eset.ContainsKey($_) })
+    return [pscustomobject]@{
+        Match    = ($extOnly.Count -eq 0 -and $fabOnly.Count -eq 0)
+        ExtOnly  = $extOnly
+        FabOnly  = $fabOnly
+        FabCount = $fset.Count
+        ExtCount = $eset.Count
+    }
 }
 
 function Get-ExtendedHostEntry {
-    # Return the ADOPTED extended row whose (OldPCname, NewPCname) exactly matches
-    # the given Fabriq host, or $null. Reconciles the extended file against the
-    # loaded Fabriq hostlist ($script:Hostlist = absolute truth). Emits a one-time
-    # session summary so reconciliation results (incl. ignored typo rows) are
-    # visible without per-row noise.
+    # Return the extended row to USE for the given Fabriq host, or $null.
+    #
+    # STRICT GATE: the extended list is adopted ONLY when its (OldPCname,NewPCname)
+    # host set EXACTLY equals the Fabriq host set ($script:Hostlist = absolute
+    # truth). ANY discrepancy -> the WHOLE extended list is ignored (every host
+    # uses the manual dialog). A one-time session summary reports the outcome.
+    # When adopted, returns the matching ENABLED row for this host (disabled or
+    # absent -> $null = manual). Credentials are validated later in Connect-*.
     param([Parameter(Mandatory)]$FabriqHost)
     if ($null -eq $FabriqHost) { return $null }
     $fabriq = if ($null -ne $script:Hostlist) { @($script:Hostlist) } else { @() }
     if ($fabriq.Count -eq 0) { return $null }
-    $ext = Get-ExtendedHostlist
-    if ($ext.Count -eq 0) { return $null }
-    $adopted = @(Resolve-ExtendedHostlistMatch -FabriqHosts $fabriq -ExtendedRows $ext)
+    $rows = Get-ExtendedHostlistRows
+    if ($rows.Count -eq 0) { return $null }
+    $gate = Test-ExtendedHostlistGate -FabriqHosts $fabriq -ExtendedRows $rows
     if (-not $script:ExtHostlistSummaryShown) {
-        Show-Info ("Extended hostlist: {0} row(s), {1} adopted, {2} ignored (no fabriq match)." -f `
-            $ext.Count, $adopted.Count, ($ext.Count - $adopted.Count))
+        if ($gate.Match) {
+            Show-Info ("Extended hostlist: host set matches fabriq exactly ({0} host(s)) -> ADOPTED." -f $gate.ExtCount)
+        }
+        else {
+            Show-Warning ("Extended hostlist: host set does NOT match fabriq (extended-only={0}, fabriq-only={1}) -> ENTIRE LIST IGNORED (all hosts use the manual UNC dialog)." -f `
+                $gate.ExtOnly.Count, $gate.FabOnly.Count)
+        }
         $script:ExtHostlistSummaryShown = $true
     }
+    if (-not $gate.Match) { return $null }   # strict gate failed -> ignore whole list
+
     $hk = Get-NormalizedHostKey -Row $FabriqHost
-    foreach ($r in $adopted) {
-        if ((Get-NormalizedHostKey -Row $r) -eq $hk) { return $r }
+    foreach ($r in $rows) {
+        if ((Get-NormalizedHostKey -Row $r) -ne $hk) { continue }
+        if ($r.PSObject.Properties.Name -contains 'Enabled') {
+            $ev = "$($r.Enabled)".Trim()
+            if ($ev -eq '0' -or $ev -ieq 'false' -or $ev -ieq 'no') { continue }   # disabled -> manual
+        }
+        return $r
     }
     return $null
 }
