@@ -786,9 +786,10 @@ function Invoke-BackupStart {
     Switch-View 'Progress'
     # v0.56.0 (t-0003): pass -ReturnView 'Backup' so the progress view reveals a
     # "バックアップ画面へ戻る" button on finish, enabling the backup redo loop
-    # (return -> retry failed parts merged into the same backup). Restore-only
-    # auto-revert in the 完了 handler is gated on ReturnView='Restore', so backup
-    # just closes on 完了.
+    # (return -> retry failed parts merged into the same backup).
+    # v0.69.0 (t-0015): pressing 完了 (ReturnView='Backup') now ALSO fires the
+    # source-side auto network revert (Invoke-BackupAutoRevert), mirroring restore;
+    # the 戻る button still skips revert so the redo loop keeps the migration LAN.
     Initialize-ProgressView -Title "バックアップ実行中..." -ReturnView 'Backup'
     Add-ProgressLog "$($script:CurrentHost.OldPCname) のバックアップを開始します"
     Add-ProgressLog "保存先: $destRoot"
@@ -825,6 +826,9 @@ function Invoke-BackupStart {
     $script:BackupLastResult       = $result
     $script:BackupLastAggregateDir = $result.AggregateDir
     $script:BackupLastHostName     = "$($script:CurrentHost.OldPCname)"
+    # v0.69.0 (t-0015): record status so the Progress 完了 button can fire the
+    # source-side auto network revert (Invoke-BackupAutoRevert), only on Success.
+    $script:BackupLastStatus       = "$($result.Status)"
 
     Add-ProgressLog ""
     Add-ProgressLog "=========================================="

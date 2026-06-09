@@ -69,6 +69,13 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.69.0: **バックアップ完了後、IP 復元へ自動遷移（リストアと対称）(TM t-0015)** —
+  Progress 画面の「**完了**」ボタン押下時に、**source 機のネットワークを移行前（元の IP）へ自動復元**する（既存のリストア後 自動IP復元と同一フロー）。
+  - `Invoke-RestoreAutoRevert` を **role 引数つき共有コア** `Invoke-AutoNetworkRevert -Status -ExpectedRole -CompletedLabel` に一般化（リストア挙動は不変）。新ラッパ `Invoke-BackupAutoRevert`（role=source）。
+  - `progress_view` の完了ハンドラを拡張：`ReturnView='Backup'` のときも発火（`$script:BackupLastStatus`）。`backup_view` で status を記録。
+  - ゲートはリストアと同一（**Success のみ**／schema2 profile／role 一致／`rollback.autoRevert/revertNetwork` 許可／snapshot あり／`_revert_done.json` で冪等）。確認ポップアップ → `Revert-LanMigration.ps1 -Force -Unattended`。
+  - 安全性：バックアップ完了時点でデータは移行先共有に届き、移行先は**ローカル**から復元するため source の IP 復元は移行先リストアに無影響。**「戻る」（やり直しループ t-0003）では復元しない**ので移行用 LAN を維持。
+  - `Revert-LanMigration.ps1` は source でも安全（`Remove-MigrationShare` は `role=target` ゲートで source 非対象、ネットワーク復元は snapshot 駆動で role 非依存）。多エージェント敵対的レビュー指摘ゼロ・実機スモーク推奨。
 - backuper v0.68.1: **Outlook 完コピ画面でデータファイル選択部を常に赤丸で強調 (TM t-0016)** —
   リストア用 Outlook アカウント設定の疑似画面（`Show-OutlookAccounts.ps1`）で、**「新しい／既存の Outlook データ ファイル」選択ブロック**（ラジオ＋PST パス欄）を
   「詳細設定」と同様の赤リングで **常時** 囲み、注意喚起する。既存 PST 紐づけの有無に関わらず表示（移行先で配信先データファイルの選択ミス＝旧メール孤立 を防ぐ）。

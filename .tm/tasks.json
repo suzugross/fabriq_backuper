@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-09T11:21:16+09:00",
+  "updatedAt": "2026-06-09T12:29:38+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -133,19 +133,28 @@
       "id": "t-0015",
       "title": "バックアップ完了後、IP復元へ自動遷移",
       "content": "リストア時と同じようにバックアップ完了ボタンを押下したら、自動的にIP復元を行うフローを追加する。\r\n流れはリストアと同じでよい。",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "実装完了(v0.69.0・敵対的レビュー実バグ0)。バックアップ完了→IP復元 自動遷移(リストアと対称)。Invoke-RestoreAutoRevert を role 引数つき共有コア Invoke-AutoNetworkRevert(-Status -ExpectedRole -CompletedLabel)に一般化(リストア挙動不変)+ラッパ Invoke-BackupAutoRevert(role=source)。progress_view 完了ハンドラに ReturnView='Backup' 分岐追加(BackupLastStatus)。backup_view で status 記録+コメント更新。ゲートはリストア同一(Success のみ/schema2/role 一致(env FABRIQ_BACKUPER_ROLE か profile.share.hostRole)/rollback.autoRevert,revertNetwork 許可/snapshot あり/_revert_done.json 冪等)。確認ポップアップ→Revert-LanMigration.ps1 -Force -Unattended。安全性確認: バックアップ完了時データは移行先共有に届き移行先はローカル復元なので source IP 復元は移行先無影響/戻る(やり直しt-0003)は復元せず移行用LAN維持/Revert-LanMigration は source 安全(Remove-MigrationShare は role=target ゲートで source 非対象, Restore-MigrationNetworkConfig は snapshot 駆動 role 非依存)/source も Prepare-LanMigration:198 で snapshot 作成済。多エージェントレビュー27報告→実バグ0。残:実機(LAN-Prep 起動の source 機でバックアップ Success→完了押下→確認ポップアップ→元IP復帰/戻るでは復元しないこと/Partial・Failed は復元しないこと)。",
+      "status": "対応中",
       "createdAt": "2026-06-08T16:47:15.2491972+09:00",
-      "updatedAt": "2026-06-08T16:48:53.9908158+09:00"
+      "updatedAt": "2026-06-09T12:29:38+09:00"
     },
     {
       "id": "t-0016",
       "title": "Outlookリストア用完コピ画面",
       "content": "リストアで使用するOutlookメールアカウント登録画面の完コピ画面ですが、既存Outlookデータファイル（PST）と紐づけがある場合は、「詳細設定」と同じように赤丸で囲んでほしい。なんなら、どのような場合でも赤丸で囲み、注意を促してほしい。",
       "claudeNote": "実装完了(v0.68.1)。Outlook 完コピ疑似画面 Show-OutlookAccounts.ps1 で、データファイル選択ブロック(新しい/既存の Outlook データ ファイル ラジオ + PST パス欄)を「詳細設定」と同じ赤リング(Add_Paint+DrawEllipse)で常時囲み注意喚起。ユーザ確定=常に表示+ブロック全体。実装=既存 Add_Paint に DrawEllipse を1つ追加(DfNew/DfExisting/PstFile の Bounds を Rectangle::Union+Inflate(14,12)、.Red 2.5pt、:mui null ガード)。既存の needAdvanced 詳細設定リングと共存(SmoothingMode を先頭へ移動)。表示のみ・復元/データ処理ロジック不変。静的検証(BOM/balance, mui コントロール 825-827 定義確認)。restore.ps1 Stage5.7 で配備されるので whole-tree 再配置で反映。残: 実機(PST 紐づけ有/無/IMAP の各アカウントで常に赤丸が出る・詳細設定リングと二重表示が崩れない を確認)。 【v0.68.2】詳細設定タブ: コピーボタンを「使用する暗号化接続の種類」(ドロップダウンで貼付不可=無意味)から撤去し、「送信サーバー(SMTP)ポート」欄に追加(手入力要の数値・ 捕捉→Add-CopyButton)。暗号化種類は New-Data | Out-Null で破棄( 廃止=未使用警告も解消)。Add-CopyButton は欄右隣(Right+3,Top)配置で他要素と重なりなし。表示のみ・ロジック不変。残: 実機(詳細設定→詳細設定タブで SMTP ポートにコピーボタン・暗号化種類にボタン無し を確認)。",
-      "status": "対応中",
+      "status": "完了",
       "createdAt": "2026-06-08T17:44:32.1131814+09:00",
-      "updatedAt": "2026-06-09T11:21:16+09:00"
+      "updatedAt": "2026-06-09T11:52:58.4411139+09:00"
+    },
+    {
+      "id": "t-0017",
+      "title": "GUI画面のCMD画面について",
+      "content": "",
+      "claudeNote": "",
+      "status": "未着手",
+      "createdAt": "2026-06-09T11:53:40.8903929+09:00",
+      "updatedAt": "2026-06-09T11:54:56.1343662+09:00"
     }
   ]
 }

@@ -3,7 +3,7 @@
 <!-- このファイルは TM アプリが .tm/tasks.json から自動生成します。
      直接編集しないでください（次回保存で上書きされます）。
      タスクの追加・更新は tasks.json か TM アプリから行ってください。 -->
-最終更新: 2026-06-08 17:52
+最終更新: 2026-06-09 11:54
 
 ## 未着手 (5)
 
@@ -46,15 +46,11 @@
 
 <sub>更新: 2026-06-08 16:48 ／ 作成: 2026-06-08 16:47</sub>
 
-### [t-0016] Outlookリストア用完コピ画面
+### [t-0017] GUI画面のCMD画面について
 
-**内容:**
+<sub>更新: 2026-06-09 11:54 ／ 作成: 2026-06-09 11:53</sub>
 
-リストアで使用するOutlookメールアカウント登録画面の完コピ画面ですが、既存Outlookデータファイル（PST）と紐づけがある場合は、「詳細設定」と同じように赤丸で囲んでほしい。なんなら、どのような場合でも赤丸で囲み、注意を促してほしい。
-
-<sub>更新: 2026-06-08 17:46 ／ 作成: 2026-06-08 17:44</sub>
-
-## 完了 (10)
+## 完了 (11)
 
 ### [t-0001] バックアップデータのクリーンアップについて
 
@@ -194,6 +190,18 @@ P0+P1 実装+敵対的レビュー完了(v0.64.0・実バグ0)。実装範囲=P0
 P0+P1 実装+敵対的レビュー完了(v0.67.0・実バグ0)。Show-BusyOverlay/Close-BusyOverlay(theme.ps1・ボーダーレス ラベンダー 最前面・直前1描画 Show()+Refresh()+DoEvents・$null安全/例外不投・Close は null-safe)。P0(最大凍結=パスフレーズ後の hostlist ENC: 復号 多秒)=main_form hostlist復号 try/finally overlay / session_form 照合 WaitCursor($ppOk) / handoff_viewer 228 / fabriq_exthostlist 201 の4経路(ツールは console thread pre-Run で Show()+Refresh() 描画→Close)。P1=common.ps1 schtasks IPC poll(最大30s)+Stop-OutlookForSource 終了待ち の2ループに guarded DoEvents(if 'System.Windows.Forms.Application' -as [type])=WinForms 未ロード時 no-op・既存 progress_view も DoEvents 済で再入は新規リスクなし / Resolve-UncAccess の無人 probe+seam を overlay 包囲しダイアログ前に close(backup/restore 共通) / unc_connect_dialog 接続処理に WaitCursor+finally。文言一律「読み込み中…」。シングルスレッドのため一発処理中は静止(雰囲気のみ=要件OK)、ループ系は実応答維持。多エージェントレビュー39報告→実バグ0(ライフサイクル/スコープ/load順/guard/再入 すべて正)。残:実機(肥大ENC: hostlistで復号を長くし overlay 描画確認/未ログオン target で schtasks 30s 応答維持/UNC offline で接続中表示/各ツール起動)。
 
 <sub>更新: 2026-06-08 17:42 ／ 作成: 2026-06-08 09:51</sub>
+
+### [t-0016] Outlookリストア用完コピ画面
+
+**内容:**
+
+リストアで使用するOutlookメールアカウント登録画面の完コピ画面ですが、既存Outlookデータファイル（PST）と紐づけがある場合は、「詳細設定」と同じように赤丸で囲んでほしい。なんなら、どのような場合でも赤丸で囲み、注意を促してほしい。
+
+**Claudeメモ:**
+
+実装完了(v0.68.1)。Outlook 完コピ疑似画面 Show-OutlookAccounts.ps1 で、データファイル選択ブロック(新しい/既存の Outlook データ ファイル ラジオ + PST パス欄)を「詳細設定」と同じ赤リング(Add_Paint+DrawEllipse)で常時囲み注意喚起。ユーザ確定=常に表示+ブロック全体。実装=既存 Add_Paint に DrawEllipse を1つ追加(DfNew/DfExisting/PstFile の Bounds を Rectangle::Union+Inflate(14,12)、.Red 2.5pt、:mui null ガード)。既存の needAdvanced 詳細設定リングと共存(SmoothingMode を先頭へ移動)。表示のみ・復元/データ処理ロジック不変。静的検証(BOM/balance, mui コントロール 825-827 定義確認)。restore.ps1 Stage5.7 で配備されるので whole-tree 再配置で反映。残: 実機(PST 紐づけ有/無/IMAP の各アカウントで常に赤丸が出る・詳細設定リングと二重表示が崩れない を確認)。 【v0.68.2】詳細設定タブ: コピーボタンを「使用する暗号化接続の種類」(ドロップダウンで貼付不可=無意味)から撤去し、「送信サーバー(SMTP)ポート」欄に追加(手入力要の数値・ 捕捉→Add-CopyButton)。暗号化種類は New-Data | Out-Null で破棄( 廃止=未使用警告も解消)。Add-CopyButton は欄右隣(Right+3,Top)配置で他要素と重なりなし。表示のみ・ロジック不変。残: 実機(詳細設定→詳細設定タブで SMTP ポートにコピーボタン・暗号化種類にボタン無し を確認)。
+
+<sub>更新: 2026-06-09 11:52 ／ 作成: 2026-06-08 17:44</sub>
 
 ## 保留 (1)
 

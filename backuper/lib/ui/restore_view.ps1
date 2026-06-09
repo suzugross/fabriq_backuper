@@ -1563,12 +1563,20 @@ operator-facing な設定情報が番号順に集約されています。
     # migration LAN stays up until the operator explicitly finishes.
 }
 
-# v0.53.0 (A): post-restore auto network revert (auto IP restore) ----------
-function Invoke-RestoreAutoRevert {
-    param([string]$Status)
-    # Gate: target role + local profile (schema 2) + restore Success + rollback
-    # snapshot present + not already reverted + profile allows. Destructive (the
-    # migration LAN drops), so it runs only after the restore + handoff are done.
+# v0.53.0 (A) / v0.69.0 (t-0015): post-run auto network revert (auto IP restore).
+# Shared, ROLE-AWARE core. Both restore (target) and backup (source) finish their
+# migration by reverting THIS PC's network to the pre-lanprep snapshot. The gate /
+# confirm popup / Revert-LanMigration invocation are identical; only the expected
+# role and the wording ("リストア" vs "バックアップ") differ.
+function Invoke-AutoNetworkRevert {
+    param(
+        [string]$Status,
+        [string]$ExpectedRole,    # 'target' (restore) | 'source' (backup)
+        [string]$CompletedLabel   # 'リストア' | 'バックアップ'
+    )
+    # Gate: matching role + local profile (schema 2) + Success + rollback snapshot
+    # present + not already reverted + profile allows. Destructive (the migration
+    # LAN drops), so it runs only after the run + handoff are done.
     try {
         if ($Status -ne 'Success') { return }
         $prof = $script:MigrationProfile
@@ -1577,7 +1585,8 @@ function Invoke-RestoreAutoRevert {
         $role = "$env:FABRIQ_BACKUPER_ROLE".Trim().ToLower()
         $hostRole = ''
         if ($null -ne $prof.share) { $hostRole = "$($prof.share.hostRole)".Trim().ToLower() }
-        if ($role -ne 'target' -and $hostRole -ne 'target') { return }
+        $want = "$ExpectedRole".Trim().ToLower()
+        if ($role -ne $want -and $hostRole -ne $want) { return }
 
         if ($null -ne $prof.rollback) {
             if ($prof.rollback.revertNetwork -eq $false) { return }
@@ -1605,7 +1614,7 @@ function Invoke-RestoreAutoRevert {
 
         # --- gate passed: notify (GUI, not a batch prompt), then run revert ---
         [System.Windows.Forms.MessageBox]::Show(
-            ("リストアが完了しました。`n`nこれからネットワーク設定を移行前 (元の IP) に自動で戻します。`n" +
+            ("$CompletedLabel が完了しました。`n`nこれからネットワーク設定を移行前 (元の IP) に自動で戻します。`n" +
              "完了後、この PC は元の IP に復帰し、移行用 LAN / 共有は切断されます。`n`n[OK] で開始します。"),
             "Fabriq BackUper - ネットワーク自動復元",
             [System.Windows.Forms.MessageBoxButtons]::OK,
@@ -1626,20 +1635,35 @@ function Invoke-RestoreAutoRevert {
             [System.Windows.Forms.MessageBox]::Show(
                 ("ネットワークの自動復元に失敗しました (exit $code)。`n`n" +
                  "管理者権限の PowerShell で tools\lan_prep\Revert-LanMigration.ps1 を実行するか、" +
-                 "LAN-Prep メニューの Revert で手動復元してください。`n`n※ リストア自体は完了しています。"),
+                 "LAN-Prep メニューの Revert で手動復元してください。`n`n※ $CompletedLabel 自体は完了しています。"),
                 "Fabriq BackUper - ネットワーク復元失敗",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         }
     } catch {
-        # Never let an auto-revert error disrupt the already-completed restore.
+        # Never let an auto-revert error disrupt the already-completed run.
         try {
             [System.Windows.Forms.MessageBox]::Show(
                 ("ネットワーク自動復元の起動に失敗しました: $($_.Exception.Message)`n`n" +
-                 "手動で Revert してください。リストアは完了しています。"),
+                 "手動で Revert してください。$CompletedLabel は完了しています。"),
                 "Fabriq BackUper",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         } catch {}
     }
+}
+
+# v0.53.0 (A): post-restore auto network revert (target role).
+function Invoke-RestoreAutoRevert {
+    param([string]$Status)
+    Invoke-AutoNetworkRevert -Status $Status -ExpectedRole 'target' -CompletedLabel 'リストア'
+}
+
+# v0.69.0 (t-0015): post-backup auto network revert (source role). Same flow as
+# restore -- after backup Success the data is already on the target's share and the
+# target restores from its LOCAL copy, so the source no longer needs the migration
+# LAN and can revert its IP. Fires from the Progress 完了 button (ReturnView='Backup').
+function Invoke-BackupAutoRevert {
+    param([string]$Status)
+    Invoke-AutoNetworkRevert -Status $Status -ExpectedRole 'source' -CompletedLabel 'バックアップ'
 }

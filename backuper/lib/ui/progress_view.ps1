@@ -83,14 +83,19 @@ function New-ProgressView {
     $btnDone.Font = $script:fontLarge
     $btnDone.Enabled = $false
     $btnDone.Add_Click({
-        # v0.53.0 (A): on a restore run (ReturnView='Restore'), pressing 完了 is
-        # the explicit "finish migration" action -> attempt the post-restore auto
-        # network revert (self-gated: only fires on Success + target + local +
-        # snapshot present + not already reverted) BEFORE closing. Backup runs
-        # (ReturnView not 'Restore') just close.
+        # v0.53.0 (A) / v0.69.0 (t-0015): pressing 完了 is the explicit "finish
+        # migration" action -> attempt the post-run auto network revert (self-gated:
+        # only fires on Success + matching role + local profile + snapshot present +
+        # not already reverted) BEFORE closing.
+        #   ReturnView='Restore' -> target reverts (Invoke-RestoreAutoRevert)
+        #   ReturnView='Backup'  -> source reverts (Invoke-BackupAutoRevert)
         if ($script:ProgressReturnView -eq 'Restore' -and `
             (Get-Command Invoke-RestoreAutoRevert -ErrorAction SilentlyContinue)) {
             Invoke-RestoreAutoRevert -Status "$($script:RestoreLastStatus)"
+        }
+        elseif ($script:ProgressReturnView -eq 'Backup' -and `
+            (Get-Command Invoke-BackupAutoRevert -ErrorAction SilentlyContinue)) {
+            Invoke-BackupAutoRevert -Status "$($script:BackupLastStatus)"
         }
         $script:MainForm.Close()
     })
