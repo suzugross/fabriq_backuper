@@ -618,10 +618,14 @@ function New-AdvancedForm {
     New-MockBtn $p2 '標準設定(D)' 308 39 90 24 | Out-Null
     New-Chk $p2 'このサーバーでは暗号化された接続 (SSL/TLS) が必要(E)' 28 70 410 ($A.IncUseSsl -eq 1) ($null -eq $A.IncUseSsl) | Out-Null
     New-Lbl $p2 '送信サーバー (SMTP)(O):' 28 100 | Out-Null
-    New-Data $p2 240 97 60 (Format-Port $A.SmtpPort $A.SmtpUseSsl 587 25) $true | Out-Null
+    # t-0016: copy button on the SMTP (outgoing) port -- a plain numeric value
+    # the operator actually needs to re-type, so it is worth copying.
+    $tbSmtpPort = New-Data $p2 240 97 60 (Format-Port $A.SmtpPort $A.SmtpUseSsl 587 25) $true
+    Add-CopyButton $p2 $tbSmtpPort | Out-Null
     New-Lbl $p2 '使用する暗号化接続の種類(C):' 28 130 | Out-Null
-    $tbEnc = New-Data $p2 240 127 150 (Format-SmtpEncryption $A.SmtpUseSsl $A.SmtpSecCon) $true
-    Add-CopyButton $p2 $tbEnc | Out-Null
+    # t-0016: NO copy button here -- "使用する暗号化接続の種類" is a drop-down in the
+    # real Outlook UI, so a copied value cannot be pasted into it (copying is useless).
+    New-Data $p2 240 127 150 (Format-SmtpEncryption $A.SmtpUseSsl $A.SmtpSecCon) $true | Out-Null
 
     New-Section $p2 'サーバーのタイムアウト(T)' 16 166 $true | Out-Null
     New-Lbl $p2 '短い ───────┼─────── 長い     1 分' 28 190 $true | Out-Null
