@@ -66,6 +66,10 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.68.1: **Outlook 完コピ画面でデータファイル選択部を常に赤丸で強調 (TM t-0016)** —
+  リストア用 Outlook アカウント設定の疑似画面（`Show-OutlookAccounts.ps1`）で、**「新しい／既存の Outlook データ ファイル」選択ブロック**（ラジオ＋PST パス欄）を
+  「詳細設定」と同様の赤リングで **常時** 囲み、注意喚起する。既存 PST 紐づけの有無に関わらず表示（移行先で配信先データファイルの選択ミス＝旧メール孤立 を防ぐ）。
+  既存の `Add_Paint` に `DrawEllipse` を1つ追加（表示のみ・復元/データ処理ロジックは不変）。
 - backuper: **`Fabriq_ExtHostlist.exe`（拡張HOSTLIST 編集ツールの独立ランチャ）をビルド (TM t-0011)** —
   他ツールと同一トゥールチェーン（`dev/launcher/Launcher_ExtHostlist.cs` ＋ `app_exthostlist.manifest` を csc でコンパイル、`fabriq.ico`／asInvoker）。
   `fabriq_exthostlist.ps1` を conhost＋powershell（ExecutionPolicy Bypass）で起動。再ビルドは `dev/launcher/build_exthostlist.ps1`。暫定 `.bat` は併存。

@@ -862,13 +862,28 @@ function New-MainForm {
     # red ring around the Advanced button when setup is required
     $form.Add_Paint({
         param($snd, $e)
+        $e.Graphics.SmoothingMode = 'AntiAlias'
         if ($script:needAdvanced -and $null -ne $script:detailBtn) {
             $r = $script:detailBtn.Bounds
             $r.Inflate(10, 8)
-            $e.Graphics.SmoothingMode = 'AntiAlias'
             $pen = New-Object System.Drawing.Pen($Pal.Red, 2.5)
             $e.Graphics.DrawEllipse($pen, $r)
             $pen.Dispose()
+        }
+        # t-0016: ALWAYS ring the data-file delivery block (新しい/既存の Outlook
+        # データ ファイル radios + PST path field). Choosing the correct data file
+        # is a critical, easily-missed step in Outlook re-setup (picking "new"
+        # when an existing PST is bound would orphan the old mail), so it is
+        # emphasised in EVERY case to draw the operator's attention.
+        if ($null -ne $script:mui -and $null -ne $script:mui.DfNew -and `
+            $null -ne $script:mui.DfExisting -and $null -ne $script:mui.PstFile) {
+            $rd = [System.Drawing.Rectangle]::Union(
+                    [System.Drawing.Rectangle]::Union($script:mui.DfNew.Bounds, $script:mui.DfExisting.Bounds),
+                    $script:mui.PstFile.Bounds)
+            $rd.Inflate(14, 12)
+            $penD = New-Object System.Drawing.Pen($Pal.Red, 2.5)
+            $e.Graphics.DrawEllipse($penD, $rd)
+            $penD.Dispose()
         }
     })
 
