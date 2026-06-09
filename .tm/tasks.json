@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-09T12:29:38+09:00",
+  "updatedAt": "2026-06-09T23:19:44+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -35,9 +35,9 @@
       "title": "リモートデスクトップ機能",
       "content": "・移行先PCへ Windows標準の RDP で接続できるようにする。\r\n・データ移行後すぐ画面を確認したいがディスプレイが余っていない時の補助。\r\n・資格情報は、共有フォルダで使ったものを流用する想定。",
       "claudeNote": "",
-      "status": "未着手",
+      "status": "保留",
       "createdAt": "2026-06-05T20:36:31.682013+09:00",
-      "updatedAt": "2026-06-06T13:39:38.721778+09:00"
+      "updatedAt": "2026-06-09T23:04:47.5683992+09:00"
     },
     {
       "id": "t-0005",
@@ -115,10 +115,10 @@
       "id": "t-0013",
       "title": "ディスク容量やバックアップデータ量の表示",
       "content": "ディスクの空き容量やバックアップデータ量、そして、その差分（リストアしたあとの想定ディスク空き容量）を、リストア画面の目につくところに表示させ、リストア前に軽く状況を確認できるようにしたい。目につくとはいっても大きく表示させる必要はなし\r\n",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "実装完了(v0.69.1・敵対的レビュー 指摘→修正→再検証で実バグ0)。リストア画面に「ディスク容量見積り」を小さく表示(ユーザ確定=選択中バックアップ総量+manifest情報直下の専用行)。restore_view.ps1: RestoreDiskLabel(X24 Y127 W880 H15)+Format-DiskSize(GB/MB/KB)+Update-RestoreDiskInfo(表示専用/null・例外ガード/未選択時クリア)。対象ドライブ=Get-SelectedRestoreUserProfilePath の root(既定 SystemDrive)の [System.IO.DriveInfo].AvailableFreeSpace、量=manifest summary.totalBytes、想定空き=空き-量(1GB未満/負は赤)。再計算=Update-RestoreSelection(選択/参照/更新t-0008)末尾+対象ユーザ変更。レイアウト: manifest ラベルは2行容量(H28)維持し、ディスク行を2行目位置に排他オーバーラップ配置(選択時=manifest短1行+ディスク行/未選択時=長文2行+ディスク行クリア)で下段非連鎖。留意=ステージングは既にディスク上・設定系はhandoff(小)なので空き-総量はやや保守的(安全側)な目安。レビュー経緯: 初回H28→H15縮小で未選択時の長文がクリップ(実バグ1)→H28に戻しオーバーラップ化→再検証で全RestoreManifestLabel.Text代入を追跡し排他性確証(parse失敗は manifest セット前/Get-RestoreUserdataProblemCount は try/catch で非throw)・実バグ0。残:実機(空き/量/想定空きの表示・赤警告・参照/更新/ユーザ変更で更新・長文未選択メッセージが2行表示される回帰なし を確認)。",
+      "status": "対応中",
       "createdAt": "2026-06-08T09:48:29.7961343+09:00",
-      "updatedAt": "2026-06-08T09:51:30.2532986+09:00"
+      "updatedAt": "2026-06-09T23:19:44+09:00"
     },
     {
       "id": "t-0014",
@@ -134,9 +134,9 @@
       "title": "バックアップ完了後、IP復元へ自動遷移",
       "content": "リストア時と同じようにバックアップ完了ボタンを押下したら、自動的にIP復元を行うフローを追加する。\r\n流れはリストアと同じでよい。",
       "claudeNote": "実装完了(v0.69.0・敵対的レビュー実バグ0)。バックアップ完了→IP復元 自動遷移(リストアと対称)。Invoke-RestoreAutoRevert を role 引数つき共有コア Invoke-AutoNetworkRevert(-Status -ExpectedRole -CompletedLabel)に一般化(リストア挙動不変)+ラッパ Invoke-BackupAutoRevert(role=source)。progress_view 完了ハンドラに ReturnView='Backup' 分岐追加(BackupLastStatus)。backup_view で status 記録+コメント更新。ゲートはリストア同一(Success のみ/schema2/role 一致(env FABRIQ_BACKUPER_ROLE か profile.share.hostRole)/rollback.autoRevert,revertNetwork 許可/snapshot あり/_revert_done.json 冪等)。確認ポップアップ→Revert-LanMigration.ps1 -Force -Unattended。安全性確認: バックアップ完了時データは移行先共有に届き移行先はローカル復元なので source IP 復元は移行先無影響/戻る(やり直しt-0003)は復元せず移行用LAN維持/Revert-LanMigration は source 安全(Remove-MigrationShare は role=target ゲートで source 非対象, Restore-MigrationNetworkConfig は snapshot 駆動 role 非依存)/source も Prepare-LanMigration:198 で snapshot 作成済。多エージェントレビュー27報告→実バグ0。残:実機(LAN-Prep 起動の source 機でバックアップ Success→完了押下→確認ポップアップ→元IP復帰/戻るでは復元しないこと/Partial・Failed は復元しないこと)。",
-      "status": "対応中",
+      "status": "完了",
       "createdAt": "2026-06-08T16:47:15.2491972+09:00",
-      "updatedAt": "2026-06-09T12:29:38+09:00"
+      "updatedAt": "2026-06-09T23:04:21.3253732+09:00"
     },
     {
       "id": "t-0016",

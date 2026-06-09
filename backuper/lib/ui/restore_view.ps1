@@ -15,6 +15,7 @@ $script:RestoreTimestampCombo  = $null
 $script:RestoreTimestampEntries = @()
 $script:RestoreSectionChecks   = @{}
 $script:RestoreManifestLabel   = $null
+$script:RestoreDiskLabel       = $null   # v0.69.1 (t-0013): disk-space line
 $script:RestoreSectionContainer = $null
 # v0.51.0: consolidated restore-entry grid (replaces the section-checkbox grid,
 # the printer grid, and the userdata/credentials selection modals).
@@ -141,8 +142,23 @@ function New-RestoreView {
     $script:RestoreBrowseLabel = New-StyledLabel -Text "" -X 24 -Y 96 -Width 880 -Height 16 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreBrowseLabel)
 
-    $script:RestoreManifestLabel = New-StyledLabel -Text "" -X 24 -Y 114 -Width 880 -Height 28 -FgColor $script:fgDim
+    # H28 = two-line capacity: the "not found" / parse-failure messages are long
+    # and wrap to a 2nd line. Those appear ONLY when no backup is selected -- i.e.
+    # exactly when the disk label below is empty -- so the two never render text in
+    # the same pixels (see the RestoreDiskLabel note). Keep H28 (do NOT shrink, or
+    # the long messages get clipped).
+    $script:RestoreManifestLabel = New-StyledLabel -Text "" -X 24 -Y 112 -Width 880 -Height 28 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreManifestLabel)
+
+    # v0.69.1 (t-0013): compact disk-space line aligned to the manifest label's 2nd
+    # line (intentional overlap). When a backup IS selected the manifest shows its
+    # short single "aggregate manifest | ..." line (bounded: Windows oldPcName <= 15
+    # chars => never wraps), so its 2nd-line zone is empty and this disk line owns
+    # those pixels. When NO backup is selected this label is cleared
+    # (Update-RestoreDiskInfo) and the manifest's long 2-line message shows through.
+    # Shows: target drive free / selected-backup size / estimated free after restore.
+    $script:RestoreDiskLabel = New-StyledLabel -Text "" -X 24 -Y 127 -Width 880 -Height 15 -FgColor $script:fgDim
+    $panel.Controls.Add($script:RestoreDiskLabel)
 
     # ---- Target user row (v0.51.0: moved up; the section-checkbox grid and the
     # per-section selection modals are replaced by the consolidated entry list
@@ -152,6 +168,8 @@ function New-RestoreView {
     $panel.Controls.Add($userLbl)
     $userCombo = New-StyledComboBox -X 386 -Y 142 -Width 260 -Height 24
     $script:RestoreUserCombo = $userCombo
+    # v0.69.1 (t-0013): target user determines the restore drive -> refresh the disk line.
+    $userCombo.Add_SelectedIndexChanged({ Update-RestoreDiskInfo })
     $panel.Controls.Add($userCombo)
 
     # ---- Operator handoff (v0.51.0: moved up) ----
@@ -917,6 +935,7 @@ function Update-RestoreSelection {
     $script:RestoreCurrentManifest = $null
     $script:RestoreUserdataProblemCount = 0
     if ($null -ne $script:RestoreBackupWarningLabel) { $script:RestoreBackupWarningLabel.Text = "" }
+    if ($null -ne $script:RestoreDiskLabel) { $script:RestoreDiskLabel.Text = "" }
 
     if ($null -eq $script:RestoreTimestampCombo -or $script:RestoreTimestampCombo.SelectedIndex -lt 0) {
         if ([string]::IsNullOrWhiteSpace($script:RestoreExplicitDir)) {
@@ -954,6 +973,65 @@ function Update-RestoreSelection {
 
     Update-RestoreEntryGrid -AggregateDir $aggregateDir
     Show-RestoreBackupWarnings   # v0.47.0 (B): render backup-failure warning
+    Update-RestoreDiskInfo       # v0.69.1 (t-0013): refresh the disk-space line
+}
+
+# v0.69.1 (t-0013): compact byte formatter (GB/MB/KB) for the restore disk line.
+function Format-DiskSize {
+    param([double]$Bytes)
+    $neg = ''
+    if ($Bytes -lt 0) { $neg = '-'; $Bytes = - $Bytes }
+    if ($Bytes -ge 1073741824) { return ($neg + ('{0:N1} GB' -f ($Bytes / 1073741824))) }
+    if ($Bytes -ge 1048576)    { return ($neg + ('{0:N1} MB' -f ($Bytes / 1048576))) }
+    if ($Bytes -ge 1024)       { return ($neg + ('{0:N0} KB' -f ($Bytes / 1024))) }
+    return ($neg + ('{0:N0} B' -f $Bytes))
+}
+
+# v0.69.1 (t-0013): refresh the restore-screen disk line -- target-drive free /
+# selected-backup size / estimated free after restore. Display-only, never blocks;
+# self-clears when no backup is selected; turns red when the estimate is tight.
+function Update-RestoreDiskInfo {
+    if ($null -eq $script:RestoreDiskLabel) { return }
+    $agg = $script:RestoreCurrentManifest
+    if ($null -eq $agg) { $script:RestoreDiskLabel.Text = ''; return }
+
+    # selected-backup total size (aggregate manifest summary.totalBytes)
+    $backupBytes = 0
+    if ($null -ne $agg.summary -and `
+        $agg.summary.PSObject.Properties.Name -contains 'totalBytes' -and `
+        $null -ne $agg.summary.totalBytes) {
+        try { $backupBytes = [long]$agg.summary.totalBytes } catch { $backupBytes = 0 }
+    }
+
+    # target drive = root of the selected restore user profile (fallback: system drive)
+    $profilePath = ''
+    try { $profilePath = Get-SelectedRestoreUserProfilePath } catch { $profilePath = '' }
+    $driveRoot = ''
+    if (-not [string]::IsNullOrWhiteSpace($profilePath)) {
+        try { $driveRoot = [System.IO.Path]::GetPathRoot($profilePath) } catch { $driveRoot = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($driveRoot)) { $driveRoot = "$env:SystemDrive\" }
+
+    $free = -1
+    try { $free = [long]((New-Object System.IO.DriveInfo -ArgumentList $driveRoot).AvailableFreeSpace) }
+    catch { $free = -1 }
+    if ($free -lt 0) {
+        $script:RestoreDiskLabel.ForeColor = $script:fgDim
+        $script:RestoreDiskLabel.Text = "ディスク空き容量を取得できませんでした ($driveRoot)"
+        return
+    }
+
+    $after = $free - $backupBytes
+    $driveDisp = $driveRoot.TrimEnd('\')
+    $script:RestoreDiskLabel.Text = ("ディスク {0}   空き {1}   /   バックアップ {2}   /   リストア後の空き(目安) {3}" -f `
+        $driveDisp, (Format-DiskSize $free), (Format-DiskSize $backupBytes), (Format-DiskSize $after))
+
+    # red when the estimate is negative or within a small (1 GB) safety margin
+    if ($after -lt 1073741824) {
+        $script:RestoreDiskLabel.ForeColor = [System.Drawing.Color]::FromArgb(210, 60, 60)
+    } else {
+        $script:RestoreDiskLabel.ForeColor = $script:fgDim
+    }
 }
 
 # v0.47.0 (B): backup-failure warning ----------------------------
