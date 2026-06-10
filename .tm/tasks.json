@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-10T11:59:30+09:00",
+  "updatedAt": "2026-06-10T12:55:06+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -34,10 +34,10 @@
       "id": "t-0004",
       "title": "リモートデスクトップ機能",
       "content": "・移行先PCへ Windows標準の RDP で接続できるようにする。\r\n・データ移行後すぐ画面を確認したいがディスプレイが余っていない時の補助。\r\n・資格情報は、共有フォルダで使ったものを流用する想定。",
-      "claudeNote": "",
-      "status": "保留",
+      "claudeNote": "Phase1 実装完了(v0.70.0)。リモートデスクトップ接続機能。main_form ヘッダに常設ボタン(全ビュー共通=移行元↔先どちらからでも・任意タイミング)。新規 backuper/lib/ui/rdp_helper.ps1: Get-RdpPeerAddress(役割→相手IP: source→network.target.ipAddress/target→source/backupRootUncホスト/無→手入力) / Get-RdpPresetUsername / Get-RdpPresetPassword(拡張HOSTLIST ENC: を Connect-UncFromExtendedHostlist と同方式でオンデマンド復号・平文非キャッシュ) / Test-RdpReachable(3389事前判定) / Test-RdpRevertDone(H4警告) / Show-RdpConnectDialog(宛先/ユーザ名/パスワード編集可・前埋め・self拒否) / Invoke-RemoteDesktop(cmdkey /generic:TERMSRV 投入→mstsc /v→追跡) / Update-RdpCleanup(3秒Timer・mstsc終了で cmdkey /delete) / Clear-RdpCleanupAll(閉時sweep)。資格情報ハイブリッド: ENC:あり→cmdkey全自動/無→mstsc標準プロンプト。セキュリティ: cmdkey は接続後のみ削除(mstscは接続時のみ参照)・-PassThru null でも閉時sweepで取り残さない・平文保存なし。main.ps1 dot-source 追加(unc_connect_dialog の後)。多エージェント敵対レビュー(Explore2): PS5.1/配線/UI/回帰=指摘0、security/lifecycle=実バグ1(null-proc時 cred 取り残し→track-even-if-null+null-procは閉時sweepで対処)+自動変数 $pwd→$pw 是正(PSScriptAnalyzer 検出・$PWD 衝突)。残: P2(LAN-Prep RDP有効化+rollback snapshot復元 ON/OFF両ケース)・P3(Revert完全性監査)・実機(source→target/target→source/拡張HOSTLISTワンクリック/手入力/cmdkey後始末 cmdkey /list 残無/3389警告)。",
+      "status": "対応中",
       "createdAt": "2026-06-05T20:36:31.682013+09:00",
-      "updatedAt": "2026-06-09T23:04:47.5683992+09:00"
+      "updatedAt": "2026-06-10T12:55:06+09:00"
     },
     {
       "id": "t-0005",

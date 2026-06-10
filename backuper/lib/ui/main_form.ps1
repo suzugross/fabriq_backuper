@@ -125,6 +125,12 @@ function Start-FabriqBackuperGui {
         -FgColor $script:fgWhite -Font $script:fontNormal
     $header.Controls.Add($script:HostLabel)
 
+    # v0.70.0 (t-0004): always-available Remote Desktop button. The header persists
+    # across all views (incl. Progress), so this covers "either side, any time".
+    $rdpBtn = New-StyledButton -Text "リモートデスクトップ" -X 712 -Y 8 -Width 192 -Height 28
+    $rdpBtn.Add_Click({ Start-RemoteDesktopFlow })
+    $header.Controls.Add($rdpBtn)
+
     # Content area (fills below header)
     $content = New-Object System.Windows.Forms.Panel
     $content.Dock = "Fill"
@@ -151,10 +157,19 @@ function Start-FabriqBackuperGui {
     Update-HostHeader
     Switch-View $InitialMode
 
+    # v0.70.0 (t-0004): poll for exited mstsc sessions to delete their injected
+    # TERMSRV creds (cmdkey). 3s cadence; no-op when nothing is tracked.
+    $script:RdpCleanupTimer = New-Object System.Windows.Forms.Timer
+    $script:RdpCleanupTimer.Interval = 3000
+    $script:RdpCleanupTimer.Add_Tick({ Update-RdpCleanup })
+    $script:RdpCleanupTimer.Start()
+
     # v0.42.0 (P2): stop the restore-view poll timer on close (defensive; the
     # subprocess exits right after, but don't leave a timer armed).
     $form.Add_FormClosing({
         if ($null -ne $script:RestorePollTimer) { try { $script:RestorePollTimer.Stop() } catch {} }
+        if ($null -ne $script:RdpCleanupTimer) { try { $script:RdpCleanupTimer.Stop() } catch {} }
+        try { Clear-RdpCleanupAll } catch {}   # delete any leftover injected TERMSRV creds
     })
 
     [System.Windows.Forms.Application]::Run($form)

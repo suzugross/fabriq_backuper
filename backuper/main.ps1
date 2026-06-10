@@ -128,6 +128,7 @@ $libsToLoad = @(
     'lib\ui\userdata_edit_dialog.ps1', # Phase 2.7
     'lib\ui\unc_helper.ps1',
     'lib\ui\unc_connect_dialog.ps1',
+    'lib\ui\rdp_helper.ps1',           # v0.70.0 (t-0004): Remote Desktop (mstsc) launcher
     'lib\ui\backup_view.ps1',
     'lib\ui\restore_view.ps1',
     'lib\ui\progress_view.ps1',

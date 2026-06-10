@@ -80,6 +80,12 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.70.0: **リモートデスクトップ機能（移行ペア相手へ mstsc 接続）(TM t-0004・Phase 1)** —
+  メイン画面ヘッダに「リモートデスクトップ」ボタンを常設（全ビュー共通＝**移行元↔移行先どちらからでも・任意のタイミング**で接続可）。
+  - 接続先は profile から相手側 IP を解決（source→`network.target.ipAddress`／target→`network.source.ipAddress`／`backupRootUnc` ホスト部／無ければ手入力）。資格情報は**共有と同じものを流用（ハイブリッド）**：拡張HOSTLIST の `ENC:` をオンデマンド復号して `cmdkey` 投入＝プロンプトなし接続、無ければユーザ名前埋めで mstsc 標準入力。
+  - 新規 `backuper/lib/ui/rdp_helper.ps1`（`Get-RdpPeerAddress`／`Get-RdpPresetUsername`／`Get-RdpPresetPassword`〔`Connect-UncFromExtendedHostlist` と同方式・平文非キャッシュ〕／`Test-RdpReachable`〔3389 事前判定〕／`Show-RdpConnectDialog`〔宛先・ユーザ名・パスワード編集可・前埋め〕／`Invoke-RemoteDesktop`／クリーンアップ）。
+  - **セキュリティ**：cmdkey 投入分は mstsc が接続時のみ参照するため**接続後に削除**（mstsc 終了を 3秒 Timer で検知＋アプリ終了時に一括 sweep・`-PassThru` が null でも取り残さない）。平文保存なし。自分自身IP は接続拒否、復元(IP戻し)済みなら警告表示。
+  - MINOR。backup/restore のデータ処理・manifest 不変。多エージェント敵対的レビュー（実バグ1〔null-proc 時の cred 取り残し〕修正・自動変数 `$pwd`→`$pw` 是正）。残: P2(LAN-Prep で RDP 有効化＋Revert 復元)・P3(Revert 完全性監査)・実機スモーク。
 - backuper v0.69.1: **リストア画面にディスク容量の見積りを小さく表示 (TM t-0013)** —
   バックアップ選択欄の直下に、**対象ドライブの空き容量／選択中バックアップのデータ量／リストア後の想定空き容量（空き − バックアップ量）**を1行で表示。想定空きが僅少（1GB 未満）/マイナスなら**赤**で警告。
   - `Update-RestoreDiskInfo`（表示専用・null/例外ガード・未選択時は自動クリア）＋`Format-DiskSize`（GB/MB/KB 自動）。対象ドライブは対象ユーザのプロファイル（既定 `C:`）の `[System.IO.DriveInfo]`、量は manifest `summary.totalBytes`。
