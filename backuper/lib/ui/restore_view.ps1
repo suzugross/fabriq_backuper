@@ -233,7 +233,7 @@ function New-RestoreView {
 
     $grid = New-Object System.Windows.Forms.DataGridView
     $grid.Location = New-Object System.Drawing.Point(24, 348)
-    $grid.Size = New-Object System.Drawing.Size(880, 312)
+    $grid.Size = New-Object System.Drawing.Size(880, 288)   # v0.69.3: -24 so the start button gets a bottom margin like Backup
     Set-GridStyle -Grid $grid
     $grid.ReadOnly = $false
     $grid.AllowUserToAddRows = $false
@@ -281,7 +281,7 @@ function New-RestoreView {
     $panel.Controls.Add($script:RestoreSectionContainer)
 
     # ---- Start button (Y shifted +30 by v0.25.0 + further +30 by v0.26.0) ----
-    $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 684 -Width 204 -Height 44 -BgColor $script:bgAdd
+    $btnStart = New-StyledButton -Text "リストア開始" -X 700 -Y 654 -Width 204 -Height 44 -BgColor $script:bgAdd
     $btnStart.ForeColor = $script:fgWhite
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-RestoreStart })
@@ -291,7 +291,7 @@ function New-RestoreView {
     # (in the free area to its left) so the operator sees it at the action point and it
     # is never hidden by other rows. Shows: target drive free / selected-backup size /
     # estimated free after restore (red when low). Filled by Update-RestoreDiskInfo.
-    $script:RestoreDiskLabel = New-StyledLabel -Text "" -X 24 -Y 696 -Width 660 -Height 24 -FgColor $script:fgDim
+    $script:RestoreDiskLabel = New-StyledLabel -Text "" -X 24 -Y 666 -Width 660 -Height 24 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreDiskLabel)
 
     return $panel
