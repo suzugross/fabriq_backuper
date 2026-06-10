@@ -54,6 +54,10 @@
   選択ハンドラの try/catch を追加（安全網）。バックアップ側・seam・突合判定には影響なし。handoff_viewer 等は同パターン未使用で無影響。
 
 ### Changed
+- backuper v0.71.2: **GUI 併設の CMD（診断コンソール）を最小化で起動 (TM t-0017)** —
+  Fabriq_BackUper（バックアップ/リストア）・Fabriq_HandoffViewer・Fabriq_Cleanup の各 EXE ランチャを、コンソールを **最小化起動**（`powershell -WindowStyle Minimized` ＋ `ProcessStartInfo.WindowStyle=Minimized`）に変更。GUI の隣に CMD 窓が出ず、タスクバーに格納される。
+  - コンソール自体は存続するため、`Read-Host`（エラー時の保持）や起動時診断は**タスクバーから復元すれば従来どおり確認可能**（＝完全非表示ではなく最小化＝手軽・低リスク）。
+  - ランチャ .cs のみの変更（`Launcher_BackUper/Cleanup/HandoffViewer.cs`）＋該当 EXE 再ビルド。**.ps1・GUI・ロジックは不変**。LAN-Prep / ExtHostlist は対象外（LAN-Prep は確認プロンプトのためコンソール維持）。
 - backuper v0.68.2: **Outlook 完コピ画面: コピーボタンを「暗号化接続の種類」→「送信サーバー(SMTP)ポート」へ移設 (TM t-0016)** —
   詳細設定タブで、ドロップダウン選択の「使用する暗号化接続の種類」に付いていたコピーボタン（貼り付け先が無く無意味）を撤去し、
   代わりに **送信サーバー (SMTP) ポート欄**へコピーボタンを追加（手入力が必要な数値のため）。表示のみ・復元/データ処理ロジック不変。

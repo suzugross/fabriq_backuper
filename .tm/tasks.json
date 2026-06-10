@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-10T14:42:38+09:00",
+  "updatedAt": "2026-06-10T16:27:41+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -145,16 +145,16 @@
       "claudeNote": "実装完了(v0.68.1)。Outlook 完コピ疑似画面 Show-OutlookAccounts.ps1 で、データファイル選択ブロック(新しい/既存の Outlook データ ファイル ラジオ + PST パス欄)を「詳細設定」と同じ赤リング(Add_Paint+DrawEllipse)で常時囲み注意喚起。ユーザ確定=常に表示+ブロック全体。実装=既存 Add_Paint に DrawEllipse を1つ追加(DfNew/DfExisting/PstFile の Bounds を Rectangle::Union+Inflate(14,12)、.Red 2.5pt、:mui null ガード)。既存の needAdvanced 詳細設定リングと共存(SmoothingMode を先頭へ移動)。表示のみ・復元/データ処理ロジック不変。静的検証(BOM/balance, mui コントロール 825-827 定義確認)。restore.ps1 Stage5.7 で配備されるので whole-tree 再配置で反映。残: 実機(PST 紐づけ有/無/IMAP の各アカウントで常に赤丸が出る・詳細設定リングと二重表示が崩れない を確認)。 【v0.68.2】詳細設定タブ: コピーボタンを「使用する暗号化接続の種類」(ドロップダウンで貼付不可=無意味)から撤去し、「送信サーバー(SMTP)ポート」欄に追加(手入力要の数値・ 捕捉→Add-CopyButton)。暗号化種類は New-Data | Out-Null で破棄( 廃止=未使用警告も解消)。Add-CopyButton は欄右隣(Right+3,Top)配置で他要素と重なりなし。表示のみ・ロジック不変。残: 実機(詳細設定→詳細設定タブで SMTP ポートにコピーボタン・暗号化種類にボタン無し を確認)。",
       "status": "完了",
       "createdAt": "2026-06-08T17:44:32.1131814+09:00",
-      "updatedAt": "2026-06-09T11:52:58.4411139+09:00"
+      "updatedAt": "2026-06-10T15:38:22.0074669+09:00"
     },
     {
       "id": "t-0017",
       "title": "GUI画面のCMD画面について",
-      "content": "",
-      "claudeNote": "",
-      "status": "未着手",
+      "content": "\r\nGUI画面表示時のCMD画面併設立ち上げ挙動について\r\n\r\n・リストア画面、バックアップ画面\r\n・ハンドオフGUI\r\n・クリーンアップGUI\r\n\r\nこれらについて、詳細情報はCMDで表示していますが、画面上から隠すか、非表示にすることはできるか、という相談。",
+      "claudeNote": "実装(v0.71.2)。GUI 併設の CMD コンソールを最小化起動に変更(ユーザ相談=画面から隠せるか)。ユーザ選択=最小化(手軽)・対象3つ(BackUper/HandoffViewer/Cleanup)、LAN-Prep は確認プロンプトのため対象外。実装=各ランチャ .cs の ProcessStartInfo に powershell 引数 -WindowStyle Minimized + WindowStyle=ProcessWindowStyle.Minimized を追加し3 EXE 再ビルド(csc・各57344B・埋込検証: -WindowStyle Minimized + 各ps1)。コンソールは存続(タスクバー格納)なので Read-Host/起動診断は復元すれば確認可=完全非表示でなく最小化(.ps1 不変・低リスク)。完全に隠す案(CreateNoWindow+log+エラーダイアログ)は将来の選択肢として保留。残: 実機(3 GUI 起動で CMD 窓が画面に出ずタスクバー最小化・GUI 正常・エラー時タスクバーから復元で確認可)。",
+      "status": "対応中",
       "createdAt": "2026-06-09T11:53:40.8903929+09:00",
-      "updatedAt": "2026-06-09T11:54:56.1343662+09:00"
+      "updatedAt": "2026-06-10T16:27:41+09:00"
     }
   ]
 }

@@ -3,9 +3,9 @@
 <!-- このファイルは TM アプリが .tm/tasks.json から自動生成します。
      直接編集しないでください（次回保存で上書きされます）。
      タスクの追加・更新は tasks.json か TM アプリから行ってください。 -->
-最終更新: 2026-06-09 23:04
+最終更新: 2026-06-10 16:15
 
-## 未着手 (3)
+## 未着手 (2)
 
 ### [t-0007] レジストリバックアップ
 
@@ -18,20 +18,38 @@
 
 <sub>更新: 2026-06-06 13:44 ／ 作成: 2026-06-06 13:42</sub>
 
-### [t-0013] ディスク容量やバックアップデータ量の表示
+### [t-0017] GUI画面のCMD画面について
 
 **内容:**
 
-ディスクの空き容量やバックアップデータ量、そして、その差分（リストアしたあとの想定ディスク空き容量）を、リストア画面の目につくところに表示させ、リストア前に軽く状況を確認できるようにしたい。目につくとはいっても大きく表示させる必要はなし
 
+GUI画面表示時のCMD画面併設立ち上げ挙動について
 
-<sub>更新: 2026-06-08 09:51 ／ 作成: 2026-06-08 09:48</sub>
+・リストア画面、バックアップ画面
+・ハンドオフGUI
+・クリーンアップGUI
 
-### [t-0017] GUI画面のCMD画面について
+これらについて、詳細情報はCMDで表示していますが、画面上から隠すか、非表示にすることはできるか、という相談。
 
-<sub>更新: 2026-06-09 11:54 ／ 作成: 2026-06-09 11:53</sub>
+<sub>更新: 2026-06-10 16:15 ／ 作成: 2026-06-09 11:53</sub>
 
-## 完了 (12)
+## 対応中 (1)
+
+### [t-0004] リモートデスクトップ機能
+
+**内容:**
+
+・移行先PCへ Windows標準の RDP で接続できるようにする。
+・データ移行後すぐ画面を確認したいがディスプレイが余っていない時の補助。
+・資格情報は、共有フォルダで使ったものを流用する想定。
+
+**Claudeメモ:**
+
+Phase1 実装完了(v0.70.0)。リモートデスクトップ接続機能。main_form ヘッダに常設ボタン(全ビュー共通=移行元↔先どちらからでも・任意タイミング)。新規 backuper/lib/ui/rdp_helper.ps1: Get-RdpPeerAddress(役割→相手IP: source→network.target.ipAddress/target→source/backupRootUncホスト/無→手入力) / Get-RdpPresetUsername / Get-RdpPresetPassword(拡張HOSTLIST ENC: を Connect-UncFromExtendedHostlist と同方式でオンデマンド復号・平文非キャッシュ) / Test-RdpReachable(3389事前判定) / Test-RdpRevertDone(H4警告) / Show-RdpConnectDialog(宛先/ユーザ名/パスワード編集可・前埋め・self拒否) / Invoke-RemoteDesktop(cmdkey /generic:TERMSRV 投入→mstsc /v→追跡) / Update-RdpCleanup(3秒Timer・mstsc終了で cmdkey /delete) / Clear-RdpCleanupAll(閉時sweep)。資格情報ハイブリッド: ENC:あり→cmdkey全自動/無→mstsc標準プロンプト。セキュリティ: cmdkey は接続後のみ削除(mstscは接続時のみ参照)・-PassThru null でも閉時sweepで取り残さない・平文保存なし。main.ps1 dot-source 追加(unc_connect_dialog の後)。多エージェント敵対レビュー(Explore2): PS5.1/配線/UI/回帰=指摘0、security/lifecycle=実バグ1(null-proc時 cred 取り残し→track-even-if-null+null-procは閉時sweepで対処)+自動変数 $pwd→$pw 是正(PSScriptAnalyzer 検出・$PWD 衝突)。残: P2(LAN-Prep RDP有効化+rollback snapshot復元 ON/OFF両ケース)・P3(Revert完全性監査)・実機(source→target/target→source/拡張HOSTLISTワンクリック/手入力/cmdkey後始末 cmdkey /list 残無/3389警告)。 【Phase2 完了 v0.71.0・敵対レビュー実バグ0】LAN-Prep で移行先(及び双方)の RDP を opt-in 有効化+Revert で元状態復元。profile network.enableRemoteDesktop(既定false)。新規 tools/lan_prep/lib/remote_desktop.ps1: Get-RemoteDesktopState(fDenyTSConnections + Remote Desktop/リモート デスクトップ FWグループ)/Enable-RemoteDesktopAccess(fDeny=0+FW有効)/Set-RemoteDesktopState(復元: Enabled→0/1, FW enable/disable)。Prepare: 有効化直前に現状捕捉→snapshot に rdp={wasEnabled,firewallWasEnabled} Add-Member+再保存(rdp存在=LAN-Prep変更印)。Revert: snapshot.rdp ありのみ Set-RemoteDesktopState で復元(元OFF→OFF/元ON→そのまま)、旧snapshotは不干渉。dot-source Prepare/Revert 双方。多エージェントレビュー(Explore2): 統合/回帰/PS5.1/encoding=指摘0、往復正当性=PASS、唯一の指摘=double-Prepare冪等性は既存network snapshotと同一の一度だけ前提(in-memory ガード不可・network非対称回避)→コメント明文化で対処。残: Phase3(Revert完全性監査: file/printer共有・network category 等も snapshot 捕捉/復元になっているか)・実機(profile true で Prepare→移行先RDP有効→Phase1接続→Revert で元OFFに戻る/元ONはそのまま)。 【実機確認 2026-06-10】Phase1(RDP接続)+Phase2(LAN-Prep RDP有効化/Revert復元)を実機で確認OK: RDP無効→有効化→Revertで無効に復元 / RDP有効→有効化→Revertでそのまま有効。原因切り分けで判明=実プロファイルに enableRemoteDesktop フラグが無かった(古いJSON)→share配布の migration_profile.json を最新書式+フラグtrueに更新済(実値保持)。注意: 設定値配布ツリー(apps/fabriq_backuper)には tools/lan_prep が無く、LAN-Prep 本体は別ツリー(要 v0.71.0)。残=Phase3(任意・Revert完全性監査: 特に Enable-FileAndPrinterSharingRule で有効化した FW が Revert で復元されない未対応ギャップ。network IP/category・share・RDP は復元済)。 【Phase3 完了 v0.71.1・敵対レビュー実バグ0】LAN-Prep Revert の戻し漏れ修正: ファイル・プリンタ共有 FW を原状復帰。Prepare は共有用に有効化するが Revert が戻していなかった(元OFF機が移行後ONのまま)。firewall.ps1 に Get-/Set-FileAndPrinterSharingState 追加(RDP Phase2 同方式)。Prepare: 有効化直前に捕捉→snapshot fileAndPrinterSharing={wasEnabled} 追記(存在=変更印)・新フラグ不要(既存 enableFileAndPrinterSharing 再利用=既存プロファイルも自動対象)。Revert: 当該項目ありのみ復元(元OFF→OFF/元ON→そのまま)+firewall.ps1 を dot-source 追加。これで LAN-Prep の全変更点(IP/カテゴリ/共有/RDP/共有FW)が Revert で原状復帰=「変更箇所は全部元に戻す」達成。レビュー(Explore): 往復OFF→有効化→OFF/ON→そのまま・統合・PS5.1・presence-gate=指摘0。残: 実機(元OFF PC を Prepare→Revert で 共有FW が OFF に戻る確認)。t-0004 は Phase1(実機OK)+Phase2(実機OK)+Phase3(実装済・実機待ち)。
+
+<sub>更新: 2026-06-10 14:42 ／ 作成: 2026-06-05 20:36</sub>
+
+## 完了 (13)
 
 ### [t-0001] バックアップデータのクリーンアップについて
 
@@ -160,6 +178,19 @@ P0+P1 実装+敵対的レビュー完了(v0.64.0・実バグ0)。実装範囲=P0
 
 <sub>更新: 2026-06-08 17:52 ／ 作成: 2026-06-07 18:31</sub>
 
+### [t-0013] ディスク容量やバックアップデータ量の表示
+
+**内容:**
+
+ディスクの空き容量やバックアップデータ量、そして、その差分（リストアしたあとの想定ディスク空き容量）を、リストア画面の目につくところに表示させ、リストア前に軽く状況を確認できるようにしたい。目につくとはいっても大きく表示させる必要はなし
+
+
+**Claudeメモ:**
+
+実装完了(v0.69.1・敵対的レビュー 指摘→修正→再検証で実バグ0)。リストア画面に「ディスク容量見積り」を小さく表示(ユーザ確定=選択中バックアップ総量+manifest情報直下の専用行)。restore_view.ps1: RestoreDiskLabel(X24 Y127 W880 H15)+Format-DiskSize(GB/MB/KB)+Update-RestoreDiskInfo(表示専用/null・例外ガード/未選択時クリア)。対象ドライブ=Get-SelectedRestoreUserProfilePath の root(既定 SystemDrive)の [System.IO.DriveInfo].AvailableFreeSpace、量=manifest summary.totalBytes、想定空き=空き-量(1GB未満/負は赤)。再計算=Update-RestoreSelection(選択/参照/更新t-0008)末尾+対象ユーザ変更。レイアウト: manifest ラベルは2行容量(H28)維持し、ディスク行を2行目位置に排他オーバーラップ配置(選択時=manifest短1行+ディスク行/未選択時=長文2行+ディスク行クリア)で下段非連鎖。留意=ステージングは既にディスク上・設定系はhandoff(小)なので空き-総量はやや保守的(安全側)な目安。レビュー経緯: 初回H28→H15縮小で未選択時の長文がクリップ(実バグ1)→H28に戻しオーバーラップ化→再検証で全RestoreManifestLabel.Text代入を追跡し排他性確証(parse失敗は manifest セット前/Get-RestoreUserdataProblemCount は try/catch で非throw)・実バグ0。残:実機(空き/量/想定空きの表示・赤警告・参照/更新/ユーザ変更で更新・長文未選択メッセージが2行表示される回帰なし を確認)。 【v0.69.2 表示位置是正】実機でディスク行が非表示だった(ユーザ報告+スクショ)。原因=WinForms の Transparent ラベルは背後の兄弟を透かさず親背景を描く+z-order で先 Add の manifest ラベル(H28)が前面 → 重ねたディスク行を塗り潰して隠蔽。前回レビューは透過の実挙動を見落とし。修正=上部オーバーラップ撤去・manifest を元位置(Y114 H28)へ・ディスク行を画面下部「リストア開始」ボタン左の空き帯(X24 Y696 W660 H24)へ移設(重なりなし常時表示)。算出/配線不変。移設版を多エージェント敵対的レビュー→指摘0。教訓を memory(reference_winforms_transparent_label_overlap)に記録。残:実機(下部にディスク行が表示・参照/更新/ユーザ変更で更新・赤警告)。 【v0.69.3 レイアウト調整】リストア開始ボタンが下ギリギリ(見栄え悪・ユーザ指摘)。原因=リストアはグリッドが大きく(Y348 H312=下端660)ボタンが Y684(下端728)へ押し下げられ内容領域(フォーム810→内容≈720)をはみ出し。修正=ボタンを backup と同じ Y654(下端698・下余白≈22px)へ/グリッド H312→H288(下端660→636,ボタンとの間18px)/ディスク行 Y696→Y666(ボタンに追従)。ウィンドウ高は不変(810のまま・小型画面配慮)。グリッドは約1行低くなるがスクロール可。座標のみ・ロジック不変。 【v0.69.4 集計バグ修正】ディスク行が「バックアップ 0 B」だった根本=集計マニフェストの summary.totalBytes が常に0(既存潜在バグ)。原因=New-AggregateManifest の合算ガード $r.Summary.PSObject.Properties.Name -contains 'totalBytes' がセクション結果 Summary([ordered]辞書)でキー列挙できず常にfalse→一度も加算されず(配下 sections.<name>.summary.totalBytes は正値。ConvertTo-SectionManifestEntry は .totalBytes 直接アクセスのため)。実マニフェスト E:/test/outlookbktest/2026_05_16_124305 で確認(集計0 vs userdata 271360)。Merge-AggregateManifest は既に IDictionary 判定で正しかった。修正(1)New を Merge と同じ shape-agnostic 読み(IDictionary→['totalBytes'])に統一→新規は正値。(2)Update-RestoreDiskInfo に summary.totalBytes が0/欠落時の配下セクション合算フォールバック追加→既存バックアップでも正表示(node で 0→271360 検証)。多エージェントレビュー指摘0。残:実機(既存/新規バックアップでバックアップ量が実値表示・リストア後の空き=空き-量)。 【完了 2026-06-10】実機でディスク容量表示(空き/バックアップ量/リストア後の想定空き)が正しく表示されることをユーザ確認。v0.69.1(機能)→0.69.2(透過/z-order で隠れる不具合を下部ボタン左へ移設)→0.69.3(リストア開始ボタンの下部余白をバックアップと統一)→0.69.4(集計 summary.totalBytes 常時0の既存バグ修正+ディスク行フォールバック)の一連で完了。
+
+<sub>更新: 2026-06-10 11:59 ／ 作成: 2026-06-08 09:48</sub>
+
 ### [t-0014] 資格情報読み込み待ちについて
 
 **内容:**
@@ -195,19 +226,9 @@ P0+P1 実装+敵対的レビュー完了(v0.67.0・実バグ0)。Show-BusyOverla
 
 実装完了(v0.68.1)。Outlook 完コピ疑似画面 Show-OutlookAccounts.ps1 で、データファイル選択ブロック(新しい/既存の Outlook データ ファイル ラジオ + PST パス欄)を「詳細設定」と同じ赤リング(Add_Paint+DrawEllipse)で常時囲み注意喚起。ユーザ確定=常に表示+ブロック全体。実装=既存 Add_Paint に DrawEllipse を1つ追加(DfNew/DfExisting/PstFile の Bounds を Rectangle::Union+Inflate(14,12)、.Red 2.5pt、:mui null ガード)。既存の needAdvanced 詳細設定リングと共存(SmoothingMode を先頭へ移動)。表示のみ・復元/データ処理ロジック不変。静的検証(BOM/balance, mui コントロール 825-827 定義確認)。restore.ps1 Stage5.7 で配備されるので whole-tree 再配置で反映。残: 実機(PST 紐づけ有/無/IMAP の各アカウントで常に赤丸が出る・詳細設定リングと二重表示が崩れない を確認)。 【v0.68.2】詳細設定タブ: コピーボタンを「使用する暗号化接続の種類」(ドロップダウンで貼付不可=無意味)から撤去し、「送信サーバー(SMTP)ポート」欄に追加(手入力要の数値・ 捕捉→Add-CopyButton)。暗号化種類は New-Data | Out-Null で破棄( 廃止=未使用警告も解消)。Add-CopyButton は欄右隣(Right+3,Top)配置で他要素と重なりなし。表示のみ・ロジック不変。残: 実機(詳細設定→詳細設定タブで SMTP ポートにコピーボタン・暗号化種類にボタン無し を確認)。
 
-<sub>更新: 2026-06-09 11:52 ／ 作成: 2026-06-08 17:44</sub>
+<sub>更新: 2026-06-10 15:38 ／ 作成: 2026-06-08 17:44</sub>
 
-## 保留 (2)
-
-### [t-0004] リモートデスクトップ機能
-
-**内容:**
-
-・移行先PCへ Windows標準の RDP で接続できるようにする。
-・データ移行後すぐ画面を確認したいがディスプレイが余っていない時の補助。
-・資格情報は、共有フォルダで使ったものを流用する想定。
-
-<sub>更新: 2026-06-09 23:04 ／ 作成: 2026-06-05 20:36</sub>
+## 保留 (1)
 
 ### [t-0012] バックアップおよびリストア機構超大型改修
 

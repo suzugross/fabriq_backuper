@@ -67,9 +67,13 @@ namespace FabriqCleanup
                 var psi = new ProcessStartInfo
                 {
                     FileName  = "conhost.exe",
-                    Arguments = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \".\\fabriq_cleanup.ps1\"",
+                    Arguments = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File \".\\fabriq_cleanup.ps1\"",
                     WorkingDirectory = baseDir,
                     UseShellExecute  = true,
+                    // t-0017: open the diagnostic console MINIMIZED (taskbar only) so it
+                    // does not sit on screen beside the GUI. The console still exists, so
+                    // Read-Host / startup errors stay reachable by restoring the window.
+                    WindowStyle = ProcessWindowStyle.Minimized,
                 };
 
                 Process.Start(psi);
