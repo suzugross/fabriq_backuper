@@ -143,22 +143,13 @@ function New-RestoreView {
     $panel.Controls.Add($script:RestoreBrowseLabel)
 
     # H28 = two-line capacity: the "not found" / parse-failure messages are long
-    # and wrap to a 2nd line. Those appear ONLY when no backup is selected -- i.e.
-    # exactly when the disk label below is empty -- so the two never render text in
-    # the same pixels (see the RestoreDiskLabel note). Keep H28 (do NOT shrink, or
-    # the long messages get clipped).
-    $script:RestoreManifestLabel = New-StyledLabel -Text "" -X 24 -Y 112 -Width 880 -Height 28 -FgColor $script:fgDim
+    # and wrap to a 2nd line; keep H28 so they are not clipped.
+    # (The disk-space line is NOT placed here: a WinForms Transparent label does not
+    #  show sibling controls behind it -- it paints the parent background -- and the
+    #  manifest label sits in front by z-order, so an overlapping disk label was
+    #  hidden. The disk line now lives next to the リストア開始 button, see below.)
+    $script:RestoreManifestLabel = New-StyledLabel -Text "" -X 24 -Y 114 -Width 880 -Height 28 -FgColor $script:fgDim
     $panel.Controls.Add($script:RestoreManifestLabel)
-
-    # v0.69.1 (t-0013): compact disk-space line aligned to the manifest label's 2nd
-    # line (intentional overlap). When a backup IS selected the manifest shows its
-    # short single "aggregate manifest | ..." line (bounded: Windows oldPcName <= 15
-    # chars => never wraps), so its 2nd-line zone is empty and this disk line owns
-    # those pixels. When NO backup is selected this label is cleared
-    # (Update-RestoreDiskInfo) and the manifest's long 2-line message shows through.
-    # Shows: target drive free / selected-backup size / estimated free after restore.
-    $script:RestoreDiskLabel = New-StyledLabel -Text "" -X 24 -Y 127 -Width 880 -Height 15 -FgColor $script:fgDim
-    $panel.Controls.Add($script:RestoreDiskLabel)
 
     # ---- Target user row (v0.51.0: moved up; the section-checkbox grid and the
     # per-section selection modals are replaced by the consolidated entry list
@@ -295,6 +286,13 @@ function New-RestoreView {
     $btnStart.Font = $script:fontLarge
     $btnStart.Add_Click({ Invoke-RestoreStart })
     $panel.Controls.Add($btnStart)
+
+    # v0.69.2 (t-0013): disk-space estimate placed right next to the リストア開始 button
+    # (in the free area to its left) so the operator sees it at the action point and it
+    # is never hidden by other rows. Shows: target drive free / selected-backup size /
+    # estimated free after restore (red when low). Filled by Update-RestoreDiskInfo.
+    $script:RestoreDiskLabel = New-StyledLabel -Text "" -X 24 -Y 696 -Width 660 -Height 24 -FgColor $script:fgDim
+    $panel.Controls.Add($script:RestoreDiskLabel)
 
     return $panel
 }
