@@ -993,12 +993,23 @@ function Update-RestoreDiskInfo {
     $agg = $script:RestoreCurrentManifest
     if ($null -eq $agg) { $script:RestoreDiskLabel.Text = ''; return }
 
-    # selected-backup total size (aggregate manifest summary.totalBytes)
+    # selected-backup total size. Prefer the rolled-up summary.totalBytes, but
+    # manifests written before v0.69.4 recorded 0 there (aggregator guard bug), so
+    # fall back to summing the per-section summaries -- which are correct on disk.
+    # ($agg is from ConvertFrom-Json => PSCustomObject, so property access is fine.)
     $backupBytes = 0
-    if ($null -ne $agg.summary -and `
-        $agg.summary.PSObject.Properties.Name -contains 'totalBytes' -and `
-        $null -ne $agg.summary.totalBytes) {
+    if ($null -ne $agg.summary -and $null -ne $agg.summary.totalBytes) {
         try { $backupBytes = [long]$agg.summary.totalBytes } catch { $backupBytes = 0 }
+    }
+    if ($backupBytes -le 0 -and $null -ne $agg.sections) {
+        $secSum = 0
+        foreach ($sp in $agg.sections.PSObject.Properties) {
+            $secSummary = $sp.Value.summary
+            if ($null -ne $secSummary -and $null -ne $secSummary.totalBytes) {
+                try { $secSum += [long]$secSummary.totalBytes } catch { }
+            }
+        }
+        $backupBytes = $secSum
     }
 
     # target drive = root of the selected restore user profile (fallback: system drive)

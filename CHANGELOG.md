@@ -16,6 +16,11 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.69.4: **集計マニフェストの `summary.totalBytes` が常に 0 になる既存バグを修正（ディスク容量表示の「バックアップ 0 B」誤表示）(TM t-0013)** —
+  `New-AggregateManifest` のバイト合算ガード `$r.Summary.PSObject.Properties.Name -contains 'totalBytes'` が、セクション結果の `Summary`（`[ordered]` 辞書）では**キーをプロパティ列挙できず常に false** となり、ロールアップ `summary.totalBytes` が一度も加算されず **0** のままだった（配下 `sections.<name>.summary.totalBytes` は正値）。実マニフェストで確認（集計 0 vs userdata 271360）。
+  - **根本**: `New-AggregateManifest` の合算を、既に正しい `Merge-AggregateManifest` と同じ **shape-agnostic 読み**（`IDictionary` 判定 → `['totalBytes']`）に統一。→ 新規バックアップの `summary.totalBytes` と「aggregate manifest … totalBytes=X MB」ラベルが正値に。
+  - **表示**: `Update-RestoreDiskInfo` に、`summary.totalBytes` が 0/欠落のとき**配下セクション summary を合算するフォールバック**を追加。→ v0.69.4 以前に作成済みのバックアップ（0 のまま）でもディスク容量行が正しい量を表示。
+  - backup/restore のデータ処理本体は不変。多エージェント敵対的レビュー指摘ゼロ。
 - backuper v0.69.2: **リストア画面のディスク容量表示が見えない不具合を修正（下部「リストア開始」ボタン横へ移設）(TM t-0013)** —
   v0.69.1 では manifest ラベル（H28・前面）の2行目位置にディスク行を**重ねて**配置していたが、WinForms の `Transparent` ラベルは**背後の兄弟コントロールを透かさず親背景を描く**ため、前面の manifest ラベルがディスク行を**塗りつぶして隠していた**（実機で非表示）。
   オーバーラップ配置を撤去し manifest ラベルを元位置（Y114 H28）に戻したうえで、**ディスク行を画面下部「リストア開始」ボタンのすぐ左の空き帯（X24 Y696 W660）へ移設**＝重なりなしで常時表示。算出ロジック（`Update-RestoreDiskInfo`/`Format-DiskSize`/再計算配線）は不変。多エージェント敵対的レビュー指摘ゼロ。

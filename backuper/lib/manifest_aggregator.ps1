@@ -72,9 +72,19 @@ function New-AggregateManifest {
             'Failed'   { $failedCount++ }
             'Skipped'  { $skippedCount++ }
         }
-        if ($r.Summary -and $r.Summary.PSObject.Properties.Name -contains 'totalBytes') {
-            $totalBytes += [long]$r.Summary.totalBytes
+        # v0.69.4: shape-agnostic read (mirror Merge-AggregateManifest). $r.Summary is
+        # an [ordered] dict for which .PSObject.Properties does NOT surface keys, so the
+        # old "-contains 'totalBytes'" guard was always false and summary.totalBytes was
+        # left 0 (the per-section entries were fine; only the rolled-up total was wrong).
+        $sumObj = $r.Summary
+        $tbVal = $null
+        if ($sumObj -is [System.Collections.IDictionary]) {
+            $tbVal = $sumObj['totalBytes']
+        } elseif ($null -ne $sumObj) {
+            $tbProp = $sumObj.PSObject.Properties['totalBytes']
+            if ($tbProp) { $tbVal = $tbProp.Value }
         }
+        if ($null -ne $tbVal) { $totalBytes += [long]$tbVal }
 
         # Phase 2.2.1: internalized sections expose InternalManifestPath
         # (absolute path to sections/<name>/manifest.json). Legacy wrapper
