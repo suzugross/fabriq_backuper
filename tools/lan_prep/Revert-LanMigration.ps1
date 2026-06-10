@@ -33,6 +33,7 @@ if (-not $ProfilePath) {
 . (Join-Path $script:LanPrepRoot 'lib\network_config.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\share_setup.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\rollback_snapshot.ps1')
+. (Join-Path $script:LanPrepRoot 'lib\remote_desktop.ps1')   # v0.71.0 (t-0004 P2): RDP restore
 # v0.40.0: shared migration-path resolver (so the informational note below
 # shows the derived local path instead of the '<AUTO>' placeholder).
 . (Join-Path $script:RepoRoot 'backuper\lib\migration_paths.ps1')
@@ -118,6 +119,9 @@ if (-not $snapshot.dhcpEnabled) {
     Write-Host "[plan]   DNS            : $(if ($snapshot.dnsServers -and $snapshot.dnsServers.Count -gt 0) { $snapshot.dnsServers -join ', ' } else { '(none)' })"
 }
 Write-Host "[plan] network category : $(if ($snapshot.networkCategory) { $snapshot.networkCategory } else { '(unchanged)' })"
+if ($null -ne $snapshot.rdp) {
+    Write-Host "[plan] remote desktop   : restore to $(if ($snapshot.rdp.wasEnabled) {'ON'} else {'OFF'}) (LAN-Prep had enabled it)"
+}
 $willRemoveShare = ($snapshot.role -eq 'target' -and $null -ne $migProfile -and $migProfile.share.shareName -and $migProfile.rollback.removeShare)
 if ($willRemoveShare) {
     Write-Host "[plan] remove share     : $($migProfile.share.shareName)"
@@ -140,6 +144,16 @@ Write-Host ""
 Write-Host "[step] restoring network configuration..." -ForegroundColor Cyan
 Restore-MigrationNetworkConfig -Snapshot $snapshot
 Write-Host "[ok] network restored" -ForegroundColor Green
+
+# v0.71.0 (t-0004 P2): restore Remote Desktop to its pre-LAN-Prep state -- but ONLY
+# if LAN-Prep enabled it (the snapshot carries 'rdp' only then). was-ON -> leave ON;
+# was-OFF -> turn back OFF; firewall group likewise. Older snapshots have no 'rdp' so
+# RDP is left untouched.
+if ($null -ne $snapshot.rdp) {
+    Write-Host ""
+    Write-Host "[step] restoring Remote Desktop state..." -ForegroundColor Cyan
+    Set-RemoteDesktopState -Enabled ([bool]$snapshot.rdp.wasEnabled) -FirewallEnabled ([bool]$snapshot.rdp.firewallWasEnabled)
+}
 
 if ($willRemoveShare) {
     Write-Host ""

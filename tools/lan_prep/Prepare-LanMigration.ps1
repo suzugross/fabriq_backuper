@@ -49,6 +49,7 @@ if (-not $ProfilePath) {
 . (Join-Path $script:LanPrepRoot 'lib\network_config.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\share_setup.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\firewall.ps1')
+. (Join-Path $script:LanPrepRoot 'lib\remote_desktop.ps1')   # v0.71.0 (t-0004 P2): RDP enable + state capture
 . (Join-Path $script:LanPrepRoot 'lib\rollback_snapshot.ps1')
 # v0.40.0: shared migration-path resolver (same function the Backuper
 # process uses). It lives under backuper\lib so both processes share one
@@ -166,6 +167,7 @@ Write-Host "[plan] new gateway      : $(if ($netConfig.gateway) { $netConfig.gat
 Write-Host "[plan] new DNS servers  : $(if ($netConfig.dnsServers -and $netConfig.dnsServers.Count -gt 0) { $netConfig.dnsServers -join ', ' } else { '(none)' })"
 Write-Host "[plan] network category : $(if ($migProfile.network.setNetworkCategoryPrivate) {'Private'} else {'(unchanged)'})"
 Write-Host "[plan] firewall sharing : $(if ($migProfile.network.enableFileAndPrinterSharing) {'enable File and Printer Sharing'} else {'(unchanged)'})"
+Write-Host "[plan] remote desktop   : $(if ($migProfile.network.enableRemoteDesktop) {'enable Remote Desktop (restored on revert)'} else {'(unchanged)'})"
 if ($Role -eq 'target') {
     Write-Host "[plan] share name       : $($migProfile.share.shareName)"
     Write-Host "[plan] local path       : $($migProfile.share.localPath)"
@@ -227,6 +229,27 @@ if ($migProfile.network.setNetworkCategoryPrivate) {
 }
 if ($migProfile.network.enableFileAndPrinterSharing) {
     Enable-FileAndPrinterSharingRule
+}
+
+# v0.71.0 (t-0004 P2): opt-in Remote Desktop enable. Capture the PRE-change state,
+# enable RDP, then record it in the snapshot. The snapshot carries an 'rdp' block
+# ONLY when LAN-Prep enabled RDP, so Revert knows to restore exactly what it changed
+# (was-OFF -> turn back OFF; was-ON -> leave ON). Best-effort; never aborts lan-prep.
+# NOTE (one-shot assumption): like the network snapshot above, this captures the
+# CURRENT state -- Prepare is meant to run once on a pristine machine. Re-running
+# Prepare before Revert recaptures the now-enabled state as the "original" (same
+# limitation the network IP snapshot already has); run Revert before re-preparing.
+if ($migProfile.network.enableRemoteDesktop) {
+    Write-Host ""
+    Write-Host "[step] enabling Remote Desktop (opt-in)..." -ForegroundColor Cyan
+    $rdpBefore = Get-RemoteDesktopState
+    Enable-RemoteDesktopAccess
+    $snapshot | Add-Member -NotePropertyName 'rdp' -NotePropertyValue ([pscustomobject]@{
+        wasEnabled         = [bool]$rdpBefore.Enabled
+        firewallWasEnabled = [bool]$rdpBefore.FirewallEnabled
+    }) -Force
+    Save-RollbackSnapshot -Snapshot $snapshot -Path $migProfile.rollback.snapshotPath
+    Write-Host "[ok] Remote Desktop pre-state recorded in snapshot (for revert)" -ForegroundColor Green
 }
 
 # Step 4: target-only - SMB share creation.

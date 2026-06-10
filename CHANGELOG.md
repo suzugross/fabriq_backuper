@@ -80,6 +80,12 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.71.0: **LAN-Prep で移行先の RDP を有効化し、Revert で元状態へ復元 (TM t-0004・Phase 2)** —
+  `migration_profile.json` の **`network.enableRemoteDesktop: true`**（opt-in・既定 false）で、LAN-Prep 実行時に**この PC のリモートデスクトップ（`fDenyTSConnections=0` ＋「Remote Desktop」ファイアウォール グループ）を有効化**。移行元・移行先の双方で true にすれば双方向 RDP が可能。
+  - 新規 `tools/lan_prep/lib/remote_desktop.ps1`（`Get-RemoteDesktopState`／`Enable-RemoteDesktopAccess`／`Set-RemoteDesktopState`・best-effort・FW は EN/JA 両グループ名対応）。
+  - **Prepare**：有効化の**直前に現状を捕捉**し、rollback snapshot に `rdp = { wasEnabled, firewallWasEnabled }` を追記して再保存（`rdp` の存在＝LAN-Prep が変更した印）。
+  - **Revert**：snapshot に `rdp` があるときのみ**元の状態へ復元**（元 OFF→OFF に戻す／元 ON→そのまま、FW も同様）。`rdp` の無い旧 snapshot は RDP に触れない。
+  - 注意：Prepare は一度だけ実行する前提（既存のネットワーク snapshot と同じ。再実行は Revert 後に）。fabriq 本体不可侵。多エージェント敵対的レビュー（往復正当性・統合/回帰/PS5.1 ＝実バグ0、冪等性は既存と同一前提として明文化）。残: Phase 3(Revert 完全性監査)・実機スモーク。
 - backuper v0.70.0: **リモートデスクトップ機能（移行ペア相手へ mstsc 接続）(TM t-0004・Phase 1)** —
   メイン画面ヘッダに「リモートデスクトップ」ボタンを常設（全ビュー共通＝**移行元↔移行先どちらからでも・任意のタイミング**で接続可）。
   - 接続先は profile から相手側 IP を解決（source→`network.target.ipAddress`／target→`network.source.ipAddress`／`backupRootUnc` ホスト部／無ければ手入力）。資格情報は**共有と同じものを流用（ハイブリッド）**：拡張HOSTLIST の `ENC:` をオンデマンド復号して `cmdkey` 投入＝プロンプトなし接続、無ければユーザ名前埋めで mstsc 標準入力。

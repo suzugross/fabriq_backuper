@@ -17,7 +17,9 @@
       "dnsServers": []
     },
     "setNetworkCategoryPrivate": true,
-    "enableFileAndPrinterSharing": true
+    "enableFileAndPrinterSharing": true,
+    "_commentRemoteDesktop": "enableRemoteDesktop=true で この PC の リモートデスクトップ(RDP) を LAN-Prep が有効化し、Revert で元の状態(元OFFなら OFF に戻す)に復元する。既定 false。移行元・移行先の双方で true にすると双方向 RDP が可能。",
+    "enableRemoteDesktop": false
   },
   "share": {
     "_comment": "localPath '<AUTO>' = この PC の <BackuperRoot>\\Backup に自動派生 (移行先が共有するフォルダ)。絶対パスを書くと上書き優先。",
