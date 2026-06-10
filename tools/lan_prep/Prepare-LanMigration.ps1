@@ -228,7 +228,15 @@ if ($migProfile.network.setNetworkCategoryPrivate) {
     Set-MigrationNetworkCategoryPrivate -InterfaceAlias $netConfig.interfaceAlias
 }
 if ($migProfile.network.enableFileAndPrinterSharing) {
+    # v0.71.1 (t-0004 P3): capture the PRE-change state so Revert can restore this PC's
+    # firewall posture. The snapshot carries 'fileAndPrinterSharing' ONLY when LAN-Prep
+    # enabled the group (presence = changed -> Revert restores; was-OFF -> back OFF).
+    $fpsBefore = Get-FileAndPrinterSharingState
     Enable-FileAndPrinterSharingRule
+    $snapshot | Add-Member -NotePropertyName 'fileAndPrinterSharing' -NotePropertyValue ([pscustomobject]@{
+        wasEnabled = [bool]$fpsBefore
+    }) -Force
+    Save-RollbackSnapshot -Snapshot $snapshot -Path $migProfile.rollback.snapshotPath
 }
 
 # v0.71.0 (t-0004 P2): opt-in Remote Desktop enable. Capture the PRE-change state,

@@ -34,6 +34,7 @@ if (-not $ProfilePath) {
 . (Join-Path $script:LanPrepRoot 'lib\share_setup.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\rollback_snapshot.ps1')
 . (Join-Path $script:LanPrepRoot 'lib\remote_desktop.ps1')   # v0.71.0 (t-0004 P2): RDP restore
+. (Join-Path $script:LanPrepRoot 'lib\firewall.ps1')         # v0.71.1 (t-0004 P3): File and Printer Sharing restore
 # v0.40.0: shared migration-path resolver (so the informational note below
 # shows the derived local path instead of the '<AUTO>' placeholder).
 . (Join-Path $script:RepoRoot 'backuper\lib\migration_paths.ps1')
@@ -122,6 +123,9 @@ Write-Host "[plan] network category : $(if ($snapshot.networkCategory) { $snapsh
 if ($null -ne $snapshot.rdp) {
     Write-Host "[plan] remote desktop   : restore to $(if ($snapshot.rdp.wasEnabled) {'ON'} else {'OFF'}) (LAN-Prep had enabled it)"
 }
+if ($null -ne $snapshot.fileAndPrinterSharing) {
+    Write-Host "[plan] file/printer FW  : restore to $(if ($snapshot.fileAndPrinterSharing.wasEnabled) {'ON'} else {'OFF'}) (LAN-Prep had enabled it)"
+}
 $willRemoveShare = ($snapshot.role -eq 'target' -and $null -ne $migProfile -and $migProfile.share.shareName -and $migProfile.rollback.removeShare)
 if ($willRemoveShare) {
     Write-Host "[plan] remove share     : $($migProfile.share.shareName)"
@@ -153,6 +157,15 @@ if ($null -ne $snapshot.rdp) {
     Write-Host ""
     Write-Host "[step] restoring Remote Desktop state..." -ForegroundColor Cyan
     Set-RemoteDesktopState -Enabled ([bool]$snapshot.rdp.wasEnabled) -FirewallEnabled ([bool]$snapshot.rdp.firewallWasEnabled)
+}
+
+# v0.71.1 (t-0004 P3): restore the File and Printer Sharing firewall to its pre-LAN-Prep
+# state, but ONLY if LAN-Prep enabled it (snapshot carries 'fileAndPrinterSharing' only
+# then). was-OFF -> turn back OFF; was-ON -> leave ON. Older snapshots: left untouched.
+if ($null -ne $snapshot.fileAndPrinterSharing) {
+    Write-Host ""
+    Write-Host "[step] restoring File and Printer Sharing firewall..." -ForegroundColor Cyan
+    Set-FileAndPrinterSharingState -Enabled ([bool]$snapshot.fileAndPrinterSharing.wasEnabled)
 }
 
 if ($willRemoveShare) {

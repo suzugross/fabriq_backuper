@@ -16,6 +16,12 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.71.1: **LAN-Prep Revert の戻し漏れを修正（ファイル・プリンタ共有 FW を原状復帰）(TM t-0004・Phase 3)** —
+  Prepare は共有アクセス用に「ファイル・プリンタ共有」ファイアウォール グループを有効化するが、Revert がこれを**戻していなかった**（移行前に OFF だった PC が移行後も ON のまま残る戻し漏れ）。
+  - `firewall.ps1` に `Get-FileAndPrinterSharingState`／`Set-FileAndPrinterSharingState` を追加（RDP Phase 2 と同方式）。
+  - **Prepare**：有効化の**直前に現状を捕捉**し snapshot に `fileAndPrinterSharing = { wasEnabled }` を追記（存在＝LAN-Prep が有効化した印）。**新フラグ不要**（既存 `network.enableFileAndPrinterSharing` を再利用＝既存プロファイルも自動対象）。
+  - **Revert**：snapshot に当該項目があるときのみ復元（元 OFF→OFF に戻す／元 ON→そのまま）。`firewall.ps1` を Revert にも dot-source。
+  - これで LAN-Prep の変更点（IP/カテゴリ/共有/RDP/共有FW）が**すべて Revert で原状復帰**＝「変更したところは全部元に戻す」を達成。多エージェント敵対的レビュー指摘ゼロ。実機スモーク推奨。
 - backuper v0.69.4: **集計マニフェストの `summary.totalBytes` が常に 0 になる既存バグを修正（ディスク容量表示の「バックアップ 0 B」誤表示）(TM t-0013)** —
   `New-AggregateManifest` のバイト合算ガード `$r.Summary.PSObject.Properties.Name -contains 'totalBytes'` が、セクション結果の `Summary`（`[ordered]` 辞書）では**キーをプロパティ列挙できず常に false** となり、ロールアップ `summary.totalBytes` が一度も加算されず **0** のままだった（配下 `sections.<name>.summary.totalBytes` は正値）。実マニフェストで確認（集計 0 vs userdata 271360）。
   - **根本**: `New-AggregateManifest` の合算を、既に正しい `Merge-AggregateManifest` と同じ **shape-agnostic 読み**（`IDictionary` 判定 → `['totalBytes']`）に統一。→ 新規バックアップの `summary.totalBytes` と「aggregate manifest … totalBytes=X MB」ラベルが正値に。
