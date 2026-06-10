@@ -3,9 +3,9 @@
 <!-- このファイルは TM アプリが .tm/tasks.json から自動生成します。
      直接編集しないでください（次回保存で上書きされます）。
      タスクの追加・更新は tasks.json か TM アプリから行ってください。 -->
-最終更新: 2026-06-10 16:15
+最終更新: 2026-06-10 16:27
 
-## 未着手 (2)
+## 未着手 (1)
 
 ### [t-0007] レジストリバックアップ
 
@@ -17,6 +17,8 @@
 リストアは.regをインポートできるように集約フォルダに配備する
 
 <sub>更新: 2026-06-06 13:44 ／ 作成: 2026-06-06 13:42</sub>
+
+## 対応中 (1)
 
 ### [t-0017] GUI画面のCMD画面について
 
@@ -31,25 +33,13 @@ GUI画面表示時のCMD画面併設立ち上げ挙動について
 
 これらについて、詳細情報はCMDで表示していますが、画面上から隠すか、非表示にすることはできるか、という相談。
 
-<sub>更新: 2026-06-10 16:15 ／ 作成: 2026-06-09 11:53</sub>
-
-## 対応中 (1)
-
-### [t-0004] リモートデスクトップ機能
-
-**内容:**
-
-・移行先PCへ Windows標準の RDP で接続できるようにする。
-・データ移行後すぐ画面を確認したいがディスプレイが余っていない時の補助。
-・資格情報は、共有フォルダで使ったものを流用する想定。
-
 **Claudeメモ:**
 
-Phase1 実装完了(v0.70.0)。リモートデスクトップ接続機能。main_form ヘッダに常設ボタン(全ビュー共通=移行元↔先どちらからでも・任意タイミング)。新規 backuper/lib/ui/rdp_helper.ps1: Get-RdpPeerAddress(役割→相手IP: source→network.target.ipAddress/target→source/backupRootUncホスト/無→手入力) / Get-RdpPresetUsername / Get-RdpPresetPassword(拡張HOSTLIST ENC: を Connect-UncFromExtendedHostlist と同方式でオンデマンド復号・平文非キャッシュ) / Test-RdpReachable(3389事前判定) / Test-RdpRevertDone(H4警告) / Show-RdpConnectDialog(宛先/ユーザ名/パスワード編集可・前埋め・self拒否) / Invoke-RemoteDesktop(cmdkey /generic:TERMSRV 投入→mstsc /v→追跡) / Update-RdpCleanup(3秒Timer・mstsc終了で cmdkey /delete) / Clear-RdpCleanupAll(閉時sweep)。資格情報ハイブリッド: ENC:あり→cmdkey全自動/無→mstsc標準プロンプト。セキュリティ: cmdkey は接続後のみ削除(mstscは接続時のみ参照)・-PassThru null でも閉時sweepで取り残さない・平文保存なし。main.ps1 dot-source 追加(unc_connect_dialog の後)。多エージェント敵対レビュー(Explore2): PS5.1/配線/UI/回帰=指摘0、security/lifecycle=実バグ1(null-proc時 cred 取り残し→track-even-if-null+null-procは閉時sweepで対処)+自動変数 $pwd→$pw 是正(PSScriptAnalyzer 検出・$PWD 衝突)。残: P2(LAN-Prep RDP有効化+rollback snapshot復元 ON/OFF両ケース)・P3(Revert完全性監査)・実機(source→target/target→source/拡張HOSTLISTワンクリック/手入力/cmdkey後始末 cmdkey /list 残無/3389警告)。 【Phase2 完了 v0.71.0・敵対レビュー実バグ0】LAN-Prep で移行先(及び双方)の RDP を opt-in 有効化+Revert で元状態復元。profile network.enableRemoteDesktop(既定false)。新規 tools/lan_prep/lib/remote_desktop.ps1: Get-RemoteDesktopState(fDenyTSConnections + Remote Desktop/リモート デスクトップ FWグループ)/Enable-RemoteDesktopAccess(fDeny=0+FW有効)/Set-RemoteDesktopState(復元: Enabled→0/1, FW enable/disable)。Prepare: 有効化直前に現状捕捉→snapshot に rdp={wasEnabled,firewallWasEnabled} Add-Member+再保存(rdp存在=LAN-Prep変更印)。Revert: snapshot.rdp ありのみ Set-RemoteDesktopState で復元(元OFF→OFF/元ON→そのまま)、旧snapshotは不干渉。dot-source Prepare/Revert 双方。多エージェントレビュー(Explore2): 統合/回帰/PS5.1/encoding=指摘0、往復正当性=PASS、唯一の指摘=double-Prepare冪等性は既存network snapshotと同一の一度だけ前提(in-memory ガード不可・network非対称回避)→コメント明文化で対処。残: Phase3(Revert完全性監査: file/printer共有・network category 等も snapshot 捕捉/復元になっているか)・実機(profile true で Prepare→移行先RDP有効→Phase1接続→Revert で元OFFに戻る/元ONはそのまま)。 【実機確認 2026-06-10】Phase1(RDP接続)+Phase2(LAN-Prep RDP有効化/Revert復元)を実機で確認OK: RDP無効→有効化→Revertで無効に復元 / RDP有効→有効化→Revertでそのまま有効。原因切り分けで判明=実プロファイルに enableRemoteDesktop フラグが無かった(古いJSON)→share配布の migration_profile.json を最新書式+フラグtrueに更新済(実値保持)。注意: 設定値配布ツリー(apps/fabriq_backuper)には tools/lan_prep が無く、LAN-Prep 本体は別ツリー(要 v0.71.0)。残=Phase3(任意・Revert完全性監査: 特に Enable-FileAndPrinterSharingRule で有効化した FW が Revert で復元されない未対応ギャップ。network IP/category・share・RDP は復元済)。 【Phase3 完了 v0.71.1・敵対レビュー実バグ0】LAN-Prep Revert の戻し漏れ修正: ファイル・プリンタ共有 FW を原状復帰。Prepare は共有用に有効化するが Revert が戻していなかった(元OFF機が移行後ONのまま)。firewall.ps1 に Get-/Set-FileAndPrinterSharingState 追加(RDP Phase2 同方式)。Prepare: 有効化直前に捕捉→snapshot fileAndPrinterSharing={wasEnabled} 追記(存在=変更印)・新フラグ不要(既存 enableFileAndPrinterSharing 再利用=既存プロファイルも自動対象)。Revert: 当該項目ありのみ復元(元OFF→OFF/元ON→そのまま)+firewall.ps1 を dot-source 追加。これで LAN-Prep の全変更点(IP/カテゴリ/共有/RDP/共有FW)が Revert で原状復帰=「変更箇所は全部元に戻す」達成。レビュー(Explore): 往復OFF→有効化→OFF/ON→そのまま・統合・PS5.1・presence-gate=指摘0。残: 実機(元OFF PC を Prepare→Revert で 共有FW が OFF に戻る確認)。t-0004 は Phase1(実機OK)+Phase2(実機OK)+Phase3(実装済・実機待ち)。
+実装(v0.71.2)。GUI 併設の CMD コンソールを最小化起動に変更(ユーザ相談=画面から隠せるか)。ユーザ選択=最小化(手軽)・対象3つ(BackUper/HandoffViewer/Cleanup)、LAN-Prep は確認プロンプトのため対象外。実装=各ランチャ .cs の ProcessStartInfo に powershell 引数 -WindowStyle Minimized + WindowStyle=ProcessWindowStyle.Minimized を追加し3 EXE 再ビルド(csc・各57344B・埋込検証: -WindowStyle Minimized + 各ps1)。コンソールは存続(タスクバー格納)なので Read-Host/起動診断は復元すれば確認可=完全非表示でなく最小化(.ps1 不変・低リスク)。完全に隠す案(CreateNoWindow+log+エラーダイアログ)は将来の選択肢として保留。残: 実機(3 GUI 起動で CMD 窓が画面に出ずタスクバー最小化・GUI 正常・エラー時タスクバーから復元で確認可)。
 
-<sub>更新: 2026-06-10 14:42 ／ 作成: 2026-06-05 20:36</sub>
+<sub>更新: 2026-06-10 16:27 ／ 作成: 2026-06-09 11:53</sub>
 
-## 完了 (13)
+## 完了 (14)
 
 ### [t-0001] バックアップデータのクリーンアップについて
 
@@ -91,6 +81,20 @@ LANPREPと同じく、別exeとして分離させたい。
 実装完了→コミット(v0.56.0)。セッション一貫バックアップ: アプリ起動〜終了=1セッション=1バックアップ。同一セッション・同一ホストの2回目以降は初回集約dir(同TS)へ自動統合(トグルなし), 再起動で新TS。失敗の穴埋め/成功後の項目追加とも同じ1バックアップに統合。engine -RetryIntoAggregateDir / manifest_aggregator Merge-AggregateManifest / userdata id-mapマージ(新規項目は衝突しない新id採番) / backup_view UI / progress_view ラベル。多エージェント敵対的検証3R(HIGH data-loss・medium状態誤報を検出→修正→指摘ゼロ)。残: 実機スモーク。
 
 <sub>更新: 2026-06-07 13:33 ／ 作成: 2026-06-05 20:35</sub>
+
+### [t-0004] リモートデスクトップ機能
+
+**内容:**
+
+・移行先PCへ Windows標準の RDP で接続できるようにする。
+・データ移行後すぐ画面を確認したいがディスプレイが余っていない時の補助。
+・資格情報は、共有フォルダで使ったものを流用する想定。
+
+**Claudeメモ:**
+
+Phase1 実装完了(v0.70.0)。リモートデスクトップ接続機能。main_form ヘッダに常設ボタン(全ビュー共通=移行元↔先どちらからでも・任意タイミング)。新規 backuper/lib/ui/rdp_helper.ps1: Get-RdpPeerAddress(役割→相手IP: source→network.target.ipAddress/target→source/backupRootUncホスト/無→手入力) / Get-RdpPresetUsername / Get-RdpPresetPassword(拡張HOSTLIST ENC: を Connect-UncFromExtendedHostlist と同方式でオンデマンド復号・平文非キャッシュ) / Test-RdpReachable(3389事前判定) / Test-RdpRevertDone(H4警告) / Show-RdpConnectDialog(宛先/ユーザ名/パスワード編集可・前埋め・self拒否) / Invoke-RemoteDesktop(cmdkey /generic:TERMSRV 投入→mstsc /v→追跡) / Update-RdpCleanup(3秒Timer・mstsc終了で cmdkey /delete) / Clear-RdpCleanupAll(閉時sweep)。資格情報ハイブリッド: ENC:あり→cmdkey全自動/無→mstsc標準プロンプト。セキュリティ: cmdkey は接続後のみ削除(mstscは接続時のみ参照)・-PassThru null でも閉時sweepで取り残さない・平文保存なし。main.ps1 dot-source 追加(unc_connect_dialog の後)。多エージェント敵対レビュー(Explore2): PS5.1/配線/UI/回帰=指摘0、security/lifecycle=実バグ1(null-proc時 cred 取り残し→track-even-if-null+null-procは閉時sweepで対処)+自動変数 $pwd→$pw 是正(PSScriptAnalyzer 検出・$PWD 衝突)。残: P2(LAN-Prep RDP有効化+rollback snapshot復元 ON/OFF両ケース)・P3(Revert完全性監査)・実機(source→target/target→source/拡張HOSTLISTワンクリック/手入力/cmdkey後始末 cmdkey /list 残無/3389警告)。 【Phase2 完了 v0.71.0・敵対レビュー実バグ0】LAN-Prep で移行先(及び双方)の RDP を opt-in 有効化+Revert で元状態復元。profile network.enableRemoteDesktop(既定false)。新規 tools/lan_prep/lib/remote_desktop.ps1: Get-RemoteDesktopState(fDenyTSConnections + Remote Desktop/リモート デスクトップ FWグループ)/Enable-RemoteDesktopAccess(fDeny=0+FW有効)/Set-RemoteDesktopState(復元: Enabled→0/1, FW enable/disable)。Prepare: 有効化直前に現状捕捉→snapshot に rdp={wasEnabled,firewallWasEnabled} Add-Member+再保存(rdp存在=LAN-Prep変更印)。Revert: snapshot.rdp ありのみ Set-RemoteDesktopState で復元(元OFF→OFF/元ON→そのまま)、旧snapshotは不干渉。dot-source Prepare/Revert 双方。多エージェントレビュー(Explore2): 統合/回帰/PS5.1/encoding=指摘0、往復正当性=PASS、唯一の指摘=double-Prepare冪等性は既存network snapshotと同一の一度だけ前提(in-memory ガード不可・network非対称回避)→コメント明文化で対処。残: Phase3(Revert完全性監査: file/printer共有・network category 等も snapshot 捕捉/復元になっているか)・実機(profile true で Prepare→移行先RDP有効→Phase1接続→Revert で元OFFに戻る/元ONはそのまま)。 【実機確認 2026-06-10】Phase1(RDP接続)+Phase2(LAN-Prep RDP有効化/Revert復元)を実機で確認OK: RDP無効→有効化→Revertで無効に復元 / RDP有効→有効化→Revertでそのまま有効。原因切り分けで判明=実プロファイルに enableRemoteDesktop フラグが無かった(古いJSON)→share配布の migration_profile.json を最新書式+フラグtrueに更新済(実値保持)。注意: 設定値配布ツリー(apps/fabriq_backuper)には tools/lan_prep が無く、LAN-Prep 本体は別ツリー(要 v0.71.0)。残=Phase3(任意・Revert完全性監査: 特に Enable-FileAndPrinterSharingRule で有効化した FW が Revert で復元されない未対応ギャップ。network IP/category・share・RDP は復元済)。 【Phase3 完了 v0.71.1・敵対レビュー実バグ0】LAN-Prep Revert の戻し漏れ修正: ファイル・プリンタ共有 FW を原状復帰。Prepare は共有用に有効化するが Revert が戻していなかった(元OFF機が移行後ONのまま)。firewall.ps1 に Get-/Set-FileAndPrinterSharingState 追加(RDP Phase2 同方式)。Prepare: 有効化直前に捕捉→snapshot fileAndPrinterSharing={wasEnabled} 追記(存在=変更印)・新フラグ不要(既存 enableFileAndPrinterSharing 再利用=既存プロファイルも自動対象)。Revert: 当該項目ありのみ復元(元OFF→OFF/元ON→そのまま)+firewall.ps1 を dot-source 追加。これで LAN-Prep の全変更点(IP/カテゴリ/共有/RDP/共有FW)が Revert で原状復帰=「変更箇所は全部元に戻す」達成。レビュー(Explore): 往復OFF→有効化→OFF/ON→そのまま・統合・PS5.1・presence-gate=指摘0。残: 実機(元OFF PC を Prepare→Revert で 共有FW が OFF に戻る確認)。t-0004 は Phase1(実機OK)+Phase2(実機OK)+Phase3(実装済・実機待ち)。
+
+<sub>更新: 2026-06-10 16:27 ／ 作成: 2026-06-05 20:36</sub>
 
 ### [t-0005] LANPREP後の自動Backuper起動について
 
