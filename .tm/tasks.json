@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-12T07:18:38+09:00",
+  "updatedAt": "2026-06-12T07:39:06+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -160,10 +160,10 @@
       "id": "t-0018",
       "title": "リストアの自動開始機能の実装",
       "content": "リストア側でのデータエラー判定（t-0019）の実装が完了したのち、バックアップエラーや空き容量判定に問題のない限りにおいて、バックアップデータが到着したら自動でリストアを開始するようにしたい。",
-      "claudeNote": "",
-      "status": "未着手",
+      "claudeNote": "実装(v0.73.0・敵対レビュー核心ガード健全/軽微2件修正済)。バックアップ到着→クリーン時に60秒カウントダウン後 自動リストア開始(既定ON・キャンセル可)。t-0019 を基盤。実装(restore_view.ps1): Get-RestoreAutoStartOnArrival(profile restore.autoStartOnArrival・既定true・PSObject.Properties で absent/false 区別)/Test-RestoreBackupClean(Failed/Partial section 無し+Get-RestoreUserdataProblemCount 0=真エラー無し・benign Skip 許容・status 欠落や parse 失敗は fail-closed)/Show-RestoreAutoStartCountdown(WinForms 60s・$script:_rdCountdownRemaining script スコープで tick 永続・全経路 timer 停止・今すぐ/キャンセル/[×])。Invoke-RestoreStart に -SkipConfirm(YesNo のみ省略・free-space 等の他ガード維持)。Invoke-RestoreWaitTick: 自動選択後 フラグON&クリーンなら countdown→未キャンセルで Invoke-RestoreStart -SkipConfirm、開始は Progress 切替で判定し中断時は手動フォールバック。profile sample に autoStartOnArrival:true 追記。レビュー(Explore2): PS5.1/回帰/UI=指摘0、安全性=核心ガード健全、軽微2件(中断時ラベル/ section status 欠落)を修正。残: 実機(到着待ち中にクリーンBK到着→60秒後自動開始/キャンセルで手動/Failed有りは自動開始せず手動/容量不足はブロック後手動)。",
+      "status": "対応中",
       "createdAt": "2026-06-12T06:42:52.4349274+09:00",
-      "updatedAt": "2026-06-12T07:07:22.7964597+09:00"
+      "updatedAt": "2026-06-12T07:39:06+09:00"
     },
     {
       "id": "t-0019",

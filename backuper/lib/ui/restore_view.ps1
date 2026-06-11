@@ -484,6 +484,21 @@ function Invoke-RestoreWaitTick {
     if ($targetIdx -lt 0) { return }   # named timestamp not discoverable yet -> keep polling
     Stop-RestoreWait
     $script:RestoreTimestampCombo.SelectedIndex = $targetIdx   # fires handler -> sets RestoreExplicitDir
+    # v0.73.0 (t-0018): auto-start when enabled (default ON) AND the backup is CLEAN
+    # (no genuine error; benign 該当なし skips OK). 60s cancellable countdown; on
+    # proceed -> Invoke-RestoreStart -SkipConfirm (free-space etc. still checked).
+    # Flag off / not clean / cancelled -> fall back to the manual prompt below.
+    if ((Get-RestoreAutoStartOnArrival) -and (Test-RestoreBackupClean -AggregateDir $script:RestoreExplicitDir)) {
+        $script:RestoreManifestLabel.Text = "バックアップ到着: $($flag.timestamp) — 問題なし。自動リストアを開始します (キャンセル可)。"
+        if (Show-RestoreAutoStartCountdown -Seconds 60) {
+            Invoke-RestoreStart -SkipConfirm
+            # If the restore actually started it switched to the Progress view -> done.
+            # If it aborted early (e.g. the free-space block showed its own dialog),
+            # fall through to the manual prompt so we don't leave a stale label.
+            if ($null -ne $script:Views -and $null -ne $script:Views['Progress'] -and $script:Views['Progress'].Visible) { return }
+        }
+        # cancelled / aborted -> manual fallback
+    }
     $script:RestoreManifestLabel.Text = "バックアップ到着: $($flag.timestamp) を自動選択しました。内容を確認し [リストア開始] を押してください。"
     try {
         [System.Windows.Forms.MessageBox]::Show(
@@ -1147,6 +1162,81 @@ function Get-RestoreFreeSpaceHeadroomBytes {
     return $defaultBytes
 }
 
+# v0.73.0 (t-0018): auto-start-on-arrival opt-in. profile restore.autoStartOnArrival
+# wins; DEFAULT TRUE (absent -> true). Returns [bool].
+function Get-RestoreAutoStartOnArrival {
+    if ($null -ne $script:MigrationProfile -and $null -ne $script:MigrationProfile.restore -and `
+        $null -ne $script:MigrationProfile.restore.PSObject.Properties['autoStartOnArrival']) {
+        try { return [bool]$script:MigrationProfile.restore.autoStartOnArrival } catch { return $true }
+    }
+    return $true
+}
+
+# v0.73.0 (t-0018): is the selected backup CLEAN enough to auto-start? TRUE only when
+# there is NO genuine error -- no Failed/Partial section AND no Failed/Partial userdata
+# entry. benign Skipped (該当なし / source-absent) is allowed. Fail-closed on any error.
+function Test-RestoreBackupClean {
+    param([string]$AggregateDir)
+    if ([string]::IsNullOrWhiteSpace($AggregateDir)) { return $false }
+    $mfPath = Join-Path $AggregateDir 'manifest.json'
+    if (-not (Test-Path -LiteralPath $mfPath)) { return $false }
+    try { $agg = Get-Content -LiteralPath $mfPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $false }
+    if ($null -ne $agg.sections) {
+        foreach ($p in $agg.sections.PSObject.Properties) {
+            $st = "$($p.Value.status)"
+            if ([string]::IsNullOrWhiteSpace($st)) { return $false }   # unknown status -> fail-closed (manual, never auto-start)
+            if ($st -eq 'Failed' -or $st -eq 'Partial') { return $false }
+        }
+    }
+    if ((Get-RestoreUserdataProblemCount -AggregateDir $AggregateDir) -gt 0) { return $false }
+    return $true
+}
+
+# v0.73.0 (t-0018): cancellable countdown before auto-starting a restore. Returns
+# $true to proceed (timeout or 今すぐ開始), $false if cancelled / window closed.
+function Show-RestoreAutoStartCountdown {
+    param([int]$Seconds = 60)
+    $script:_rdAutoStartProceed   = $false
+    $script:_rdCountdownRemaining = [int]$Seconds
+
+    $dlg = New-Object System.Windows.Forms.Form
+    Set-FormStyle -Form $dlg -Title "リストア自動開始" -Width 460 -Height 210
+    $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false; $dlg.StartPosition = "CenterParent"
+    if ($null -ne $script:MainForm) { $dlg.Owner = $script:MainForm }
+
+    $lbl = New-StyledLabel -Text "" -X 20 -Y 22 -Width 420 -Height 70
+    $dlg.Controls.Add($lbl)
+    $lbl.Text = "移行元のバックアップが到着しました (問題なし)。`n`nあと $($script:_rdCountdownRemaining) 秒で自動的にリストアを開始します。`n中止する場合は [キャンセル] を押してください。"
+
+    $btnNow = New-StyledButton -Text "今すぐ開始" -X 110 -Y 128 -Width 130 -Height 36 -BgColor $script:bgAdd
+    $btnNow.ForeColor = $script:fgWhite
+    $btnNow.Font = $script:fontBold
+    $dlg.Controls.Add($btnNow)
+    $btnCancel = New-StyledButton -Text "キャンセル" -X 260 -Y 128 -Width 130 -Height 36
+    $dlg.Controls.Add($btnCancel)
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 1000
+    $timer.Add_Tick({
+        $script:_rdCountdownRemaining--
+        if ($script:_rdCountdownRemaining -le 0) {
+            try { $timer.Stop() } catch {}
+            $script:_rdAutoStartProceed = $true
+            $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $dlg.Close()
+        } else {
+            $lbl.Text = "移行元のバックアップが到着しました (問題なし)。`n`nあと $($script:_rdCountdownRemaining) 秒で自動的にリストアを開始します。`n中止する場合は [キャンセル] を押してください。"
+        }
+    })
+    $btnNow.Add_Click({ try { $timer.Stop() } catch {}; $script:_rdAutoStartProceed = $true;  $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK;     $dlg.Close() })
+    $btnCancel.Add_Click({ try { $timer.Stop() } catch {}; $script:_rdAutoStartProceed = $false; $dlg.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $dlg.Close() })
+    $dlg.Add_FormClosing({ try { $timer.Stop() } catch {} })   # [X] close = cancel (proceed stays false)
+
+    $timer.Start()
+    [void]$dlg.ShowDialog()
+    return [bool]$script:_rdAutoStartProceed
+}
+
 function Get-RestoreUserdataSelectionSizeBytes {
     # Sum byteCount of the userdata entries that will actually be restored
     # (respecting the D1 IncludeTargets subset; Skipped entries excluded).
@@ -1214,6 +1304,7 @@ function Get-RestoreCurrentAggregateDir {
 }
 
 function Invoke-RestoreStart {
+    param([switch]$SkipConfirm)   # v0.73.0 (t-0018): auto-start skips the YesNo confirm (the countdown is the confirmation)
     # v0.27.0: RestoreExplicitDir is the single source of truth for the
     # target aggregate dir (the combo handler resolves to FullPath in
     # timestamp mode, Invoke-RestoreBrowse sets it in Browse mode). The
@@ -1455,13 +1546,18 @@ function Invoke-RestoreStart {
         }
     } catch { }   # fail-open: never block restore on a check error
 
-    $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary",
-        "Fabriq BackUper - 確認",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    # v0.73.0 (t-0018): auto-start (-SkipConfirm) bypasses this YesNo -- the 60s
+    # cancellable countdown already served as the confirmation. All other guards
+    # above (free-space etc.) still ran.
+    if (-not $SkipConfirm) {
+        $confirm = [System.Windows.Forms.MessageBox]::Show(
+            "リストア元:`n  $sourceLabel`n`nセクション: $(@($picked | ForEach-Object { $_.SectionName }) -join ', ')`nプリンタ: $($selectedPrinters.Count) 件選択`n$userSummary",
+            "Fabriq BackUper - 確認",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    }
 
     # v0.25.0: Materialize the operator handoff folder + README (Phase A).
     # Done after confirm Yes so cancelled restores leave no trace on the

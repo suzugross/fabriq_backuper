@@ -95,6 +95,12 @@
   - 既知のトレードオフ：移行プロファイル無しの「手動 UNC リストア」は事前認証の導線が弱くなる（プロファイル読込 or OS 側で事前接続して回避）。
 
 ### Added
+- backuper v0.73.0: **バックアップ到着で自動リストア開始（クリーン時・60秒キャンセル可）(TM t-0018)** —
+  リストア画面で**到着待ち中**にバックアップが届き、かつ**問題なし（クリーン）**なら、**60 秒のカウントダウン後に自動でリストア開始**（既定 ON・キャンセル可）。t-0019 の判定を基盤に「真のエラー無し（Failed/Partial 無し・該当なしスキップは許容）」を条件とする。
+  - profile `restore.autoStartOnArrival`（**既定 true**・欠落時も true。`false` で無効＝従来どおり手動）。
+  - `Test-RestoreBackupClean`（Failed/Partial セクション無し＋userdata 真エラー 0／status 欠落は fail-closed で手動）／`Show-RestoreAutoStartCountdown`（60秒・[今すぐ開始]/[キャンセル]/[×]）。
+  - `Invoke-RestoreStart -SkipConfirm`：自動開始時のみ YesNo 確認を省略（**空き容量チェック等の他ガードは維持**）。中断時（容量不足等）は手動プロンプトへフォールバック。
+  - 自動開始は「操作者が既に到着待ち中」かつ「クリーン」のときのみ。多エージェント敵対的レビュー（安全性／PS5.1・回帰）で核心ガード健全・軽微2件を修正反映。実機スモーク推奨。
 - backuper v0.71.0: **LAN-Prep で移行先の RDP を有効化し、Revert で元状態へ復元 (TM t-0004・Phase 2)** —
   `migration_profile.json` の **`network.enableRemoteDesktop: true`**（opt-in・既定 false）で、LAN-Prep 実行時に**この PC のリモートデスクトップ（`fDenyTSConnections=0` ＋「Remote Desktop」ファイアウォール グループ）を有効化**。移行元・移行先の双方で true にすれば双方向 RDP が可能。
   - 新規 `tools/lan_prep/lib/remote_desktop.ps1`（`Get-RemoteDesktopState`／`Enable-RemoteDesktopAccess`／`Set-RemoteDesktopState`・best-effort・FW は EN/JA 両グループ名対応）。

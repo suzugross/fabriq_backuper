@@ -48,6 +48,8 @@
   },
   "restore": {
     "_comment": "freeSpaceHeadroomBytes = リストア後にディスクに残すべき空き容量。(空き - リストアデータ) がこれ未満ならリストアをブロック。既定 10GB=10737418240。UI 設定は廃止 (profile のみ)。",
-    "freeSpaceHeadroomBytes": 10737418240
+    "freeSpaceHeadroomBytes": 10737418240,
+    "_commentAutoStart": "autoStartOnArrival=true (既定) で、リストア画面で到着待ち中にバックアップが到着し、かつ問題なし(Failed/Partial 無し・該当なしスキップは許容)の場合に 60 秒カウントダウン後 自動でリストア開始(キャンセル可)。false で無効=従来どおり手動。空き容量不足等は開始処理内でブロック。",
+    "autoStartOnArrival": true
   }
 }
