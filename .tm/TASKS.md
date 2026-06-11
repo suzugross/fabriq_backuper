@@ -3,9 +3,9 @@
 <!-- このファイルは TM アプリが .tm/tasks.json から自動生成します。
      直接編集しないでください（次回保存で上書きされます）。
      タスクの追加・更新は tasks.json か TM アプリから行ってください。 -->
-最終更新: 2026-06-10 16:27
+最終更新: 2026-06-12 07:07
 
-## 未着手 (1)
+## 未着手 (3)
 
 ### [t-0007] レジストリバックアップ
 
@@ -18,28 +18,25 @@
 
 <sub>更新: 2026-06-06 13:44 ／ 作成: 2026-06-06 13:42</sub>
 
-## 対応中 (1)
-
-### [t-0017] GUI画面のCMD画面について
+### [t-0018] リストアの自動開始機能の実装
 
 **内容:**
 
+リストア側でのデータエラー判定（t-0019）の実装が完了したのち、バックアップエラーや空き容量判定に問題のない限りにおいて、バックアップデータが到着したら自動でリストアを開始するようにしたい。
 
-GUI画面表示時のCMD画面併設立ち上げ挙動について
+<sub>更新: 2026-06-12 07:07 ／ 作成: 2026-06-12 06:42</sub>
 
-・リストア画面、バックアップ画面
-・ハンドオフGUI
-・クリーンアップGUI
+### [t-0019] リストア側のバックアップエントリ判断について
 
-これらについて、詳細情報はCMDで表示していますが、画面上から隠すか、非表示にすることはできるか、という相談。
+**内容:**
 
-**Claudeメモ:**
+現状、バックアップエントリのなかで、エントリはあるが実データは存在しなかった場合は、バックアップ側ではスキップとして観測されるが、リストア側では実データが存在しない＝エラーのような扱いに実質なっている。
+これをもう少し細かく分類できるようにする。
+・バックアップ時に明確にエラーが出てしまった場合（例：バックアップデータと実際のPC上のデータを比較し、バイト単位で一致しない、など。これはRobocopyでは標準で行われるのでしょうか？なければ独自実装も要検討）は、エラーとしてリストア側にも報告し、それを認知する。そうではなく端末の個体差で、特定のPCにしかないデータエントリがスキップされた場合は、異常ではなく該当データなしとしてスキップ判定にし、それがリストア側でも認識できるようにする
 
-実装(v0.71.2)。GUI 併設の CMD コンソールを最小化起動に変更(ユーザ相談=画面から隠せるか)。ユーザ選択=最小化(手軽)・対象3つ(BackUper/HandoffViewer/Cleanup)、LAN-Prep は確認プロンプトのため対象外。実装=各ランチャ .cs の ProcessStartInfo に powershell 引数 -WindowStyle Minimized + WindowStyle=ProcessWindowStyle.Minimized を追加し3 EXE 再ビルド(csc・各57344B・埋込検証: -WindowStyle Minimized + 各ps1)。コンソールは存続(タスクバー格納)なので Read-Host/起動診断は復元すれば確認可=完全非表示でなく最小化(.ps1 不変・低リスク)。完全に隠す案(CreateNoWindow+log+エラーダイアログ)は将来の選択肢として保留。残: 実機(3 GUI 起動で CMD 窓が画面に出ずタスクバー最小化・GUI 正常・エラー時タスクバーから復元で確認可)。
+<sub>更新: 2026-06-12 07:05 ／ 作成: 2026-06-12 06:43</sub>
 
-<sub>更新: 2026-06-10 16:27 ／ 作成: 2026-06-09 11:53</sub>
-
-## 完了 (14)
+## 完了 (15)
 
 ### [t-0001] バックアップデータのクリーンアップについて
 
@@ -92,9 +89,9 @@ LANPREPと同じく、別exeとして分離させたい。
 
 **Claudeメモ:**
 
-Phase1 実装完了(v0.70.0)。リモートデスクトップ接続機能。main_form ヘッダに常設ボタン(全ビュー共通=移行元↔先どちらからでも・任意タイミング)。新規 backuper/lib/ui/rdp_helper.ps1: Get-RdpPeerAddress(役割→相手IP: source→network.target.ipAddress/target→source/backupRootUncホスト/無→手入力) / Get-RdpPresetUsername / Get-RdpPresetPassword(拡張HOSTLIST ENC: を Connect-UncFromExtendedHostlist と同方式でオンデマンド復号・平文非キャッシュ) / Test-RdpReachable(3389事前判定) / Test-RdpRevertDone(H4警告) / Show-RdpConnectDialog(宛先/ユーザ名/パスワード編集可・前埋め・self拒否) / Invoke-RemoteDesktop(cmdkey /generic:TERMSRV 投入→mstsc /v→追跡) / Update-RdpCleanup(3秒Timer・mstsc終了で cmdkey /delete) / Clear-RdpCleanupAll(閉時sweep)。資格情報ハイブリッド: ENC:あり→cmdkey全自動/無→mstsc標準プロンプト。セキュリティ: cmdkey は接続後のみ削除(mstscは接続時のみ参照)・-PassThru null でも閉時sweepで取り残さない・平文保存なし。main.ps1 dot-source 追加(unc_connect_dialog の後)。多エージェント敵対レビュー(Explore2): PS5.1/配線/UI/回帰=指摘0、security/lifecycle=実バグ1(null-proc時 cred 取り残し→track-even-if-null+null-procは閉時sweepで対処)+自動変数 $pwd→$pw 是正(PSScriptAnalyzer 検出・$PWD 衝突)。残: P2(LAN-Prep RDP有効化+rollback snapshot復元 ON/OFF両ケース)・P3(Revert完全性監査)・実機(source→target/target→source/拡張HOSTLISTワンクリック/手入力/cmdkey後始末 cmdkey /list 残無/3389警告)。 【Phase2 完了 v0.71.0・敵対レビュー実バグ0】LAN-Prep で移行先(及び双方)の RDP を opt-in 有効化+Revert で元状態復元。profile network.enableRemoteDesktop(既定false)。新規 tools/lan_prep/lib/remote_desktop.ps1: Get-RemoteDesktopState(fDenyTSConnections + Remote Desktop/リモート デスクトップ FWグループ)/Enable-RemoteDesktopAccess(fDeny=0+FW有効)/Set-RemoteDesktopState(復元: Enabled→0/1, FW enable/disable)。Prepare: 有効化直前に現状捕捉→snapshot に rdp={wasEnabled,firewallWasEnabled} Add-Member+再保存(rdp存在=LAN-Prep変更印)。Revert: snapshot.rdp ありのみ Set-RemoteDesktopState で復元(元OFF→OFF/元ON→そのまま)、旧snapshotは不干渉。dot-source Prepare/Revert 双方。多エージェントレビュー(Explore2): 統合/回帰/PS5.1/encoding=指摘0、往復正当性=PASS、唯一の指摘=double-Prepare冪等性は既存network snapshotと同一の一度だけ前提(in-memory ガード不可・network非対称回避)→コメント明文化で対処。残: Phase3(Revert完全性監査: file/printer共有・network category 等も snapshot 捕捉/復元になっているか)・実機(profile true で Prepare→移行先RDP有効→Phase1接続→Revert で元OFFに戻る/元ONはそのまま)。 【実機確認 2026-06-10】Phase1(RDP接続)+Phase2(LAN-Prep RDP有効化/Revert復元)を実機で確認OK: RDP無効→有効化→Revertで無効に復元 / RDP有効→有効化→Revertでそのまま有効。原因切り分けで判明=実プロファイルに enableRemoteDesktop フラグが無かった(古いJSON)→share配布の migration_profile.json を最新書式+フラグtrueに更新済(実値保持)。注意: 設定値配布ツリー(apps/fabriq_backuper)には tools/lan_prep が無く、LAN-Prep 本体は別ツリー(要 v0.71.0)。残=Phase3(任意・Revert完全性監査: 特に Enable-FileAndPrinterSharingRule で有効化した FW が Revert で復元されない未対応ギャップ。network IP/category・share・RDP は復元済)。 【Phase3 完了 v0.71.1・敵対レビュー実バグ0】LAN-Prep Revert の戻し漏れ修正: ファイル・プリンタ共有 FW を原状復帰。Prepare は共有用に有効化するが Revert が戻していなかった(元OFF機が移行後ONのまま)。firewall.ps1 に Get-/Set-FileAndPrinterSharingState 追加(RDP Phase2 同方式)。Prepare: 有効化直前に捕捉→snapshot fileAndPrinterSharing={wasEnabled} 追記(存在=変更印)・新フラグ不要(既存 enableFileAndPrinterSharing 再利用=既存プロファイルも自動対象)。Revert: 当該項目ありのみ復元(元OFF→OFF/元ON→そのまま)+firewall.ps1 を dot-source 追加。これで LAN-Prep の全変更点(IP/カテゴリ/共有/RDP/共有FW)が Revert で原状復帰=「変更箇所は全部元に戻す」達成。レビュー(Explore): 往復OFF→有効化→OFF/ON→そのまま・統合・PS5.1・presence-gate=指摘0。残: 実機(元OFF PC を Prepare→Revert で 共有FW が OFF に戻る確認)。t-0004 は Phase1(実機OK)+Phase2(実機OK)+Phase3(実装済・実機待ち)。
+Phase1 実装完了(v0.70.0)。リモートデスクトップ接続機能。main_form ヘッダに常設ボタン(全ビュー共通=移行元↔先どちらからでも・任意タイミング)。新規 backuper/lib/ui/rdp_helper.ps1: Get-RdpPeerAddress(役割→相手IP: source→network.target.ipAddress/target→source/backupRootUncホスト/無→手入力) / Get-RdpPresetUsername / Get-RdpPresetPassword(拡張HOSTLIST ENC: を Connect-UncFromExtendedHostlist と同方式でオンデマンド復号・平文非キャッシュ) / Test-RdpReachable(3389事前判定) / Test-RdpRevertDone(H4警告) / Show-RdpConnectDialog(宛先/ユーザ名/パスワード編集可・前埋め・self拒否) / Invoke-RemoteDesktop(cmdkey /generic:TERMSRV 投入→mstsc /v→追跡) / Update-RdpCleanup(3秒Timer・mstsc終了で cmdkey /delete) / Clear-RdpCleanupAll(閉時sweep)。資格情報ハイブリッド: ENC:あり→cmdkey全自動/無→mstsc標準プロンプト。セキュリティ: cmdkey は接続後のみ削除(mstscは接続時のみ参照)・-PassThru null でも閉時sweepで取り残さない・平文保存なし。main.ps1 dot-source 追加(unc_connect_dialog の後)。多エージェント敵対レビュー(Explore2): PS5.1/配線/UI/回帰=指摘0、security/lifecycle=実バグ1(null-proc時 cred 取り残し→track-even-if-null+null-procは閉時sweepで対処)+自動変数 $pwd→$pw 是正(PSScriptAnalyzer 検出・$PWD 衝突)。残: P2(LAN-Prep RDP有効化+rollback snapshot復元 ON/OFF両ケース)・P3(Revert完全性監査)・実機(source→target/target→source/拡張HOSTLISTワンクリック/手入力/cmdkey後始末 cmdkey /list 残無/3389警告)。 【Phase2 完了 v0.71.0・敵対レビュー実バグ0】LAN-Prep で移行先(及び双方)の RDP を opt-in 有効化+Revert で元状態復元。profile network.enableRemoteDesktop(既定false)。新規 tools/lan_prep/lib/remote_desktop.ps1: Get-RemoteDesktopState(fDenyTSConnections + Remote Desktop/リモート デスクトップ FWグループ)/Enable-RemoteDesktopAccess(fDeny=0+FW有効)/Set-RemoteDesktopState(復元: Enabled→0/1, FW enable/disable)。Prepare: 有効化直前に現状捕捉→snapshot に rdp={wasEnabled,firewallWasEnabled} Add-Member+再保存(rdp存在=LAN-Prep変更印)。Revert: snapshot.rdp ありのみ Set-RemoteDesktopState で復元(元OFF→OFF/元ON→そのまま)、旧snapshotは不干渉。dot-source Prepare/Revert 双方。多エージェントレビュー(Explore2): 統合/回帰/PS5.1/encoding=指摘0、往復正当性=PASS、唯一の指摘=double-Prepare冪等性は既存network snapshotと同一の一度だけ前提(in-memory ガード不可・network非対称回避)→コメント明文化で対処。残: Phase3(Revert完全性監査: file/printer共有・network category 等も snapshot 捕捉/復元になっているか)・実機(profile true で Prepare→移行先RDP有効→Phase1接続→Revert で元OFFに戻る/元ONはそのまま)。 【実機確認 2026-06-10】Phase1(RDP接続)+Phase2(LAN-Prep RDP有効化/Revert復元)を実機で確認OK: RDP無効→有効化→Revertで無効に復元 / RDP有効→有効化→Revertでそのまま有効。原因切り分けで判明=実プロファイルに enableRemoteDesktop フラグが無かった(古いJSON)→share配布の migration_profile.json を最新書式+フラグtrueに更新済(実値保持)。注意: 設定値配布ツリー(apps/fabriq_backuper)には tools/lan_prep が無く、LAN-Prep 本体は別ツリー(要 v0.71.0)。残=Phase3(任意・Revert完全性監査: 特に Enable-FileAndPrinterSharingRule で有効化した FW が Revert で復元されない未対応ギャップ。network IP/category・share・RDP は復元済)。 【Phase3 完了 v0.71.1・敵対レビュー実バグ0】LAN-Prep Revert の戻し漏れ修正: ファイル・プリンタ共有 FW を原状復帰。Prepare は共有用に有効化するが Revert が戻していなかった(元OFF機が移行後ONのまま)。firewall.ps1 に Get-/Set-FileAndPrinterSharingState 追加(RDP Phase2 同方式)。Prepare: 有効化直前に捕捉→snapshot fileAndPrinterSharing={wasEnabled} 追記(存在=変更印)・新フラグ不要(既存 enableFileAndPrinterSharing 再利用=既存プロファイルも自動対象)。Revert: 当該項目ありのみ復元(元OFF→OFF/元ON→そのまま)+firewall.ps1 を dot-source 追加。これで LAN-Prep の全変更点(IP/カテゴリ/共有/RDP/共有FW)が Revert で原状復帰=「変更箇所は全部元に戻す」達成。レビュー(Explore): 往復OFF→有効化→OFF/ON→そのまま・統合・PS5.1・presence-gate=指摘0。残: 実機(元OFF PC を Prepare→Revert で 共有FW が OFF に戻る確認)。t-0004 は Phase1(実機OK)+Phase2(実機OK)+Phase3(実装済・実機待ち)。 【完了 2026-06-10】ユーザ確認により完了扱い。Phase1(RDP接続)・Phase2(LAN-Prep RDP有効化/Revert復元)・Phase3(共有FW原状復帰)すべて完成。
 
-<sub>更新: 2026-06-10 16:27 ／ 作成: 2026-06-05 20:36</sub>
+<sub>更新: 2026-06-10 17:03 ／ 作成: 2026-06-05 20:36</sub>
 
 ### [t-0005] LANPREP後の自動Backuper起動について
 
@@ -231,6 +228,25 @@ P0+P1 実装+敵対的レビュー完了(v0.67.0・実バグ0)。Show-BusyOverla
 実装完了(v0.68.1)。Outlook 完コピ疑似画面 Show-OutlookAccounts.ps1 で、データファイル選択ブロック(新しい/既存の Outlook データ ファイル ラジオ + PST パス欄)を「詳細設定」と同じ赤リング(Add_Paint+DrawEllipse)で常時囲み注意喚起。ユーザ確定=常に表示+ブロック全体。実装=既存 Add_Paint に DrawEllipse を1つ追加(DfNew/DfExisting/PstFile の Bounds を Rectangle::Union+Inflate(14,12)、.Red 2.5pt、:mui null ガード)。既存の needAdvanced 詳細設定リングと共存(SmoothingMode を先頭へ移動)。表示のみ・復元/データ処理ロジック不変。静的検証(BOM/balance, mui コントロール 825-827 定義確認)。restore.ps1 Stage5.7 で配備されるので whole-tree 再配置で反映。残: 実機(PST 紐づけ有/無/IMAP の各アカウントで常に赤丸が出る・詳細設定リングと二重表示が崩れない を確認)。 【v0.68.2】詳細設定タブ: コピーボタンを「使用する暗号化接続の種類」(ドロップダウンで貼付不可=無意味)から撤去し、「送信サーバー(SMTP)ポート」欄に追加(手入力要の数値・ 捕捉→Add-CopyButton)。暗号化種類は New-Data | Out-Null で破棄( 廃止=未使用警告も解消)。Add-CopyButton は欄右隣(Right+3,Top)配置で他要素と重なりなし。表示のみ・ロジック不変。残: 実機(詳細設定→詳細設定タブで SMTP ポートにコピーボタン・暗号化種類にボタン無し を確認)。
 
 <sub>更新: 2026-06-10 15:38 ／ 作成: 2026-06-08 17:44</sub>
+
+### [t-0017] GUI画面のCMD画面について
+
+**内容:**
+
+
+GUI画面表示時のCMD画面併設立ち上げ挙動について
+
+・リストア画面、バックアップ画面
+・ハンドオフGUI
+・クリーンアップGUI
+
+これらについて、詳細情報はCMDで表示していますが、画面上から隠すか、非表示にすることはできるか、という相談。
+
+**Claudeメモ:**
+
+実装(v0.71.2)。GUI 併設の CMD コンソールを最小化起動に変更(ユーザ相談=画面から隠せるか)。ユーザ選択=最小化(手軽)・対象3つ(BackUper/HandoffViewer/Cleanup)、LAN-Prep は確認プロンプトのため対象外。実装=各ランチャ .cs の ProcessStartInfo に powershell 引数 -WindowStyle Minimized + WindowStyle=ProcessWindowStyle.Minimized を追加し3 EXE 再ビルド(csc・各57344B・埋込検証: -WindowStyle Minimized + 各ps1)。コンソールは存続(タスクバー格納)なので Read-Host/起動診断は復元すれば確認可=完全非表示でなく最小化(.ps1 不変・低リスク)。完全に隠す案(CreateNoWindow+log+エラーダイアログ)は将来の選択肢として保留。残: 実機(3 GUI 起動で CMD 窓が画面に出ずタスクバー最小化・GUI 正常・エラー時タスクバーから復元で確認可)。 【完了 2026-06-10】ユーザ確認により完了扱い。GUI併設CMDを最小化起動(BackUper/HandoffViewer/Cleanup)。
+
+<sub>更新: 2026-06-10 17:03 ／ 作成: 2026-06-09 11:53</sub>
 
 ## 保留 (1)
 

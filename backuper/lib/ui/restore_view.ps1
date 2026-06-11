@@ -25,9 +25,10 @@ $script:RestoreCurrentManifest = $null
 # v0.47.0 (B): colored label that warns when the selected backup itself had
 # failures/partials (read from the aggregate manifest). Read-only, never blocks.
 $script:RestoreBackupWarningLabel = $null
-# v0.47.0 (B): count of userdata entries that could NOT be backed up (status
-# Failed/Partial/Skipped = missing source). Cached at source change because a
-# Success-status userdata section can still hide individual missing entries.
+# v0.47.0 (B): count of userdata entries that are GENUINE backup errors (status
+# Failed/Partial). v0.72.0 (t-0019): Skipped = source-absent is benign ("該当なし")
+# and excluded. Cached at source change because a Success-status userdata section
+# can still hide individual failed entries.
 $script:RestoreUserdataProblemCount = 0
 $script:RestoreExplicitDir     = $null
 # v0.27.0: explicit Browse-mode flag (previously inferred from whether
@@ -839,7 +840,11 @@ function Update-RestoreEntryGrid {
                             }
                         }
                         $chk = (-not $isSkipped) -and (-not $dataDeleted) -and (-not $isComplete)
-                        $st  = if ($isSkipped) { '取得不可' } else { "$($en.status)" }
+                        # v0.72.0 (t-0019): Skipped = source path absent on the source PC
+                        # (device individual difference) -> benign "該当なし", NOT an error.
+                        # Genuine copy errors stay Failed/Partial; empty-subpath non-Skipped
+                        # (couldn't retrieve) keeps 取得不可.
+                        $st  = if ("$($en.status)" -eq 'Skipped') { '該当なし' } elseif ($isSkipped) { '取得不可' } else { "$($en.status)" }
                         $ri = $grid.Rows.Add($chk, "    $($en.sourcePath)", $st, $sizeStr, $restoredStr)
                         $erow = $grid.Rows[$ri]
                         $selectable = (-not $isSkipped) -and (-not $dataDeleted)
@@ -1045,8 +1050,9 @@ function Update-RestoreDiskInfo {
 
 # v0.47.0 (B): backup-failure warning ----------------------------
 function Get-RestoreUserdataProblemCount {
-    # Counts userdata entries that could NOT be backed up (status
-    # Failed/Partial/Skipped = missing source). Returns 0 on any error/absence.
+    # Counts userdata entries that are GENUINE backup errors (status Failed/Partial).
+    # v0.72.0 (t-0019): Skipped = source-absent (device individual difference) is a
+    # benign "該当なし" and is NOT counted. Returns 0 on any error/absence.
     param([string]$AggregateDir)
     if ([string]::IsNullOrWhiteSpace($AggregateDir)) { return 0 }
     $mf = Join-Path $AggregateDir 'sections\userdata\manifest.json'
@@ -1057,7 +1063,9 @@ function Get-RestoreUserdataProblemCount {
         $n = 0
         foreach ($en in @($udm.items.entries)) {
             $st = "$($en.status)"
-            if ($st -eq 'Failed' -or $st -eq 'Partial' -or $st -eq 'Skipped') { $n++ }
+            # v0.72.0 (t-0019): count GENUINE errors only. Skipped = source-absent
+            # (benign 該当なし) is NOT a problem.
+            if ($st -eq 'Failed' -or $st -eq 'Partial') { $n++ }
         }
         return $n
     } catch { return 0 }
@@ -1112,7 +1120,7 @@ function Show-RestoreBackupWarnings {
     $parts = @()
     if ($secFailed  -gt 0) { $parts += "失敗 $secFailed" }
     if ($secPartial -gt 0) { $parts += "部分 $secPartial" }
-    if ($udProblem  -gt 0) { $parts += "ユーザデータ取得不可 $udProblem" }
+    if ($udProblem  -gt 0) { $parts += "ユーザデータ取得失敗 $udProblem" }   # v0.72.0 (t-0019): genuine errors only (該当なしスキップは除外)
     $txt = "⚠ バックアップに問題: " + ($parts -join ' / ') + " 件"
     if ($problems.Count -gt 0) { $txt += "  (" + ($problems -join ', ') + ")" }
 

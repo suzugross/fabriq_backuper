@@ -54,6 +54,11 @@
   選択ハンドラの try/catch を追加（安全網）。バックアップ側・seam・突合判定には影響なし。handoff_viewer 等は同パターン未使用で無影響。
 
 ### Changed
+- backuper v0.72.0: **リストア側のバックアップエントリ判定を細分化（該当なし ≠ エラー）(TM t-0019)** —
+  バックアップ側は元々 source 欠落＝`Skipped`（reason "Source path not found"）／robocopy 失敗＝`Failed`／mismatch＝`Partial` と分類していたが、**リストア側がこれらを一緒くた**にし、端末個体差で存在しないだけのエントリも「取得不可」表示＋「問題」件数に計上していた。
+  - **表示**：`Skipped`（source 欠落）を「取得不可」→ **「該当なし」** に変更（端末にそのデータが無いだけ＝異常でない）。`Failed/Partial` は従来どおりエラー扱い。
+  - **問題カウント／警告**：`Get-RestoreUserdataProblemCount` から `Skipped` を除外し、**真のエラー（Failed/Partial）のみ**を「⚠ バックアップに問題」に計上（文言も「取得失敗」へ）。
+  - バックアップ側・manifest・復元ロジックは不変（リストア表示と集計のみ）。バイト単位検証は行わず robocopy の exit code 判定（Failed/Partial）に依拠（ユーザ確定）。**t-0018 自動リストア開始の「クリーン判定」基盤**。
 - backuper v0.71.2: **GUI 併設の CMD（診断コンソール）を最小化で起動 (TM t-0017)** —
   Fabriq_BackUper（バックアップ/リストア）・Fabriq_HandoffViewer・Fabriq_Cleanup の各 EXE ランチャを、コンソールを **最小化起動**（`powershell -WindowStyle Minimized` ＋ `ProcessStartInfo.WindowStyle=Minimized`）に変更。GUI の隣に CMD 窓が出ず、タスクバーに格納される。
   - コンソール自体は存続するため、`Read-Host`（エラー時の保持）や起動時診断は**タスクバーから復元すれば従来どおり確認可能**（＝完全非表示ではなく最小化＝手軽・低リスク）。
