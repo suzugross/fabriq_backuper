@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-12T07:39:06+09:00",
+  "updatedAt": "2026-06-12T11:05:00+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -161,18 +161,27 @@
       "title": "リストアの自動開始機能の実装",
       "content": "リストア側でのデータエラー判定（t-0019）の実装が完了したのち、バックアップエラーや空き容量判定に問題のない限りにおいて、バックアップデータが到着したら自動でリストアを開始するようにしたい。",
       "claudeNote": "実装(v0.73.0・敵対レビュー核心ガード健全/軽微2件修正済)。バックアップ到着→クリーン時に60秒カウントダウン後 自動リストア開始(既定ON・キャンセル可)。t-0019 を基盤。実装(restore_view.ps1): Get-RestoreAutoStartOnArrival(profile restore.autoStartOnArrival・既定true・PSObject.Properties で absent/false 区別)/Test-RestoreBackupClean(Failed/Partial section 無し+Get-RestoreUserdataProblemCount 0=真エラー無し・benign Skip 許容・status 欠落や parse 失敗は fail-closed)/Show-RestoreAutoStartCountdown(WinForms 60s・$script:_rdCountdownRemaining script スコープで tick 永続・全経路 timer 停止・今すぐ/キャンセル/[×])。Invoke-RestoreStart に -SkipConfirm(YesNo のみ省略・free-space 等の他ガード維持)。Invoke-RestoreWaitTick: 自動選択後 フラグON&クリーンなら countdown→未キャンセルで Invoke-RestoreStart -SkipConfirm、開始は Progress 切替で判定し中断時は手動フォールバック。profile sample に autoStartOnArrival:true 追記。レビュー(Explore2): PS5.1/回帰/UI=指摘0、安全性=核心ガード健全、軽微2件(中断時ラベル/ section status 欠落)を修正。残: 実機(到着待ち中にクリーンBK到着→60秒後自動開始/キャンセルで手動/Failed有りは自動開始せず手動/容量不足はブロック後手動)。",
-      "status": "対応中",
+      "status": "完了",
       "createdAt": "2026-06-12T06:42:52.4349274+09:00",
-      "updatedAt": "2026-06-12T07:39:06+09:00"
+      "updatedAt": "2026-06-12T09:00:18.7584226+09:00"
     },
     {
       "id": "t-0019",
       "title": "リストア側のバックアップエントリ判断について",
       "content": "現状、バックアップエントリのなかで、エントリはあるが実データは存在しなかった場合は、バックアップ側ではスキップとして観測されるが、リストア側では実データが存在しない＝エラーのような扱いに実質なっている。\r\nこれをもう少し細かく分類できるようにする。\r\n・バックアップ時に明確にエラーが出てしまった場合（例：バックアップデータと実際のPC上のデータを比較し、バイト単位で一致しない、など。これはRobocopyでは標準で行われるのでしょうか？なければ独自実装も要検討）は、エラーとしてリストア側にも報告し、それを認知する。そうではなく端末の個体差で、特定のPCにしかないデータエントリがスキップされた場合は、異常ではなく該当データなしとしてスキップ判定にし、それがリストア側でも認識できるようにする",
       "claudeNote": "実装(v0.72.0)。リストア側のエントリ判定を細分化。バックアップ側は元々 source欠落=Skipped(reason Source path not found)/robocopy失敗=Failed/mismatch=Partial と分類済だが、リストア側が一緒くたにし端末個体差の非存在エントリも『取得不可』+問題件数に計上していた。修正(restore_view.ps1 のみ): (1)グリッド表示 Skipped→『該当なし』(842/847行付近, 取得不可は empty-subpath 非Skipped のみ)。(2)Get-RestoreUserdataProblemCount から Skipped 除外=Failed/Partial のみ計上(消費者は Show-RestoreBackupWarnings の警告のみ・追跡済)。(3)警告文言 取得不可→取得失敗。コメント更新。バックアップ/manifest/復元ロジック不変。バイト検証は行わず robocopy exit code 判定に依拠(ユーザ確定)。静的検証(BOM/balance/消費者追跡)。t-0018 のクリーン判定基盤。残: 実機(source欠落エントリが『該当なし』表示・警告に計上されない/robocopyエラーは Failed で警告計上)。",
-      "status": "対応中",
+      "status": "完了",
       "createdAt": "2026-06-12T06:43:24.8813589+09:00",
-      "updatedAt": "2026-06-12T07:18:38+09:00"
+      "updatedAt": "2026-06-12T09:00:18.7584648+09:00"
+    },
+    {
+      "id": "t-0020",
+      "title": "資格情報バックアップ LastWritten が約半数 null 化する既存バグ",
+      "content": "fabriq 本体側(evidence_config v1.8.0 dump_creds 移植時の smoke)で発覚。dump_creds.ps1 の _FtToIso が FILETIME 下位32bit マスクに -band 0xFFFFFFFF を使用。PowerShell は 0xFFFFFFFF を Int32 -1 と解釈→Int64 昇格後 -band(-1)=全ビット1=マスク無機能。dwLowDateTime 最上位ビットが約50%で立ち、立つと $lo 負の Int64 のまま→$val 負→FromFileTimeUtc throw→catch で null。manifest.json / _credentials_list.csv の LastWritten 列が silent に歯抜け。",
+      "claudeNote": "完了(v0.73.1)。修正: マスクを 10進 -band [int64]4294967295 に(Int32範囲外→Int64パース→正しい下位32bitマスク)。なぜ hex 不可かのコメント併記(再発防止)。横展開: dev PoC 2本(01_enum_test.ps1 / 03_full_integration.ps1)も同時修正。KeepAwake.ps1 0x80000000 は Add-Type 内 C# で PS仕様外=対象外。検証: BigInt roundtrip 証明(高位ビット立ち FILETIME=修正版は原値復元/バグ版は負値→null)。出力スキーマ・呼出側IF不変。当環境は PS 実行ブロックのため実機スモーク(dump_creds.ps1 出力 JSON の credentials[].lastWritten が非null)推奨。fabriq 本体 ConvertFrom-CredFileTime と同方針。",
+      "status": "レビュー待ち",
+      "createdAt": "2026-06-12T11:05:00+09:00",
+      "updatedAt": "2026-06-12T11:05:00+09:00"
     }
   ]
 }

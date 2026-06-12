@@ -92,8 +92,10 @@ function _ReadStr([IntPtr]$p) {
 
 function _FtToIso($ft) {
     if ($ft.dwHighDateTime -eq 0 -and $ft.dwLowDateTime -eq 0) { return $null }
-    $hi = ([int64]$ft.dwHighDateTime) -band 0xFFFFFFFF
-    $lo = ([int64]$ft.dwLowDateTime)  -band 0xFFFFFFFF
+    # Decimal mask: 0xFFFFFFFF parses as Int32 -1 in PowerShell (no-op -band);
+    # 4294967295 parses as Int64, giving the correct lower-32-bit mask.
+    $hi = ([int64]$ft.dwHighDateTime) -band [int64]4294967295
+    $lo = ([int64]$ft.dwLowDateTime)  -band [int64]4294967295
     $val = ($hi -shl 32) -bor $lo
     try { return [datetime]::FromFileTimeUtc($val).ToString('o') } catch { return $null }
 }

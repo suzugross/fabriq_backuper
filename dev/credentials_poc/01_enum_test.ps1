@@ -82,10 +82,12 @@ function ConvertFrom-Win32FileTime {
     param($Ft)
     if ($Ft.dwHighDateTime -eq 0 -and $Ft.dwLowDateTime -eq 0) { return $null }
     # FILETIME members are Int32 in System.Runtime.InteropServices.ComTypes.FILETIME;
-    # mask to lower 32 bits via -band 0xFFFFFFFF to suppress sign-extension when
-    # the high bit is set, then combine into the unsigned-equivalent Int64.
-    $hi = ([int64]$Ft.dwHighDateTime) -band 0xFFFFFFFF
-    $lo = ([int64]$Ft.dwLowDateTime)  -band 0xFFFFFFFF
+    # mask to lower 32 bits to suppress sign-extension when the high bit is set, then
+    # combine into the unsigned-equivalent Int64. The mask MUST be decimal: 0xFFFFFFFF
+    # parses as Int32 -1 in PowerShell and turns the -band into a no-op; 4294967295
+    # exceeds Int32 range so it parses as Int64, giving the correct lower-32-bit mask.
+    $hi = ([int64]$Ft.dwHighDateTime) -band [int64]4294967295
+    $lo = ([int64]$Ft.dwLowDateTime)  -band [int64]4294967295
     $val = ($hi -shl 32) -bor $lo
     try { return [datetime]::FromFileTimeUtc($val) } catch { return $null }
 }

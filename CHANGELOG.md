@@ -16,6 +16,12 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.73.1: **資格情報バックアップで `lastWritten` が約半数 silent に null 化する既存バグを修正 (TM t-0020)** —
+  `dump_creds.ps1` の `_FtToIso` が FILETIME の下位 32bit マスクに **`-band 0xFFFFFFFF`** を使っていたが、PowerShell では `0xFFFFFFFF`（8桁hex）が **Int32 の -1** として解釈されるため、Int64 への昇格後 `-band (-1)`（全ビット1）＝**マスクが完全に無機能**だった（コメントの「符号拡張抑止」は未実現）。
+  - **実害**: `dwLowDateTime` は実質ランダムな 32bit 値で最上位ビットが**約50%**の確率で立つ。立つと `$lo` が負の Int64 のまま `($hi -shl 32) -bor $lo` で上位32bitが汚染→`$val` 負→`[datetime]::FromFileTimeUtc` が throw→catch で `$null`。**エラーも警告も出ず**、`manifest.json` と `_credentials_list.csv` の `LastWritten` 列が歯抜けになっていた。
+  - **修正**: マスクを **10進**で記述（`-band [int64]4294967295`）。4294967295 は Int32 範囲外のため最初から Int64 としてパースされ、正しい下位32bitマスクになる。なぜ hex ではダメかのコメントを併記（再発防止）。
+  - **横展開**: 同一パターンの dev PoC 2本（`dev/credentials_poc/01_enum_test.ps1`／`03_full_integration.ps1`）も同時修正。`KeepAwake.ps1` の `0x80000000` は `Add-Type` 内の C# コードで PS 仕様外＝対象外と確認。
+  - 出力スキーマ・呼出側 IF は不変。BigInt roundtrip で証明（高位ビット立ち FILETIME：修正版＝原値復元／バグ版＝負値→null）。fabriq 本体 evidence_config v1.8.0 `ConvertFrom-CredFileTime` と同方針。⚠ 実機スモーク推奨。
 - backuper v0.71.1: **LAN-Prep Revert の戻し漏れを修正（ファイル・プリンタ共有 FW を原状復帰）(TM t-0004・Phase 3)** —
   Prepare は共有アクセス用に「ファイル・プリンタ共有」ファイアウォール グループを有効化するが、Revert がこれを**戻していなかった**（移行前に OFF だった PC が移行後も ON のまま残る戻し漏れ）。
   - `firewall.ps1` に `Get-FileAndPrinterSharingState`／`Set-FileAndPrinterSharingState` を追加（RDP Phase 2 と同方式）。
