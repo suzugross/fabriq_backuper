@@ -76,11 +76,27 @@ $srcManifest   = Join-Path $srcSectionDir 'manifest.json'
 $srcPayloadDir = Join-Path $srcSectionDir 'payload'
 
 if (-not (Test-Path $srcManifest)) {
+    # v0.73.2: a section de-selected at backup time is absent from the aggregate
+    # manifest -> benign Skipped (not a failure). If the aggregate DOES list it but
+    # the per-section manifest is gone, that is real corruption -> keep Failed.
+    $wasBackedUp = $false
+    $aggManifest = Join-Path $AggregateBackupDir 'manifest.json'
+    if (Test-Path $aggManifest) {
+        try {
+            $aggDoc = Get-Content -Path $aggManifest -Raw | ConvertFrom-Json
+            if ($null -ne $aggDoc.sections -and `
+                ($aggDoc.sections.PSObject.Properties.Name -contains 'msime_dict') -and `
+                ("$($aggDoc.sections.msime_dict.status)" -ne 'Skipped')) { $wasBackedUp = $true }
+        } catch { $wasBackedUp = $true }   # unreadable aggregate -> conservative Failed
+    }
+    $st  = if ($wasBackedUp) { 'Failed' } else { 'Skipped' }
+    $msg = if ($wasBackedUp) { "Source manifest.json not found though aggregate lists this section (possible transfer corruption): $srcManifest" }
+           else { "section was not backed up (absent from aggregate manifest); nothing to restore" }
     return [PSCustomObject]@{
-        Status               = 'Failed'
+        Status               = $st
         ElapsedMs            = [int]$sw.ElapsedMilliseconds
         Summary              = [ordered]@{}
-        Warnings             = @("Source manifest.json not found: $srcManifest")
+        Warnings             = @($msg)
         ExternalOutputDir    = $null
         ExternalManifestPath = $null
         InternalSectionDir   = $srcSectionDir

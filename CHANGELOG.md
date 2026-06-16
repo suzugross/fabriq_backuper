@@ -16,6 +16,11 @@
 ## [Unreleased]
 
 ### Fixed
+- backuper v0.73.2: **バックアップ時に外した section をリストアが「失敗」表示する不具合を修正 (TM t-0021)** —
+  バックアップ画面で section（例: Outlook POP）のチェックを外すと、その section は実行されず aggregate `manifest.json` の `sections` にも載らない（backup_view.ps1:593-596）。一方リストア側の section チェック既定は `sections.csv` の Enabled 列（全 1）由来で**選択中バックアップの manifest を参照していなかった**（restore_view.ps1:361-364）。そのため未バックアップ section も ON のままリストアを試行し、section restore が manifest 不在で `Status='Failed'`（outlook_pop/restore.ps1:933 ほか printer/userdata/credentials/msime_dict 同型）を返して「失敗」表示になっていた（ファイル単位の失敗は 0）。LAN 自動リストア(t-0018)でも同既定値のため同様に発生。
+  - **主修正 (UI)**: `Update-RestoreSelection` に `Update-RestoreSectionChecksFromManifest` を追加。`$agg` parse 成功直後・`Update-RestoreEntryGrid`（grid が隠しチェックを読む 811 行）より前に、各 section の隠しチェックを **aggregate に存在し status≠'Skipped' なら ON / 未掲載・Skipped なら OFF** に同期。`system_evidence` は強制 ON のまま除外。→ 手動日時・LAN 自動・参照(Browse)の**3経路すべて**で未バックアップ section が既定 OFF になり、`Invoke-RestoreStart`（`$script:RestoreSectionChecks[].Checked` を読む 1342-1346）が当該 section を実行しなくなる。
+  - **副修正 (防御 / systemic)**: 5 section の `restore.ps1` の manifest 不在ブロックを、aggregate を読んで **未掲載＝`Status='Skipped'`（benign「未バックアップ」）／掲載済みなのに per-section manifest 欠落＝`Status='Failed'`（転送破損として残す）** に細分化（aggregate 読取不能時は保守的に Failed）。正常系（manifest 存在）は早期 return ブロック未進入＝完全無影響。手動で未取得 section を再チェックしても「失敗」でなく「スキップ」に。
+  - `Skipped` は engine（overall を Failed/Partial にのみ昇格・Skipped は Success 維持）・progress_view（`[-] スキップ` 灰色表示）とも benign 扱いと確認。多エージェント敵対的レビュー（PS5.1 / logic-safety）指摘ゼロ。⚠ 実機スモーク推奨。
 - backuper v0.73.1: **資格情報バックアップで `lastWritten` が約半数 silent に null 化する既存バグを修正 (TM t-0020)** —
   `dump_creds.ps1` の `_FtToIso` が FILETIME の下位 32bit マスクに **`-band 0xFFFFFFFF`** を使っていたが、PowerShell では `0xFFFFFFFF`（8桁hex）が **Int32 の -1** として解釈されるため、Int64 への昇格後 `-band (-1)`（全ビット1）＝**マスクが完全に無機能**だった（コメントの「符号拡張抑止」は未実現）。
   - **実害**: `dwLowDateTime` は実質ランダムな 32bit 値で最上位ビットが**約50%**の確率で立つ。立つと `$lo` が負の Int64 のまま `($hi -shl 32) -bor $lo` で上位32bitが汚染→`$val` 負→`[datetime]::FromFileTimeUtc` が throw→catch で `$null`。**エラーも警告も出ず**、`manifest.json` と `_credentials_list.csv` の `LastWritten` 列が歯抜けになっていた。

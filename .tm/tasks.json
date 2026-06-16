@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-12T11:05:00+09:00",
+  "updatedAt": "2026-06-12T12:30:00+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -182,6 +182,15 @@
       "status": "レビュー待ち",
       "createdAt": "2026-06-12T11:05:00+09:00",
       "updatedAt": "2026-06-12T11:05:00+09:00"
+    },
+    {
+      "id": "t-0021",
+      "title": "バックアップ時に外した section をリストアが「失敗」表示する不具合",
+      "content": "LAN直結のbackup/restoreで、バックアップ時に Outlook POP のチェックをあえて外してバックアップ(プロファイルは元先同一)。バックアップはエラーなく完了。移行先で自動リストアが走り全体は完了したが Outlook POP のリストアだけ「失敗」(ファイル単位失敗0)。バックアップで外した section をリストアが復元しようとした。\n根本: backup_view.ps1:593-596 チェックした section のみ実行→aggregate manifest の sections に未掲載。restore_view.ps1:361-364 section チェック既定は sections.csv Enabled(全1)由来で選択中 manifest 非参照→未バックアップ section も ON。section restore.ps1 が manifest 不在で Status=Failed。",
+      "claudeNote": "完了(v0.73.2)。主修正(UI): restore_view.ps1 に Update-RestoreSectionChecksFromManifest 追加。$agg parse 成功直後・Update-RestoreEntryGrid 前に、隠しチェックを aggregate.sections に存在&status≠Skipped→ON / 未掲載・Skipped→OFF に同期。system_evidence は強制ON除外。手動日時・LAN自動・参照(Browse)の3経路すべて Update-RestoreSelection を通るため一括カバー(自動経路は wait-tick の RestoreTimestampCombo.SelectedIndex= が combo handler を同期発火)。副修正(防御): outlook_pop/printer/userdata/credentials/msime_dict の manifest 不在ブロックを inline discriminator で Failed→Skipped(未掲載=benign)/掲載済みだが per-section 欠落=Failed(corruption 維持)/aggregate 読取不能=保守的 Failed に細分化。正常系は早期return未進入=無影響。Skipped は engine(overall 非昇格)・progress_view([-]スキップ灰)とも benign 確認。多エージェント敵対レビュー(PS5.1/logic-safety)指摘0。当環境 PS実行ブロックのため実機スモーク推奨: ①Outlook POP外してbackup→aggregate未掲載→移行先(自動)restore→outlook_pop 自動OFF・失敗なし ②手動ONでも Skipped ③全section backup→restore で従来 Success 維持(回帰)。",
+      "status": "レビュー待ち",
+      "createdAt": "2026-06-12T12:30:00+09:00",
+      "updatedAt": "2026-06-12T12:30:00+09:00"
     }
   ]
 }

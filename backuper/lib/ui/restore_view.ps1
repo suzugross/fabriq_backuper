@@ -945,6 +945,29 @@ function Update-RestoreEntryGrid {
     }
 }
 
+# v0.73.2: mirror the hidden section on/off checkboxes to what the SELECTED
+# backup actually contains, so sections that were de-selected at backup time
+# (absent from the aggregate manifest) default to OFF and are not restored /
+# reported as "failed". Section present AND status != 'Skipped' -> ON, else OFF.
+# system_evidence stays forced-ON (its checkbox is disabled). Must run BEFORE
+# Update-RestoreEntryGrid, which reads these checks into the header rows (811).
+function Update-RestoreSectionChecksFromManifest {
+    param([Parameter(Mandatory = $true)]$Aggregate)
+    if ($null -eq $script:RestoreSectionChecks) { return }
+    foreach ($s in $script:SectionList) {
+        $name = "$($s.SectionName)"
+        if ($name -eq 'system_evidence') { continue }   # forced section, leave as-is
+        $cb = $script:RestoreSectionChecks[$name]
+        if ($null -eq $cb) { continue }
+        $present = $false
+        if ($null -ne $Aggregate -and $null -ne $Aggregate.sections -and `
+            ($Aggregate.sections.PSObject.Properties.Name -contains $name)) {
+            if ("$($Aggregate.sections.$name.status)" -ne 'Skipped') { $present = $true }
+        }
+        $cb.Checked = $present
+    }
+}
+
 function Update-RestoreSelection {
     if ($null -ne $script:RestoreEntryGrid) { $script:RestoreEntryGrid.Rows.Clear() }
     # v0.47.0 (B): reset the cached manifest + warning each refresh. The
@@ -984,6 +1007,9 @@ function Update-RestoreSelection {
         $script:RestoreManifestLabel.Text = "aggregate manifest  |  collectedAt=$($agg.collectedAt)  |  sections=$secCount  |  totalBytes=$sz MB  |  source=$($entry.Source)"
         $script:RestoreCurrentManifest = $agg   # v0.47.0 (B): cache for warnings
         $script:RestoreUserdataProblemCount = Get-RestoreUserdataProblemCount -AggregateDir $aggregateDir
+        # v0.73.2: align section selection with what this backup contains (must run
+        # before Update-RestoreEntryGrid below, which reads the hidden checks).
+        Update-RestoreSectionChecksFromManifest -Aggregate $agg
     }
     catch {
         $script:RestoreManifestLabel.Text = "aggregate manifest parse failed: $($_.Exception.Message)"

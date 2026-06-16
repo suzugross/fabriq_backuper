@@ -87,9 +87,28 @@ if ($null -eq $robocopyExe) {
 $sectionDir = Join-Path $AggregateBackupDir 'sections\userdata'
 $manifestPath = Join-Path $sectionDir 'manifest.json'
 if (-not (Test-Path $manifestPath)) {
+    # v0.73.2: a section de-selected at backup time is absent from the aggregate
+    # manifest -> benign Skipped (not a failure). If the aggregate DOES list it but
+    # the per-section manifest is gone, that is real corruption -> keep Failed.
+    $wasBackedUp = $false
+    $aggManifest = Join-Path $AggregateBackupDir 'manifest.json'
+    if (Test-Path $aggManifest) {
+        try {
+            $aggDoc = Get-Content -Path $aggManifest -Raw | ConvertFrom-Json
+            if ($null -ne $aggDoc.sections -and `
+                ($aggDoc.sections.PSObject.Properties.Name -contains 'userdata') -and `
+                ("$($aggDoc.sections.userdata.status)" -ne 'Skipped')) { $wasBackedUp = $true }
+        } catch { $wasBackedUp = $true }   # unreadable aggregate -> conservative Failed
+    }
+    if ($wasBackedUp) {
+        return [PSCustomObject]@{
+            Status = 'Failed'; ElapsedMs = [int]$sw.ElapsedMilliseconds
+            Summary = [ordered]@{}; Warnings = @("manifest.json not found though aggregate lists this section (possible transfer corruption): $manifestPath")
+        }
+    }
     return [PSCustomObject]@{
-        Status = 'Failed'; ElapsedMs = [int]$sw.ElapsedMilliseconds
-        Summary = [ordered]@{}; Warnings = @("manifest.json not found at: $manifestPath")
+        Status = 'Skipped'; ElapsedMs = [int]$sw.ElapsedMilliseconds
+        Summary = [ordered]@{}; Warnings = @("section was not backed up (absent from aggregate manifest); nothing to restore")
     }
 }
 
