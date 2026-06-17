@@ -15,6 +15,14 @@
 
 ## [Unreleased]
 
+### Added
+- backuper v0.74.0: **移行元PC用「アプリ移行チェック」ユーティリティを追加（バックアップ前に要移行アプリを確認）(TM t-0022)** —
+  バックアップの性質上、移行元PCで「どのアプリを移行すべきか」をバックアップ前に把握したいという要望に対応。独立ランチャー `fabriq_appcheck.bat`（ASCII・`ExecutionPolicy Bypass`）→ `fabriq_appcheck.ps1`（UTF-8 BOM・日本語UI）を repo 直下に新設。
+  - **ハンドオフと同一エンジンを流用**: `common.ps1` の `Import-AppMigrationList`／`Get-LiveInstalledApp`／`Compare-AppMigrationList`（リストア後の Check-AppMigration が使うのと同じ突合ロジック）を呼び、`app_migration_list.csv`（無ければ `.sample.csv`）と**このPCの生レジストリ（HKLM＋現ユーザHKCU）**を突合。→ バックアップ前（本ツール）でもリストア後（既存ハンドオフ）でも**判定が一致**。
+  - **小さなGUI一覧**（WinForms / theme.ps1 流用）: **要移行**（リスト掲載かつ実在・必須は赤●＋太字で強調）／**未検出**（掲載だが未インストール）／**参考**（リスト外の実在アプリ）の3区分を色分け表示。`再スキャン`・`CSV出力`（SaveFileDialog, UTF-8）・`閉じる`。
+  - **読み取り専用・既存無改変**: fabriq main / hostlist / passphrase 不要（ローカルレジストリ＋repo CSV のみ）。section / engine / 既存UI は一切変更なし。設定値の控えは別アプリ担当のためスコープ外（アプリ一覧のみ）。
+  - 注意: `Get-LiveInstalledApp` は現ユーザの HKCU を見るため**移行対象ユーザ本人で（非昇格で）実行**する想定（UI 下部に明記）。多エージェント敵対的レビュー（PS5.1/WinForms）ブロッカーゼロ。⚠ 実機スモーク推奨。
+
 ### Fixed
 - backuper v0.73.2: **バックアップ時に外した section をリストアが「失敗」表示する不具合を修正 (TM t-0021)** —
   バックアップ画面で section（例: Outlook POP）のチェックを外すと、その section は実行されず aggregate `manifest.json` の `sections` にも載らない（backup_view.ps1:593-596）。一方リストア側の section チェック既定は `sections.csv` の Enabled 列（全 1）由来で**選択中バックアップの manifest を参照していなかった**（restore_view.ps1:361-364）。そのため未バックアップ section も ON のままリストアを試行し、section restore が manifest 不在で `Status='Failed'`（outlook_pop/restore.ps1:933 ほか printer/userdata/credentials/msime_dict 同型）を返して「失敗」表示になっていた（ファイル単位の失敗は 0）。LAN 自動リストア(t-0018)でも同既定値のため同様に発生。

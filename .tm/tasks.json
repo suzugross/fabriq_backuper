@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "fabriq_backuper",
-  "updatedAt": "2026-06-12T12:30:00+09:00",
+  "updatedAt": "2026-06-12T14:10:00+09:00",
   "tasks": [
     {
       "id": "t-0001",
@@ -191,6 +191,15 @@
       "status": "レビュー待ち",
       "createdAt": "2026-06-12T12:30:00+09:00",
       "updatedAt": "2026-06-12T12:30:00+09:00"
+    },
+    {
+      "id": "t-0022",
+      "title": "移行元PC用 アプリ移行チェック ユーティリティ(バックアップ前)",
+      "content": "バックアップの性質上、移行元PCでバックアップ前に「移行すべきアプリ」を確認したい。最悪使い捨てユーティリティでよい。ハンドオフと同じ機構(app_migration_list と移行元PCレジストリの突合)で、確認すべきアプリがすぐ分かるようにしたい。設定値の控えは別アプリ担当のため、移行すべきアプリ一覧をバックアップ前でもリストア後でも見られるようにする。",
+      "claudeNote": "完了(v0.74.0)。新設: fabriq_appcheck.bat(ASCII/ExecPolicy Bypass)→fabriq_appcheck.ps1(UTF-8 BOM/日本語UI)を repo 直下。ハンドオフと同一エンジン流用(common.ps1: Import-AppMigrationList/Get-LiveInstalledApp/Compare-AppMigrationList)。app_migration_list.csv(無ければ.sample)とこのPCの生レジストリ(HKLM+現ユーザHKCU)を突合→前後で判定一致。小GUI(WinForms/theme.ps1)で 要移行(必須=赤●太字)/未検出/参考 を色分け、再スキャン・CSV出力(SaveFileDialog UTF8)・閉じる。読み取り専用・section/engine/既存UI 無改変。fabriq main/hostlist/passphrase 不要。Get-LiveInstalledApp は現ユーザHKCUを見るため移行対象ユーザ本人で非昇格実行する想定(UI下部に明記)。設定値控えは別アプリ担当でスコープ外。表示形式=小GUI一覧/入口=独立ランチャー はユーザ選択。敵対レビュー(PS5.1/WinForms)ブロッカー0(指摘は未使用-VerboseScam→配線済)。当環境PS実行ブロックのため実機スモーク推奨: 移行元で本人実行→要移行/未検出/参考が出る・必須強調・CSV出力・再スキャン。",
+      "status": "レビュー待ち",
+      "createdAt": "2026-06-12T14:10:00+09:00",
+      "updatedAt": "2026-06-12T14:10:00+09:00"
     }
   ]
 }
