@@ -16,6 +16,11 @@
 ## [Unreleased]
 
 ### Added
+- backuper v0.75.0: **アプリ移行チェックの一覧から実アプリを直接起動（移行前に設定値をその場で確認）(TM t-0022)** —
+  オペレータが迷いなく「移行前に設定値を確認」できるよう、`fabriq_appcheck.ps1` の一覧から**実アプリをダブルクリック起動**できるようにした。
+  - **起動先は AppsFolder から別解決**（`Get-AppsFolderIndex`＝Shell COM で `shell:AppsFolder` を列挙し Win32＋UWP の AppUserModelID を取得／`Resolve-AppLaunchId`＝表示名→AUMID を exact 優先＋長さガード付き substring で安全マッチ）。**共通リーダ・backup CSV スキーマには一切触れない**（起動機能は appcheck ツール内に完全分離）。
+  - 一覧の先頭に **「起動」列**を新設し、起動先を特定できた行のみ **▶**（lavender 強調）を表示。**▶ 行をダブルクリック → `explorer.exe shell:AppsFolder\<AUMID>`**（Start メニュー/Run と同じ起動経路）でアプリを開く。未検出（未インストール）行は ▶ なし。
+  - AUMID は空白・`!`・`{}` を含みうるため引数を quote。COM は使用後に解放、列挙失敗時は警告のみでチェック機能は継続（起動だけ無効化）。多エージェント静的レビュー（COM/列インデックス/ダブルクリック/マッチング/分離）ブロッカーゼロ。⚠ 実機スモーク推奨。
 - backuper v0.74.0: **移行元PC用「アプリ移行チェック」ユーティリティを追加（バックアップ前に要移行アプリを確認）(TM t-0022)** —
   バックアップの性質上、移行元PCで「どのアプリを移行すべきか」をバックアップ前に把握したいという要望に対応。独立ランチャー `fabriq_appcheck.bat`（ASCII・`ExecutionPolicy Bypass`）→ `fabriq_appcheck.ps1`（UTF-8 BOM・日本語UI）を repo 直下に新設。
   - **ハンドオフと同一エンジンを流用**: `common.ps1` の `Import-AppMigrationList`／`Get-LiveInstalledApp`／`Compare-AppMigrationList`（リストア後の Check-AppMigration が使うのと同じ突合ロジック）を呼び、`app_migration_list.csv`（無ければ `.sample.csv`）と**このPCの生レジストリ（HKLM＋現ユーザHKCU）**を突合。→ バックアップ前（本ツール）でもリストア後（既存ハンドオフ）でも**判定が一致**。
